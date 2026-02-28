@@ -106,6 +106,8 @@ class EntityInfo(GraphNode):
     entity_kind: str
     line_start: int | None = None
     line_end: int | None = None
+    column_start: int | None = None
+    column_end: int | None = None
     signature: str | None = None
 
     @field_validator("line_end")
@@ -115,6 +117,14 @@ class EntityInfo(GraphNode):
         if line_start is not None and line_end is not None and line_end < line_start:
             raise ValueError("line_end must be >= line_start")
         return line_end
+
+    @field_validator("column_end")
+    @classmethod
+    def _validate_column_end(cls, column_end: int | None, info):
+        column_start = info.data.get("column_start")
+        if column_start is not None and column_end is not None and column_end < column_start:
+            raise ValueError("column_end must be >= column_start")
+        return column_end
 
 
 NODE_MODEL_BY_KIND: dict[NodeKind, type[GraphNode]] = {

@@ -12,15 +12,12 @@ from suitcode.core.models import (
     TestDefinition,
 )
 from suitcode.core.repository import Repository
+from suitcode.providers.provider_base import ProviderBase
 
 
-class ArchitectureProviderBase(ABC):
+class ArchitectureProviderBase(ProviderBase, ABC):
     def __init__(self, repository: Repository) -> None:
-        self._repository = repository
-
-    @property
-    def repository(self) -> Repository:
-        return self._repository
+        super().__init__(repository)
 
     @abstractmethod
     def get_components(self) -> tuple[Component, ...]:

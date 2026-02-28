@@ -1,19 +1,18 @@
 from __future__ import annotations
 
-import shutil
-from pathlib import Path
-
 from suitcode.core.models import (
     Aggregator,
     Component,
+    EntityInfo,
     ExternalPackage,
     FileInfo,
     PackageManager,
     Runner,
     TestDefinition as DefinitionNode,
 )
-from suitcode.core.workspace import Workspace
+from suitcode.core.repository import Repository
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
+from suitcode.providers.code_provider_base import CodeProviderBase
 from suitcode.providers.npm import NPMProvider
 from suitcode.providers.npm.models import (
     NpmAggregatorAnalysis,
@@ -23,26 +22,19 @@ from suitcode.providers.npm.models import (
     NpmRunnerAnalysis,
     NpmTestAnalysis,
 )
-
-
-FIXTURE_ROOT = Path("tests/test_repos/npm")
-
-
-def _provider(tmp_path: Path) -> NPMProvider:
-    repo_root = tmp_path / "npm"
-    shutil.copytree(FIXTURE_ROOT, repo_root)
-    (repo_root / ".git").mkdir()
-    workspace = Workspace(repo_root)
-    return NPMProvider(workspace.repositories[0])
+from suitcode.providers.npm.symbol_models import NpmWorkspaceSymbol
 
 
 def test_architecture_provider_base_contract() -> None:
     assert issubclass(NPMProvider, ArchitectureProviderBase)
 
 
-def test_npm_provider_returns_monorepo_components(tmp_path: Path) -> None:
-    provider = _provider(tmp_path)
-    components = provider.get_components()
+def test_code_provider_base_contract() -> None:
+    assert issubclass(NPMProvider, CodeProviderBase)
+
+
+def test_npm_provider_returns_monorepo_components(npm_provider: NPMProvider) -> None:
+    components = npm_provider.get_components()
     component_ids = {component.id for component in components}
 
     assert isinstance(components[0], Component)
@@ -53,11 +45,10 @@ def test_npm_provider_returns_monorepo_components(tmp_path: Path) -> None:
     assert "component:npm:@monorepo/codegen" in component_ids
 
 
-def test_npm_provider_returns_aggregators_runners_and_tests(tmp_path: Path) -> None:
-    provider = _provider(tmp_path)
-    aggregators = provider.get_aggregators()
-    runners = provider.get_runners()
-    tests = provider.get_tests()
+def test_npm_provider_returns_aggregators_runners_and_tests(npm_provider: NPMProvider) -> None:
+    aggregators = npm_provider.get_aggregators()
+    runners = npm_provider.get_runners()
+    tests = npm_provider.get_tests()
 
     assert all(isinstance(node, Aggregator) for node in aggregators)
     assert {node.id for node in aggregators} == {
@@ -72,11 +63,10 @@ def test_npm_provider_returns_aggregators_runners_and_tests(tmp_path: Path) -> N
     assert all(isinstance(node, DefinitionNode) for node in tests)
 
 
-def test_npm_provider_returns_package_managers_external_packages_and_files(tmp_path: Path) -> None:
-    provider = _provider(tmp_path)
-    package_managers = provider.get_package_managers()
-    external_packages = provider.get_external_packages()
-    files = provider.get_files()
+def test_npm_provider_returns_package_managers_external_packages_and_files(npm_provider: NPMProvider) -> None:
+    package_managers = npm_provider.get_package_managers()
+    external_packages = npm_provider.get_external_packages()
+    files = npm_provider.get_files()
 
     assert all(isinstance(node, PackageManager) for node in package_managers)
     assert [node.id for node in package_managers] == [
@@ -101,11 +91,64 @@ def test_npm_provider_returns_package_managers_external_packages_and_files(tmp_p
     assert owned["modules/native-addon/go.mod"] == "pkgmgr:go"
 
 
-def test_npm_provider_internal_analysis_stays_npm_specific(tmp_path: Path) -> None:
-    provider = _provider(tmp_path)
-    assert all(isinstance(item, NpmPackageAnalysis) for item in provider._get_components())
-    assert all(isinstance(item, NpmAggregatorAnalysis) for item in provider._get_aggregators())
-    assert all(isinstance(item, NpmRunnerAnalysis) for item in provider._get_runners())
-    assert all(isinstance(item, NpmTestAnalysis) for item in provider._get_tests())
-    assert all(isinstance(item, NpmPackageManagerAnalysis) for item in provider._get_package_managers())
-    assert all(isinstance(item, NpmOwnedFileAnalysis) for item in provider._get_files())
+def test_npm_provider_internal_analysis_stays_npm_specific(npm_provider: NPMProvider) -> None:
+    assert all(isinstance(item, NpmPackageAnalysis) for item in npm_provider._get_components())
+    assert all(isinstance(item, NpmAggregatorAnalysis) for item in npm_provider._get_aggregators())
+    assert all(isinstance(item, NpmRunnerAnalysis) for item in npm_provider._get_runners())
+    assert all(isinstance(item, NpmTestAnalysis) for item in npm_provider._get_tests())
+    assert all(isinstance(item, NpmPackageManagerAnalysis) for item in npm_provider._get_package_managers())
+    assert all(isinstance(item, NpmOwnedFileAnalysis) for item in npm_provider._get_files())
+
+
+def test_npm_provider_uses_fixture_repository_root(npm_repository: Repository) -> None:
+    assert npm_repository.root.name == "npm"
+
+
+def test_npm_provider_get_symbol_returns_entity_info(npm_provider: NPMProvider) -> None:
+
+    class _FakeSymbolService:
+        def get_symbols(self, query: str) -> tuple[NpmWorkspaceSymbol, ...]:
+            return (
+                NpmWorkspaceSymbol(
+                    name="Core",
+                    kind="class",
+                    repository_rel_path="packages/core/src/index.ts",
+                    line_start=1,
+                    line_end=11,
+                    column_start=1,
+                    column_end=2,
+                    container_name=None,
+                    signature="CoreContainer",
+                ),
+            )
+
+    npm_provider._symbol_service = _FakeSymbolService()  # type: ignore[assignment]
+    symbols = npm_provider.get_symbol("Core")
+
+    assert len(symbols) == 1
+    assert isinstance(symbols[0], EntityInfo)
+    assert symbols[0].id == "entity:packages/core/src/index.ts:class:Core:1-11"
+    assert symbols[0].signature == "CoreContainer"
+
+
+def test_npm_provider_internal_symbol_analysis_stays_npm_specific(npm_provider: NPMProvider) -> None:
+
+    class _FakeSymbolService:
+        def get_symbols(self, query: str) -> tuple[NpmWorkspaceSymbol, ...]:
+            return (
+                NpmWorkspaceSymbol(
+                    name="Core",
+                    kind="class",
+                    repository_rel_path="packages/core/src/index.ts",
+                    line_start=1,
+                    line_end=11,
+                    column_start=1,
+                    column_end=2,
+                    container_name=None,
+                    signature=None,
+                ),
+            )
+
+    npm_provider._symbol_service = _FakeSymbolService()  # type: ignore[assignment]
+
+    assert all(isinstance(item, NpmWorkspaceSymbol) for item in npm_provider._get_symbols("Core"))

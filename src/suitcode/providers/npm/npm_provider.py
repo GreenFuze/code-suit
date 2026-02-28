@@ -3,6 +3,7 @@ from __future__ import annotations
 from suitcode.core.models import (
     Aggregator,
     Component,
+    EntityInfo,
     ExternalPackage,
     FileInfo,
     PackageManager,
@@ -11,6 +12,7 @@ from suitcode.core.models import (
 )
 from suitcode.core.repository import Repository
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
+from suitcode.providers.code_provider_base import CodeProviderBase
 from suitcode.providers.npm.models import (
     NpmAggregatorAnalysis,
     NpmExternalPackageAnalysis,
@@ -20,19 +22,24 @@ from suitcode.providers.npm.models import (
     NpmRunnerAnalysis,
     NpmTestAnalysis,
 )
+from suitcode.providers.npm.symbol_models import NpmWorkspaceSymbol
+from suitcode.providers.npm.symbol_service import NpmSymbolService
+from suitcode.providers.npm.symbol_translation import NpmSymbolTranslator
 from suitcode.providers.npm.translation import NpmModelTranslator
 from suitcode.providers.npm.workspace_analyzer import NpmWorkspaceAnalyzer
 from suitcode.providers.shared.package_json import PackageJsonWorkspaceLoader
 from suitcode.providers.shared.package_json.models import PackageJsonWorkspace
 
 
-class NPMProvider(ArchitectureProviderBase):
+class NPMProvider(ArchitectureProviderBase, CodeProviderBase):
     def __init__(self, repository: Repository) -> None:
         super().__init__(repository)
         self._workspace_loader = PackageJsonWorkspaceLoader()
         self._translator = NpmModelTranslator()
+        self._symbol_translator = NpmSymbolTranslator()
         self._workspace: PackageJsonWorkspace | None = None
         self._analyzer: NpmWorkspaceAnalyzer | None = None
+        self._symbol_service: NpmSymbolService | None = None
 
     def get_components(self) -> tuple[Component, ...]:
         return tuple(sorted((self._translator.to_component(item) for item in self._get_components()), key=lambda item: item.id))
@@ -54,6 +61,14 @@ class NPMProvider(ArchitectureProviderBase):
 
     def get_files(self) -> tuple[FileInfo, ...]:
         return tuple(sorted((self._translator.to_file_info(item) for item in self._get_files()), key=lambda item: item.id))
+
+    def get_symbol(self, query: str) -> tuple[EntityInfo, ...]:
+        return tuple(
+            sorted(
+                (self._symbol_translator.to_entity_info(item) for item in self._get_symbols(query)),
+                key=lambda item: (item.name, item.repository_rel_path, item.line_start or 0, item.column_start or 0, item.id),
+            )
+        )
 
     def _load_workspace(self) -> PackageJsonWorkspace:
         if self._workspace is None:
@@ -85,3 +100,11 @@ class NPMProvider(ArchitectureProviderBase):
 
     def _get_files(self) -> tuple[NpmOwnedFileAnalysis, ...]:
         return self._build_analyzer().analyze_files()
+
+    def _build_symbol_service(self) -> NpmSymbolService:
+        if self._symbol_service is None:
+            self._symbol_service = NpmSymbolService(self.repository, workspace_loader=self._workspace_loader)
+        return self._symbol_service
+
+    def _get_symbols(self, query: str) -> tuple[NpmWorkspaceSymbol, ...]:
+        return self._build_symbol_service().get_symbols(query)

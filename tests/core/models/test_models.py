@@ -41,3 +41,28 @@ def test_file_and_entity_models() -> None:
 
     assert file_node.kind == NodeKind.FILE
     assert entity.kind == NodeKind.ENTITY
+
+
+def test_entity_column_range_validation() -> None:
+    entity = EntityInfo(
+        id="entity:src/app.py:function:main:1-3",
+        name="main",
+        repository_rel_path="src/app.py",
+        entity_kind="function",
+        line_start=1,
+        line_end=3,
+        column_start=2,
+        column_end=5,
+    )
+    assert entity.column_start == 2
+    assert entity.column_end == 5
+
+    with pytest.raises(ValueError):
+        EntityInfo(
+            id="entity:src/app.py:function:main:1-3",
+            name="main",
+            repository_rel_path="src/app.py",
+            entity_kind="function",
+            column_start=5,
+            column_end=4,
+        )
