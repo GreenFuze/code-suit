@@ -9,7 +9,6 @@ from suitcode.core.models import (
     FileInfo,
     PackageManager,
     Runner,
-    TestDefinition,
 )
 from suitcode.core.repository import Repository
 from suitcode.providers.provider_base import ProviderBase
@@ -29,10 +28,6 @@ class ArchitectureProviderBase(ProviderBase, ABC):
 
     @abstractmethod
     def get_runners(self) -> tuple[Runner, ...]:
-        raise NotImplementedError
-
-    @abstractmethod
-    def get_tests(self) -> tuple[TestDefinition, ...]:
         raise NotImplementedError
 
     @abstractmethod

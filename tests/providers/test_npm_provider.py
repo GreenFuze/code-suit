@@ -14,6 +14,7 @@ from suitcode.core.repository import Repository
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
 from suitcode.providers.code_provider_base import CodeProviderBase
 from suitcode.providers.npm import NPMProvider
+from suitcode.providers.test_provider_base import TestProviderBase
 from suitcode.providers.npm.models import (
     NpmAggregatorAnalysis,
     NpmOwnedFileAnalysis,
@@ -31,6 +32,10 @@ def test_architecture_provider_base_contract() -> None:
 
 def test_code_provider_base_contract() -> None:
     assert issubclass(NPMProvider, CodeProviderBase)
+
+
+def test_test_provider_base_contract() -> None:
+    assert issubclass(NPMProvider, TestProviderBase)
 
 
 def test_npm_provider_returns_monorepo_components(npm_provider: NPMProvider) -> None:

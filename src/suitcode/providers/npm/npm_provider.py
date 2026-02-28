@@ -13,6 +13,7 @@ from suitcode.core.models import (
 from suitcode.core.repository import Repository
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
 from suitcode.providers.code_provider_base import CodeProviderBase
+from suitcode.providers.test_provider_base import TestProviderBase
 from suitcode.providers.npm.models import (
     NpmAggregatorAnalysis,
     NpmExternalPackageAnalysis,
@@ -31,7 +32,7 @@ from suitcode.providers.shared.package_json import PackageJsonWorkspaceLoader
 from suitcode.providers.shared.package_json.models import PackageJsonWorkspace
 
 
-class NPMProvider(ArchitectureProviderBase, CodeProviderBase):
+class NPMProvider(ArchitectureProviderBase, CodeProviderBase, TestProviderBase):
     def __init__(self, repository: Repository) -> None:
         super().__init__(repository)
         self._workspace_loader = PackageJsonWorkspaceLoader()
