@@ -5,6 +5,7 @@ if TYPE_CHECKING:
     from suitcode.core.architecture.architecture_intelligence import ArchitectureIntelligence
     from suitcode.core.code.code_intelligence import CodeIntelligence
     from suitcode.core.quality.quality_intelligence import QualityIntelligence
+    from suitcode.core.repository import Repository
     from suitcode.core.tests.test_intelligence import TestIntelligence
 
 
@@ -13,40 +14,13 @@ type WorkspaceHandle = str
 
 class Workspace:
 
-    _VC_MARKERS = (".git", ".hg", ".svn", ".bzr")
-    _IDE_MARKERS = (".vscode", ".idea")
-
-    @classmethod
-    def workspace_root_candidate(cls, repository_path: Path) -> Path:
-        path = Path(repository_path).expanduser().resolve()
-        if not path.exists():
-            raise ValueError(f"repository path does not exist: `{repository_path}`")
-        if not path.is_dir():
-            raise ValueError(f"repository path is not a directory: {repository_path}")
-
-        ancestors = [path, *path.parents]
-
-        # Prefer the nearest ancestor that looks like a repository root.
-        for candidate in ancestors:
-            if any((candidate / marker).exists() for marker in cls._VC_MARKERS):
-                return candidate
-
-        # Fallback to nearest explicit suit root if one already exists.
-        for candidate in ancestors:
-            if (candidate / ".suit").is_dir():
-                return candidate
-
-        # Last heuristic when no VCS metadata exists.
-        for candidate in ancestors:
-            if any((candidate / marker).exists() for marker in cls._IDE_MARKERS):
-                return candidate
-
-        # Final fallback: use the provided directory itself.
-        return path
-
     def __init__(self, repository_directory: Path) -> None:
-        self._repositories: dict[Path, Path] = {}
-        self._active_repository_root = self.add_repository(repository_directory)
+        from suitcode.core.repository import Repository
+
+        initial_root = Repository.root_candidate(repository_directory)
+        self._id = f"workspace:{initial_root.name}"
+        self._repositories_by_root: dict[Path, Repository] = {}
+        self.add_repository(repository_directory)
 
         # Import locally to avoid circular import issues.
         from suitcode.core.architecture.architecture_intelligence import ArchitectureIntelligence
@@ -59,46 +33,50 @@ class Workspace:
         self._tests = TestIntelligence(self)
         self._quality = QualityIntelligence(self)
 
-    @staticmethod
-    def _ensure_suit_layout(repository_root: Path) -> Path:
-        suit_dir = repository_root / ".suit"
-        suit_dir.mkdir(parents=True, exist_ok=True)
+    @property
+    def id(self) -> str:
+        return self._id
 
-        config_path = suit_dir / "config.json"
-        state_path = suit_dir / "state.json"
-        if not config_path.exists():
-            config_path.write_text("{}\n", encoding="utf-8")
-        if not state_path.exists():
-            state_path.write_text("{}\n", encoding="utf-8")
+    def _next_repository_id(self, repository_root: Path) -> str:
+        base_name = repository_root.name
+        existing = {repository.id for repository in self._repositories_by_root.values()}
+        candidate = f"repo:{base_name}"
+        if candidate not in existing:
+            return candidate
 
-        return suit_dir
+        suffix = 2
+        while True:
+            candidate = f"repo:{base_name}-{suffix}"
+            if candidate not in existing:
+                return candidate
+            suffix += 1
 
-    def add_repository(self, repository_directory: Path) -> Path:
-        repository_root = self.workspace_root_candidate(repository_directory)
-        if repository_root not in self._repositories:
-            self._repositories[repository_root] = self._ensure_suit_layout(repository_root)
-        return repository_root
+    def add_repository(self, repository_directory: Path) -> "Repository":
+        from suitcode.core.repository import Repository
 
-    def set_active_repository(self, repository_directory: Path) -> Path:
-        repository_root = self.add_repository(repository_directory)
-        self._active_repository_root = repository_root
-        return repository_root
+        repository_root = Repository.root_candidate(repository_directory)
+        if repository_root not in self._repositories_by_root:
+            repository_id = self._next_repository_id(repository_root)
+            self._repositories_by_root[repository_root] = Repository(
+                workspace=self,
+                repository_directory=repository_root,
+                repository_id=repository_id,
+            )
+        return self._repositories_by_root[repository_root]
+
+    def get_repository(self, repository_directory: Path) -> "Repository":
+        return self.add_repository(repository_directory)
 
     def suit_dir_for(self, repository_directory: Path) -> Path:
-        repository_root = self.add_repository(repository_directory)
-        return self._repositories[repository_root]
+        return self.get_repository(repository_directory).suit_dir
 
     @property
     def repository_roots(self) -> tuple[Path, ...]:
-        return tuple(self._repositories.keys())
+        return tuple(self._repositories_by_root.keys())
 
     @property
-    def root(self) -> Path:
-        return self._active_repository_root
-
-    @property
-    def suit_dir(self) -> Path:
-        return self._repositories[self._active_repository_root]
+    def repositories(self) -> tuple["Repository", ...]:
+        return tuple(self._repositories_by_root.values())
 
     @property
     def code(self) -> "CodeIntelligence":

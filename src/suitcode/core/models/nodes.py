@@ -97,6 +97,7 @@ class FileInfo(GraphNode):
     kind: Literal[NodeKind.FILE] = NodeKind.FILE
     repository_rel_path: str
     language: ProgrammingLanguage | None = None
+    owner_id: NodeId
 
 
 class EntityInfo(GraphNode):

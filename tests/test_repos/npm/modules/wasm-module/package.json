@@ -1,0 +1,12 @@
+{
+  "name": "@monorepo/wasm-module",
+  "version": "0.1.0",
+  "main": "pkg/wasm_module.js",
+  "types": "pkg/wasm_module.d.ts",
+  "scripts": {
+    "build": "wasm-pack build --target nodejs"
+  },
+  "devDependencies": {
+    "wasm-pack": "^0.12.0"
+  }
+}

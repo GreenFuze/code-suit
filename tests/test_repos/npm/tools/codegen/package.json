@@ -1,0 +1,8 @@
+{
+  "name": "@monorepo/codegen",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "python3 main.py",
+    "test": "python3 -m pytest"
+  }
+}

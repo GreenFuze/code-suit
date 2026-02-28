@@ -10,7 +10,12 @@ from suitcode.core.models.subgraph import Subgraph
 
 
 def _node(node_id: str) -> FileInfo:
-    return FileInfo(id=node_id, name=node_id.split(":", 1)[1], repository_rel_path=node_id.split(":", 1)[1])
+    return FileInfo(
+        id=node_id,
+        name=node_id.split(":", 1)[1],
+        repository_rel_path=node_id.split(":", 1)[1],
+        owner_id="component:test",
+    )
 
 
 def test_subgraph_integrity_happy_path() -> None:

@@ -26,7 +26,12 @@ def test_file_contains_entity_edge_query() -> None:
             entity_id = make_entity_id("src/pkg/a.py", "function", "main", 1, 3)
 
             graph.add_or_update_node(
-                FileInfo(id=file_id, name="src/pkg/a.py", repository_rel_path="src/pkg/a.py"),
+                FileInfo(
+                    id=file_id,
+                    name="src/pkg/a.py",
+                    repository_rel_path="src/pkg/a.py",
+                    owner_id="component:demo",
+                ),
                 SCOPE,
             )
             graph.add_or_update_node(

@@ -28,6 +28,7 @@ def test_file_and_entity_models() -> None:
         name="src/app.py",
         repository_rel_path="src/app.py",
         language=ProgrammingLanguage.PYTHON,
+        owner_id="component:demo",
     )
     entity = EntityInfo(
         id="entity:src/app.py:function:main:1-3",
