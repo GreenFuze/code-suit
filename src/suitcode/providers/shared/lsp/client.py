@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from suitcode.providers.shared.lsp.errors import LspProtocolError
-from suitcode.providers.shared.lsp.messages import LspWorkspaceSymbol
+from suitcode.providers.shared.lsp.messages import LspDocumentSymbol, LspWorkspaceSymbol
 from suitcode.providers.shared.lsp.process import LanguageServerProcess
 from suitcode.providers.shared.lsp.protocol import LspProtocolParser
 
@@ -42,6 +42,10 @@ class LspClient:
     def workspace_symbol(self, query: str) -> tuple[LspWorkspaceSymbol, ...]:
         payload = self._request("workspace/symbol", {"query": query})
         return self._parser.parse_workspace_symbols(payload)
+
+    def document_symbol(self, file_path: Path) -> tuple[LspDocumentSymbol, ...]:
+        payload = self._request("textDocument/documentSymbol", {"textDocument": {"uri": file_path.resolve().as_uri()}})
+        return self._parser.parse_document_symbols(payload)
 
     def shutdown(self) -> None:
         if not self._initialized:

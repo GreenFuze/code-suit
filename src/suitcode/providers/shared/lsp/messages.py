@@ -27,3 +27,13 @@ class LspWorkspaceSymbol:
     kind: int
     location: LspLocation | None
     container_name: str | None = None
+
+
+@dataclass(frozen=True)
+class LspDocumentSymbol:
+    name: str
+    kind: int
+    range: LspRange
+    selection_range: LspRange
+    detail: str | None = None
+    children: tuple["LspDocumentSymbol", ...] = ()

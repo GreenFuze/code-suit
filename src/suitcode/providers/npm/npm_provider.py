@@ -13,7 +13,12 @@ from suitcode.core.models import (
 from suitcode.core.repository import Repository
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
 from suitcode.providers.code_provider_base import CodeProviderBase
+from suitcode.providers.npm.quality_models import NpmQualityOperationResult
+from suitcode.providers.npm.quality_service import NpmQualityService
+from suitcode.providers.npm.quality_translation import NpmQualityTranslator
 from suitcode.providers.test_provider_base import TestProviderBase
+from suitcode.providers.quality_models import QualityFileResult
+from suitcode.providers.quality_provider_base import QualityProviderBase
 from suitcode.providers.npm.models import (
     NpmAggregatorAnalysis,
     NpmExternalPackageAnalysis,
@@ -32,15 +37,17 @@ from suitcode.providers.shared.package_json import PackageJsonWorkspaceLoader
 from suitcode.providers.shared.package_json.models import PackageJsonWorkspace
 
 
-class NPMProvider(ArchitectureProviderBase, CodeProviderBase, TestProviderBase):
+class NPMProvider(ArchitectureProviderBase, CodeProviderBase, TestProviderBase, QualityProviderBase):
     def __init__(self, repository: Repository) -> None:
         super().__init__(repository)
         self._workspace_loader = PackageJsonWorkspaceLoader()
         self._translator = NpmModelTranslator()
         self._symbol_translator = NpmSymbolTranslator()
+        self._quality_translator = NpmQualityTranslator(self._symbol_translator)
         self._workspace: PackageJsonWorkspace | None = None
         self._analyzer: NpmWorkspaceAnalyzer | None = None
         self._symbol_service: NpmSymbolService | None = None
+        self._quality_service: NpmQualityService | None = None
 
     def get_components(self) -> tuple[Component, ...]:
         return tuple(sorted((self._translator.to_component(item) for item in self._get_components()), key=lambda item: item.id))
@@ -70,6 +77,12 @@ class NPMProvider(ArchitectureProviderBase, CodeProviderBase, TestProviderBase):
                 key=lambda item: (item.name, item.repository_rel_path, item.line_start or 0, item.column_start or 0, item.id),
             )
         )
+
+    def lint_file(self, repository_rel_path: str, is_fix: bool) -> QualityFileResult:
+        return self._quality_translator.to_quality_file_result(self._lint_file(repository_rel_path, is_fix))
+
+    def format_file(self, repository_rel_path: str) -> QualityFileResult:
+        return self._quality_translator.to_quality_file_result(self._format_file(repository_rel_path))
 
     def _load_workspace(self) -> PackageJsonWorkspace:
         if self._workspace is None:
@@ -109,3 +122,14 @@ class NPMProvider(ArchitectureProviderBase, CodeProviderBase, TestProviderBase):
 
     def _get_symbols(self, query: str) -> tuple[NpmWorkspaceSymbol, ...]:
         return self._build_symbol_service().get_symbols(query)
+
+    def _build_quality_service(self) -> NpmQualityService:
+        if self._quality_service is None:
+            self._quality_service = NpmQualityService(self.repository)
+        return self._quality_service
+
+    def _lint_file(self, repository_rel_path: str, is_fix: bool) -> NpmQualityOperationResult:
+        return self._build_quality_service().lint_file(repository_rel_path, is_fix)
+
+    def _format_file(self, repository_rel_path: str) -> NpmQualityOperationResult:
+        return self._build_quality_service().format_file(repository_rel_path)

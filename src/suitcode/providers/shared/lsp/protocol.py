@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from suitcode.providers.shared.lsp.errors import LspProtocolError
 from suitcode.providers.shared.lsp.messages import (
+    LspDocumentSymbol,
     LspLocation,
     LspPosition,
     LspRange,
@@ -16,6 +17,13 @@ class LspProtocolParser:
         if not isinstance(payload, list):
             raise LspProtocolError("workspace/symbol response must be a list or null")
         return tuple(self._parse_workspace_symbol(item) for item in payload)
+
+    def parse_document_symbols(self, payload: object) -> tuple[LspDocumentSymbol, ...]:
+        if payload is None:
+            return tuple()
+        if not isinstance(payload, list):
+            raise LspProtocolError("textDocument/documentSymbol response must be a list or null")
+        return tuple(self._parse_document_symbol(item) for item in payload)
 
     def _parse_workspace_symbol(self, payload: object) -> LspWorkspaceSymbol:
         if not isinstance(payload, dict):
@@ -35,6 +43,30 @@ class LspProtocolParser:
             kind=kind,
             location=self._parse_location(location_payload) if location_payload is not None else None,
             container_name=container_name,
+        )
+
+    def _parse_document_symbol(self, payload: object) -> LspDocumentSymbol:
+        if not isinstance(payload, dict):
+            raise LspProtocolError("document symbol payload must be an object")
+        name = payload.get("name")
+        kind = payload.get("kind")
+        detail = payload.get("detail")
+        children_payload = payload.get("children", [])
+        if not isinstance(name, str):
+            raise LspProtocolError("document symbol name must be a string")
+        if not isinstance(kind, int):
+            raise LspProtocolError("document symbol kind must be an integer")
+        if detail is not None and not isinstance(detail, str):
+            raise LspProtocolError("document symbol detail must be a string when present")
+        if not isinstance(children_payload, list):
+            raise LspProtocolError("document symbol children must be a list when present")
+        return LspDocumentSymbol(
+            name=name,
+            kind=kind,
+            range=self._parse_range(payload.get("range")),
+            selection_range=self._parse_range(payload.get("selectionRange")),
+            detail=detail,
+            children=tuple(self._parse_document_symbol(item) for item in children_payload),
         )
 
     def _parse_location(self, payload: object) -> LspLocation:
