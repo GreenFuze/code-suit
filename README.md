@@ -221,51 +221,130 @@ SuitCode currently exposes these MCP tools.
 
 ### Support and workspace lifecycle
 - `list_supported_providers`
+  Answers:
+  - What ecosystems and intelligence roles does SuitCode support at all?
 - `inspect_repository_support`
+  Answers:
+  - Is this repository supported before I try to open it?
+  - Which provider would handle it?
 - `open_workspace`
+  Answers:
+  - Open this supported repository for semantic work and give me stable IDs.
 - `list_open_workspaces`
+  Answers:
+  - Which workspaces are already open in this MCP server?
 - `get_workspace`
+  Answers:
+  - What is this workspace and which repositories does it contain?
 - `close_workspace`
+  Answers:
+  - Close this workspace and release its repository ownership.
 
 ### Workspace and repository access
 - `list_workspace_repositories`
+  Answers:
+  - Which repositories are inside this workspace?
 - `get_repository`
+  Answers:
+  - Give me the exact repository metadata for this repository ID.
 - `get_repository_by_path`
+  Answers:
+  - Which tracked repository corresponds to this path?
 - `add_repository`
+  Answers:
+  - Add this supported repository into the workspace and give me its stable ID.
 
 ### Architecture
 - `list_components`
+  Answers:
+  - What are the real architecture components in this repository?
 - `list_aggregators`
+  Answers:
+  - Are there architecture-level orchestration targets here?
 - `list_runners`
+  Answers:
+  - What runnable targets or entrypoints exist in this repository?
 - `list_package_managers`
+  Answers:
+  - Which package managers or ecosystem managers does this repository use?
 - `list_external_packages`
+  Answers:
+  - What external dependencies does this repository declare?
 - `list_files`
+  Answers:
+  - Which files does SuitCode currently understand and own semantically?
 - `get_component_dependencies`
+  Answers:
+  - What does this component depend on?
 - `get_component_dependents`
+  Answers:
+  - What depends on this component?
+  - What is the likely architecture blast radius if I change it?
 
 ### Code
 - `find_symbols`
+  Answers:
+  - Where does a symbol with this exact name exist in the repository?
+  - Which symbols match this glob if I use `*` or `?`?
 - `list_symbols_in_file`
+  Answers:
+  - Which symbols exist in this specific file?
+  - Does this file define the symbol I care about?
 - `find_definition`
+  Answers:
+  - Where is this symbol or file position defined?
 - `find_references`
+  Answers:
+  - Where is this symbol or file position referenced?
+  - What code locations are affected if I change it?
 
 ### Tests
 - `list_tests`
+  Answers:
+  - What test targets exist in this repository?
+  - Were those tests discovered authoritatively or heuristically?
 - `get_related_tests`
+  Answers:
+  - Which tests cover this file or owner?
+  - If I change this component or file, which tests should I look at first?
+  - Can I narrow to only the relevant test targets?
 
 ### Quality
 - `list_quality_providers`
+  Answers:
+  - Which quality provider can lint or format files in this repository?
 - `lint_file`
+  Answers:
+  - What lint diagnostics does this file currently have?
+  - What changes if I apply lint fixes?
 - `format_file`
+  Answers:
+  - What changes if I format this file now?
 
 ### Higher-level context and impact
 - `repository_summary`
+  Answers:
+  - Give me a compact first-pass summary of this repository.
+  - What kind of system is this before I start exploring files?
 - `describe_components`
+  Answers:
+  - For these exact components, what files, runners, tests, dependencies, and dependents matter?
 - `describe_files`
+  Answers:
+  - For these exact files, who owns them, what symbols do they contain, and which tests are related?
 - `describe_symbol_context`
+  Answers:
+  - For this exact symbol, who owns it, where is it defined, where is it referenced, and which tests are related?
 - `get_file_owner`
+  Answers:
+  - Which component, runner, package manager, or test target owns this file?
 - `list_files_by_owner`
+  Answers:
+  - Which files belong to this exact component, runner, package manager, or test target?
 - `analyze_impact`
+  Answers:
+  - What breaks if I change this file, symbol, or owner?
+  - Given build graph, references, ownership, and related tests, what is the likely impact?
 
 ## What Those MCP Tools Let An Agent Do
 
