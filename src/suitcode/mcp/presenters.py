@@ -1,18 +1,10 @@
 from __future__ import annotations
 
 from suitcode.core.code.models import CodeLocation
-from suitcode.core.models import (
-    Aggregator,
-    Component,
-    EntityInfo,
-    ExternalPackage,
-    FileInfo,
-    PackageManager,
-    Runner,
-    TestDefinition,
-)
+from suitcode.core.intelligence_models import ComponentContext, DependencyRef, FileContext, ImpactSummary, SymbolContext
+from suitcode.core.models import Aggregator, Component, EntityInfo, ExternalPackage, FileInfo, PackageManager, Runner
 from suitcode.core.repository_models import FileOwnerInfo, OwnedNodeInfo
-from suitcode.core.tests.models import RelatedTestMatch
+from suitcode.core.tests.models import DiscoveredTestDefinition, RelatedTestMatch
 from suitcode.core.repository import Repository
 from suitcode.core.workspace import Workspace
 from suitcode.providers.provider_metadata import DetectedProviderSupport, ProviderDescriptor, RepositorySupportResult
@@ -22,11 +14,15 @@ from suitcode.mcp.models import (
     AddRepositoryResult,
     AggregatorView,
     ArchitectureSnapshotView,
+    ComponentContextView,
     ComponentView,
+    DependencyRefView,
     DetectedProviderView,
     ExternalPackageView,
+    FileContextView,
     FileView,
     FileOwnerView,
+    ImpactSummaryView,
     OpenWorkspaceResult,
     LocationView,
     OwnerView,
@@ -41,6 +37,7 @@ from suitcode.mcp.models import (
     RepositorySupportView,
     RepositoryView,
     RunnerView,
+    SymbolContextView,
     SymbolView,
     TestsSnapshotView,
     TestDefinitionView,
@@ -220,12 +217,16 @@ class CodePresenter:
 
 
 class TestPresenter:
-    def test_view(self, test_definition: TestDefinition) -> TestDefinitionView:
+    def test_view(self, discovered_test: DiscoveredTestDefinition) -> TestDefinitionView:
+        test_definition = discovered_test.test_definition
         return TestDefinitionView(
             id=test_definition.id,
             name=test_definition.name,
             framework=test_definition.framework.value,
             test_files=test_definition.test_files,
+            discovery_method=discovered_test.discovery_method.value,
+            discovery_tool=discovered_test.discovery_tool,
+            is_authoritative=discovered_test.is_authoritative,
         )
 
     def tests_snapshot(self, repository: Repository) -> TestsSnapshotView:
@@ -233,16 +234,18 @@ class TestPresenter:
             workspace_id=repository.workspace.id,
             repository_id=repository.id,
             provider_ids=tuple(provider.__class__.descriptor().provider_id for provider in repository.tests.providers),
-            test_count=len(repository.tests.get_tests()),
+            test_count=len(repository.tests.get_discovered_tests()),
         )
 
-    def related_test_view(self, match: RelatedTestMatch) -> RelatedTestView:
-        test_view = self.test_view(match.test_definition)
+    def related_test_view(self, match: RelatedTestMatch, discovered_test: DiscoveredTestDefinition) -> RelatedTestView:
         return RelatedTestView(
-            id=test_view.id,
-            name=test_view.name,
-            framework=test_view.framework,
-            test_files=test_view.test_files,
+            id=discovered_test.test_definition.id,
+            name=discovered_test.test_definition.name,
+            framework=discovered_test.test_definition.framework.value,
+            test_files=discovered_test.test_definition.test_files,
+            discovery_method=discovered_test.discovery_method.value,
+            discovery_tool=discovered_test.discovery_tool,
+            is_authoritative=discovered_test.is_authoritative,
             relation_reason=match.relation_reason,
             matched_owner_id=match.matched_owner_id,
             matched_path=match.matched_repository_rel_path,
@@ -302,13 +305,99 @@ class OwnershipPresenter:
         return FileOwnerView(file=file_view, owner=self.owner_view(file_owner.owner))
 
 
+class IntelligencePresenter:
+    def dependency_ref_view(self, dependency_ref: DependencyRef) -> DependencyRefView:
+        return DependencyRefView(**dependency_ref.model_dump())
+
+    def component_context_view(self, context: ComponentContext) -> ComponentContextView:
+        architecture_presenter = ArchitecturePresenter()
+        return ComponentContextView(
+            component=architecture_presenter.component_view(context.component),
+            owned_file_count=context.owned_file_count,
+            owned_files_preview=tuple(architecture_presenter.file_view(item) for item in context.owned_files_preview),
+            runner_ids=context.runner_ids,
+            related_test_ids=context.related_test_ids,
+            dependency_count=context.dependency_count,
+            dependencies_preview=tuple(self.dependency_ref_view(item) for item in context.dependencies_preview),
+            dependent_count=context.dependent_count,
+            dependents_preview=context.dependents_preview,
+        )
+
+    def file_context_view(self, context: FileContext) -> FileContextView:
+        architecture_presenter = ArchitecturePresenter()
+        code_presenter = CodePresenter()
+        test_presenter = TestPresenter()
+        ownership_presenter = OwnershipPresenter()
+        return FileContextView(
+            file=architecture_presenter.file_view(context.file_info),
+            owner=ownership_presenter.owner_view(context.owner),
+            symbol_count=context.symbol_count,
+            symbols_preview=tuple(code_presenter.symbol_view(item) for item in context.symbols_preview),
+            related_test_count=context.related_test_count,
+            related_tests_preview=tuple(
+                test_presenter.related_test_view(
+                    item,
+                    DiscoveredTestDefinition(
+                        test_definition=item.test_definition,
+                        discovery_method=item.discovery_method,
+                        discovery_tool=item.discovery_tool,
+                        is_authoritative=item.is_authoritative,
+                    ),
+                )
+                for item in context.related_tests_preview
+            ),
+            quality_provider_ids=context.quality_provider_ids,
+        )
+
+    def symbol_context_view(self, context: SymbolContext) -> SymbolContextView:
+        code_presenter = CodePresenter()
+        test_presenter = TestPresenter()
+        ownership_presenter = OwnershipPresenter()
+        return SymbolContextView(
+            symbol=code_presenter.symbol_view(context.symbol),
+            owner=ownership_presenter.owner_view(context.owner),
+            definition_count=context.definition_count,
+            definitions=tuple(code_presenter.location_view(item) for item in context.definitions),
+            reference_count=context.reference_count,
+            references_preview=tuple(code_presenter.location_view(item) for item in context.references_preview),
+            related_test_count=context.related_test_count,
+            related_tests_preview=tuple(
+                test_presenter.related_test_view(
+                    item,
+                    DiscoveredTestDefinition(
+                        test_definition=item.test_definition,
+                        discovery_method=item.discovery_method,
+                        discovery_tool=item.discovery_tool,
+                        is_authoritative=item.is_authoritative,
+                    ),
+                )
+                for item in context.related_tests_preview
+            ),
+        )
+
+    def impact_summary_view(self, summary: ImpactSummary) -> ImpactSummaryView:
+        code_presenter = CodePresenter()
+        ownership_presenter = OwnershipPresenter()
+        return ImpactSummaryView(
+            target_kind=summary.target_kind,
+            owner=ownership_presenter.owner_view(summary.owner),
+            primary_component_id=summary.primary_component_id,
+            dependent_component_count=summary.dependent_component_count,
+            dependent_component_ids_preview=summary.dependent_component_ids_preview,
+            reference_count=summary.reference_count,
+            references_preview=tuple(code_presenter.location_view(item) for item in summary.references_preview),
+            related_test_count=summary.related_test_count,
+            related_test_ids_preview=summary.related_test_ids_preview,
+        )
+
+
 class RepositorySummaryPresenter:
     def summary_view(self, repository: Repository, preview_limit: int) -> RepositorySummaryView:
         components = repository.arch.get_components()
         runners = repository.arch.get_runners()
         package_managers = repository.arch.get_package_managers()
         external_packages = repository.arch.get_external_packages()
-        tests = repository.tests.get_tests()
+        tests = repository.tests.get_discovered_tests()
         files = repository.arch.get_files()
         return RepositorySummaryView(
             workspace_id=repository.workspace.id,
@@ -328,6 +417,6 @@ class RepositorySummaryPresenter:
             component_ids_preview=tuple(sorted(item.id for item in components)[:preview_limit]),
             runner_ids_preview=tuple(sorted(item.id for item in runners)[:preview_limit]),
             package_manager_ids_preview=tuple(sorted(item.id for item in package_managers)[:preview_limit]),
-            test_ids_preview=tuple(sorted(item.id for item in tests)[:preview_limit]),
+            test_ids_preview=tuple(sorted(item.test_definition.id for item in tests)[:preview_limit]),
             preview_limit=preview_limit,
         )

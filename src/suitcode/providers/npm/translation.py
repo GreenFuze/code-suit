@@ -6,9 +6,10 @@ from suitcode.core.models import (
     ExternalPackage,
     FileInfo,
     PackageManager,
-    TestDefinition,
     Runner,
+    TestDefinition,
 )
+from suitcode.core.tests.models import DiscoveredTestDefinition, TestDiscoveryMethod
 from suitcode.core.models.ids import make_file_id
 from suitcode.providers.npm.models import (
     NpmAggregatorAnalysis,
@@ -52,6 +53,17 @@ class NpmModelTranslator:
             name=f"{analysis.package_name}:test",
             framework=analysis.framework,
             test_files=analysis.test_files,
+        )
+
+    def to_discovered_test_definition(self, analysis: NpmTestAnalysis) -> DiscoveredTestDefinition:
+        return DiscoveredTestDefinition(
+            test_definition=self.to_test_definition(analysis),
+            discovery_method=analysis.discovery_method,
+            discovery_tool=analysis.discovery_tool,
+            is_authoritative=analysis.discovery_method in {
+                TestDiscoveryMethod.AUTHORITATIVE_JEST_LIST_TESTS,
+                TestDiscoveryMethod.AUTHORITATIVE_PYTEST_COLLECT,
+            },
         )
 
     def to_package_manager(self, analysis: NpmPackageManagerAnalysis) -> PackageManager:

@@ -2,18 +2,30 @@ from __future__ import annotations
 
 import configparser
 from pathlib import Path
+from typing import Callable
 
 from packaging.requirements import Requirement
 
 from suitcode.core.models import TestFramework
+from suitcode.core.tests.models import TestDiscoveryMethod
+from suitcode.providers.python.pytest_runner import PytestRunner
 from suitcode.providers.python.test_models import PythonTestAnalysis
+from suitcode.providers.python.python_tool_resolution import PythonToolResolver
 from suitcode.providers.shared.pyproject.models import PyProjectManifest
 
 
 class PythonTestDiscoverer:
-    def __init__(self, repository_root: Path, manifest: PyProjectManifest) -> None:
+    def __init__(
+        self,
+        repository_root: Path,
+        manifest: PyProjectManifest,
+        tool_resolver: PythonToolResolver | None = None,
+        pytest_runner_factory: Callable[[Path], PytestRunner] | None = None,
+    ) -> None:
         self._repository_root = repository_root.expanduser().resolve()
         self._manifest = manifest
+        self._tool_resolver = tool_resolver or PythonToolResolver(self._repository_root)
+        self._pytest_runner_factory = pytest_runner_factory or (lambda executable: PytestRunner(self._repository_root, executable))
 
     def discover(self) -> tuple[PythonTestAnalysis, ...]:
         analyses: list[PythonTestAnalysis] = []
@@ -28,13 +40,27 @@ class PythonTestDiscoverer:
     def _discover_pytest(self) -> PythonTestAnalysis | None:
         if not self._has_pytest_signal():
             return None
-        roots = self._pytest_roots()
-        files = self._collect_test_files(roots, ('test_*.py', '*_test.py'))
+        try:
+            executable = self._tool_resolver.resolve_pytest()
+        except ValueError:
+            roots = self._pytest_roots()
+            files = self._collect_test_files(roots, ('test_*.py', '*_test.py'))
+            return PythonTestAnalysis(
+                test_id='test:python:pytest:root',
+                name='pytest',
+                framework=TestFramework.PYTEST,
+                test_files=files,
+                discovery_method=TestDiscoveryMethod.HEURISTIC_CONFIG_GLOB,
+                discovery_tool=None,
+            )
+        files = self._pytest_runner_factory(executable).collect_test_files()
         return PythonTestAnalysis(
             test_id='test:python:pytest:root',
             name='pytest',
             framework=TestFramework.PYTEST,
             test_files=files,
+            discovery_method=TestDiscoveryMethod.AUTHORITATIVE_PYTEST_COLLECT,
+            discovery_tool='pytest',
         )
 
     def _discover_unittest(self) -> PythonTestAnalysis | None:
@@ -47,6 +73,8 @@ class PythonTestDiscoverer:
             name='unittest',
             framework=TestFramework.UNITTEST,
             test_files=files,
+            discovery_method=TestDiscoveryMethod.HEURISTIC_UNITTEST,
+            discovery_tool=None,
         )
 
     def _has_pytest_signal(self) -> bool:

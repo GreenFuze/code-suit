@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from suitcode.core.models import ComponentKind, ProgrammingLanguage, TestFramework
+from suitcode.core.tests.models import TestDiscoveryMethod
 from suitcode.providers.shared.package_json.models import PackageJsonManifest, PackageJsonWorkspacePackage
 
 
@@ -45,6 +46,8 @@ class NpmTestAnalysis:
     package_path: str
     framework: TestFramework
     test_files: tuple[str, ...]
+    discovery_method: TestDiscoveryMethod
+    discovery_tool: str | None
 
 
 @dataclass(frozen=True)

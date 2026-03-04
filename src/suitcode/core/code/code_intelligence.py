@@ -69,6 +69,9 @@ class CodeIntelligence:
             )
         )
 
+    def find_definition_by_symbol_id(self, symbol_id: str) -> tuple[CodeLocation, ...]:
+        return self.find_definition(SymbolLookupTarget(symbol_id=symbol_id))
+
     def find_references(
         self,
         target: SymbolLookupTarget,
@@ -91,6 +94,13 @@ class CodeIntelligence:
                 key=lambda item: (item.repository_rel_path, item.line_start, item.column_start, item.symbol_id or ""),
             )
         )
+
+    def find_references_by_symbol_id(
+        self,
+        symbol_id: str,
+        include_definition: bool = False,
+    ) -> tuple[CodeLocation, ...]:
+        return self.find_references(SymbolLookupTarget(symbol_id=symbol_id), include_definition=include_definition)
 
     def _resolve_lookup_target(self, target: SymbolLookupTarget) -> tuple[str, int, int]:
         if target.symbol_id is not None:

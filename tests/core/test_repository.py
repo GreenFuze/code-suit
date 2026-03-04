@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 
 from suitcode.core.repository import Repository
+from suitcode.core.intelligence_models import ImpactTarget
 from suitcode.core.workspace import Workspace
 from suitcode.providers.provider_roles import ProviderRole
 
@@ -108,3 +109,25 @@ def test_repository_construction_fails_when_no_provider_matches() -> None:
             assert "unsupported repository" in str(exc)
         else:
             raise AssertionError("expected unsupported repository to fail")
+
+
+def test_repository_list_files_by_owner_and_batch_validation_fail_fast() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        repository = Workspace(_make_supported_npm_repo(Path(td) / "repo")).repositories[0]
+
+        files = repository.list_files_by_owner("component:npm:@repo/app")
+        assert any(item.repository_rel_path == "packages/app/package.json" for item in files)
+
+        try:
+            repository.describe_components(("component:npm:@repo/app", "component:npm:@repo/app"))
+        except ValueError as exc:
+            assert "duplicates" in str(exc)
+        else:
+            raise AssertionError("expected duplicate component batch to fail")
+
+        try:
+            repository.describe_files(tuple())
+        except ValueError as exc:
+            assert "must not be empty" in str(exc)
+        else:
+            raise AssertionError("expected empty file batch to fail")

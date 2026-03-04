@@ -10,7 +10,8 @@ from suitcode.core.models import (
     Runner,
     TestDefinition as DefinitionNode,
 )
-from suitcode.core.tests.models import RelatedTestTarget
+from suitcode.core.intelligence_models import DependencyRef
+from suitcode.core.tests.models import RelatedTestTarget, TestDiscoveryMethod
 from suitcode.core.repository import Repository
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
 from suitcode.providers.code_provider_base import CodeProviderBase
@@ -80,6 +81,7 @@ def test_npm_provider_returns_aggregators_runners_and_tests(npm_provider: NPMPro
     aggregators = npm_provider.get_aggregators()
     runners = npm_provider.get_runners()
     tests = npm_provider.get_tests()
+    discovered_tests = npm_provider.get_discovered_tests()
 
     assert all(isinstance(node, Aggregator) for node in aggregators)
     assert {node.id for node in aggregators} == EXPECTED_AGGREGATOR_IDS
@@ -88,6 +90,11 @@ def test_npm_provider_returns_aggregators_runners_and_tests(npm_provider: NPMPro
     assert {node.id for node in tests} == EXPECTED_TEST_IDS
     assert all(isinstance(node, Runner) for node in runners)
     assert all(isinstance(node, DefinitionNode) for node in tests)
+    assert tuple(item.test_definition.id for item in discovered_tests) == tuple(sorted(EXPECTED_TEST_IDS))
+    assert all(
+        item.discovery_method in {TestDiscoveryMethod.AUTHORITATIVE_JEST_LIST_TESTS, TestDiscoveryMethod.HEURISTIC_MANIFEST_GLOB}
+        for item in discovered_tests
+    )
 
 
 def test_npm_provider_returns_package_managers_external_packages_and_files(npm_provider: NPMProvider) -> None:
@@ -306,3 +313,12 @@ def test_repository_related_tests_for_npm_component_file(npm_repository: Reposit
 
     assert any(match.test_definition.id == "test:npm:@monorepo/core" for match in matches)
     assert all(match.relation_reason == "same_package" for match in matches)
+
+
+def test_npm_provider_returns_component_dependencies_and_dependents(npm_provider: NPMProvider) -> None:
+    dependencies = npm_provider.get_component_dependencies("component:npm:@monorepo/utils")
+    dependents = npm_provider.get_component_dependents("component:npm:@monorepo/core")
+
+    assert all(isinstance(item, DependencyRef) for item in dependencies)
+    assert any(item.target_id == "component:npm:@monorepo/core" and item.dependency_scope == "runtime" for item in dependencies)
+    assert "component:npm:@monorepo/utils" in dependents

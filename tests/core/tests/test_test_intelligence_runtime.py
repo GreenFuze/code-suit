@@ -4,7 +4,7 @@ from pathlib import Path
 
 from suitcode.core.models import TestDefinition as DefinitionNode
 from suitcode.core.models.graph_types import TestFramework as FrameworkEnum
-from suitcode.core.tests.models import RelatedTestTarget
+from suitcode.core.tests.models import DiscoveredTestDefinition, RelatedTestTarget, TestDiscoveryMethod
 from suitcode.core.tests.test_intelligence import TestIntelligence as RuntimeTestIntelligence
 from suitcode.providers.provider_roles import ProviderRole
 from suitcode.providers.test_provider_base import TestProviderBase
@@ -40,6 +40,16 @@ class _TestProvider(TestProviderBase):
                 id=f"test:{self._suffix}",
                 name=f"test-{self._suffix}",
                 framework=FrameworkEnum.OTHER,
+            ),
+        )
+
+    def get_discovered_tests(self):
+        return (
+            DiscoveredTestDefinition(
+                test_definition=self.get_tests()[0],
+                discovery_method=TestDiscoveryMethod.HEURISTIC_MANIFEST_GLOB,
+                discovery_tool=None,
+                is_authoritative=False,
             ),
         )
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from enum import StrEnum
+
 from pydantic import model_validator
 
 from suitcode.core.models.ids import normalize_repository_relative_path
@@ -23,11 +25,23 @@ class RelatedTestTarget(StrictModel):
         return self
 
 
+class TestDiscoveryMethod(StrEnum):
+    __test__ = False
+    AUTHORITATIVE_PYTEST_COLLECT = "authoritative_pytest_collect"
+    AUTHORITATIVE_JEST_LIST_TESTS = "authoritative_jest_list_tests"
+    HEURISTIC_MANIFEST_GLOB = "heuristic_manifest_glob"
+    HEURISTIC_CONFIG_GLOB = "heuristic_config_glob"
+    HEURISTIC_UNITTEST = "heuristic_unittest"
+
+
 class RelatedTestMatch(StrictModel):
     test_definition: TestDefinition
     relation_reason: str
     matched_owner_id: str | None = None
     matched_repository_rel_path: str | None = None
+    discovery_method: TestDiscoveryMethod
+    discovery_tool: str | None = None
+    is_authoritative: bool
 
     @model_validator(mode="after")
     def _validate_reason_and_match(self) -> "RelatedTestMatch":
@@ -36,4 +50,27 @@ class RelatedTestMatch(StrictModel):
             raise ValueError(f"unsupported relation_reason: `{self.relation_reason}`")
         if self.matched_repository_rel_path is not None:
             self.matched_repository_rel_path = normalize_repository_relative_path(self.matched_repository_rel_path)
+        authoritative_methods = {
+            TestDiscoveryMethod.AUTHORITATIVE_PYTEST_COLLECT,
+            TestDiscoveryMethod.AUTHORITATIVE_JEST_LIST_TESTS,
+        }
+        if self.is_authoritative != (self.discovery_method in authoritative_methods):
+            raise ValueError("is_authoritative must be consistent with discovery_method")
+        return self
+
+
+class DiscoveredTestDefinition(StrictModel):
+    test_definition: TestDefinition
+    discovery_method: TestDiscoveryMethod
+    discovery_tool: str | None = None
+    is_authoritative: bool
+
+    @model_validator(mode="after")
+    def _validate_authoritativeness(self) -> "DiscoveredTestDefinition":
+        authoritative_methods = {
+            TestDiscoveryMethod.AUTHORITATIVE_PYTEST_COLLECT,
+            TestDiscoveryMethod.AUTHORITATIVE_JEST_LIST_TESTS,
+        }
+        if self.is_authoritative != (self.discovery_method in authoritative_methods):
+            raise ValueError("is_authoritative must be consistent with discovery_method")
         return self

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from suitcode.core.models import TestDefinition
-from suitcode.core.tests.models import RelatedTestMatch, RelatedTestTarget
+from suitcode.core.tests.models import DiscoveredTestDefinition, RelatedTestMatch, RelatedTestTarget
 from suitcode.providers.provider_roles import ProviderRole
 from suitcode.providers.test_provider_base import TestProviderBase
 
@@ -23,8 +23,16 @@ class TestIntelligence:
         )
 
     def get_tests(self) -> tuple[TestDefinition, ...]:
-        items = [item for provider in self.providers for item in provider.get_tests()]
-        return tuple(sorted(items, key=lambda item: item.id))
+        return tuple(item.test_definition for item in self.get_discovered_tests())
+
+    def get_discovered_tests(self) -> tuple[DiscoveredTestDefinition, ...]:
+        items = [item for provider in self.providers for item in provider.get_discovered_tests()]
+        by_id: dict[str, DiscoveredTestDefinition] = {}
+        for item in items:
+            if item.test_definition.id in by_id:
+                raise ValueError(f"duplicate test id detected across providers: `{item.test_definition.id}`")
+            by_id[item.test_definition.id] = item
+        return tuple(sorted(by_id.values(), key=lambda item: item.test_definition.id))
 
     def get_related_tests(self, target: RelatedTestTarget) -> tuple[RelatedTestMatch, ...]:
         items = [item for provider in self.providers for item in provider.get_related_tests(target)]

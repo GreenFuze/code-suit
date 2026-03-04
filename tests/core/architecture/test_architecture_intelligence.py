@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from suitcode.core.intelligence_models import DependencyRef
 from suitcode.core.architecture.architecture_intelligence import ArchitectureIntelligence
 from suitcode.core.models import Aggregator, Component, ExternalPackage, FileInfo, PackageManager, Runner
 from suitcode.core.models.graph_types import ComponentKind, NodeKind, ProgrammingLanguage
@@ -66,6 +67,22 @@ class _ArchitectureProvider(ArchitectureProviderBase):
             ),
         )
 
+    def get_component_dependencies(self, component_id: str):
+        if component_id != f"component:{self._suffix}":
+            return tuple()
+        return (
+            DependencyRef(
+                target_id=f"ext:{self._suffix}",
+                target_kind="external_package",
+                dependency_scope="runtime",
+            ),
+        )
+
+    def get_component_dependents(self, component_id: str):
+        if component_id != f"component:{self._suffix}":
+            return tuple()
+        return (f"component:{self._suffix}:dependent",)
+
 
 def test_architecture_intelligence_concatenates_and_sorts_results() -> None:
     repo = _FakeRepository(
@@ -82,3 +99,14 @@ def test_architecture_intelligence_concatenates_and_sorts_results() -> None:
     assert tuple(node.id for node in intelligence.get_package_managers()) == ("pkg:a", "pkg:b")
     assert tuple(node.id for node in intelligence.get_external_packages()) == ("ext:a", "ext:b")
     assert tuple(node.id for node in intelligence.get_files()) == ("file:a", "file:b")
+
+
+def test_architecture_intelligence_routes_dependency_queries_to_component_owner() -> None:
+    repo = _FakeRepository((_ArchitectureProvider(repository=None, suffix="a"),))  # type: ignore[arg-type]
+    intelligence = ArchitectureIntelligence(repo)  # type: ignore[arg-type]
+
+    dependencies = intelligence.get_component_dependencies("component:a")
+    dependents = intelligence.get_component_dependents("component:a")
+
+    assert dependencies[0].target_id == "ext:a"
+    assert dependents == ("component:a:dependent",)

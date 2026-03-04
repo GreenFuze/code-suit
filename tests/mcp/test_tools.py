@@ -25,6 +25,12 @@ def test_app_registers_expected_tools(app) -> None:
     assert "find_references" in tool_names
     assert "get_related_tests" in tool_names
     assert "repository_summary" in tool_names
+    assert "describe_components" in tool_names
+    assert "describe_files" in tool_names
+    assert "describe_symbol_context" in tool_names
+    assert "get_component_dependencies" in tool_names
+    assert "get_component_dependents" in tool_names
+    assert "analyze_impact" in tool_names
     assert "lint_file" in tool_names
 
     find_symbols = next(tool for tool in tools if tool.name == "find_symbols")
@@ -35,6 +41,12 @@ def test_app_registers_expected_tools(app) -> None:
     find_definition = next(tool for tool in tools if tool.name == "find_definition")
     assert "returns locations only" in find_definition.description
     assert "list_symbols_in_file" in find_definition.description
+
+    repository_summary = next(tool for tool in tools if tool.name == "repository_summary")
+    assert "compact first-pass" in repository_summary.description
+
+    analyze_impact = next(tool for tool in tools if tool.name == "analyze_impact")
+    assert "change impact" in analyze_impact.description
 
 
 def test_open_workspace_tool_returns_structured_result(app, npm_repo_root) -> None:

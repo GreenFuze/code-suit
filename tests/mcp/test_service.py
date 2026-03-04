@@ -50,6 +50,8 @@ def test_service_list_components_and_tests(service: SuitMcpService, opened_works
 
     assert components.total >= 1
     assert tests.total >= 1
+    assert hasattr(tests.items[0], "discovery_method")
+    assert hasattr(tests.items[0], "is_authoritative")
 
 
 def test_service_find_symbols_requires_valid_query(service: SuitMcpService, opened_workspace) -> None:
@@ -149,6 +151,106 @@ def test_service_exposes_owner_related_test_and_summary_tools(service: SuitMcpSe
     assert file_owner.owner.id == "component:npm:@monorepo/core"
     assert owned_files.total >= 1
     assert any(item.id == "test:npm:@monorepo/core" for item in related_tests.items)
+    assert all(item.discovery_method for item in related_tests.items)
     assert summary.repository_id == repository_id
     assert summary.preview_limit == 5
     assert summary.component_count >= 1
+
+
+def test_service_exposes_component_file_and_impact_context(service: SuitMcpService, opened_workspace) -> None:
+    workspace_id = opened_workspace.workspace.workspace_id
+    repository_id = opened_workspace.initial_repository.repository_id
+    repository = service._registry.get_repository(workspace_id, repository_id)
+    provider = repository.get_provider("npm")
+
+    class _FakeFileSymbolService:
+        def list_file_symbols(self, repository_rel_path: str, query: str | None = None, is_case_sensitive: bool = False):
+            return (
+                type(
+                    "FakeSymbol",
+                    (),
+                    {
+                        "name": "Core",
+                        "kind": "class",
+                        "repository_rel_path": "packages/core/src/index.ts",
+                        "line_start": 1,
+                        "line_end": 13,
+                        "column_start": 1,
+                        "column_end": 2,
+                        "container_name": None,
+                        "signature": "class Core",
+                    },
+                )(),
+            )
+
+        def find_definition(self, repository_rel_path: str, line: int, column: int):
+            return (("packages/core/src/index.ts", 1, 13, 1, 2),)
+
+        def find_references(self, repository_rel_path: str, line: int, column: int, include_definition: bool = False):
+            return (
+                ("packages/core/src/index.ts", 1, 13, 1, 2),
+                ("packages/utils/src/index.ts", 7, 9, 1, 2),
+            )
+
+    provider._file_symbol_service = _FakeFileSymbolService()  # type: ignore[attr-defined]
+
+    component_contexts = service.describe_components(
+        workspace_id,
+        repository_id,
+        component_ids=("component:npm:@monorepo/core",),
+    )
+    file_contexts = service.describe_files(
+        workspace_id,
+        repository_id,
+        repository_rel_paths=("packages/core/src/index.ts",),
+    )
+    symbol_context = service.describe_symbol_context(
+        workspace_id,
+        repository_id,
+        symbol_id="entity:packages/core/src/index.ts:class:Core:1-13",
+    )
+    dependencies = service.get_component_dependencies(
+        workspace_id,
+        repository_id,
+        component_id="component:npm:@monorepo/utils",
+        limit=50,
+        offset=0,
+    )
+    dependents = service.get_component_dependents(
+        workspace_id,
+        repository_id,
+        component_id="component:npm:@monorepo/core",
+        limit=50,
+        offset=0,
+    )
+    impact = service.analyze_impact(
+        workspace_id,
+        repository_id,
+        repository_rel_path="packages/core/src/index.ts",
+    )
+
+    assert component_contexts[0].component.id == "component:npm:@monorepo/core"
+    assert file_contexts[0].owner.id == "component:npm:@monorepo/core"
+    assert symbol_context.symbol.name == "Core"
+    assert any(item.target_id == "component:npm:@monorepo/core" for item in dependencies.items)
+    assert "component:npm:@monorepo/utils" in dependents.items
+    assert impact.target_kind == "file"
+
+
+def test_service_exact_batch_and_preview_validation_fail_fast(service: SuitMcpService, opened_workspace) -> None:
+    workspace_id = opened_workspace.workspace.workspace_id
+    repository_id = opened_workspace.initial_repository.repository_id
+
+    with pytest.raises(McpValidationError):
+        service.describe_components(
+            workspace_id,
+            repository_id,
+            component_ids=("component:npm:@monorepo/core", "component:npm:@monorepo/core"),
+        )
+
+    with pytest.raises(McpValidationError):
+        service.describe_files(
+            workspace_id,
+            repository_id,
+            repository_rel_paths=tuple(),
+        )

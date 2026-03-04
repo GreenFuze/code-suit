@@ -4,8 +4,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from suitcode.core.code.models import CodeLocation
+from suitcode.core.intelligence_models import DependencyRef
 from suitcode.core.models import Aggregator, Component, EntityInfo, ExternalPackage, FileInfo, PackageManager, Runner, TestDefinition
-from suitcode.core.tests.models import RelatedTestMatch, RelatedTestTarget
+from suitcode.core.tests.models import DiscoveredTestDefinition, RelatedTestMatch, RelatedTestTarget
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
 from suitcode.providers.code_provider_base import CodeProviderBase
 from suitcode.providers.provider_roles import ProviderRole
@@ -62,6 +63,7 @@ class PythonProvider(ArchitectureProviderBase, CodeProviderBase, TestProviderBas
         self._quality_translator = PythonQualityTranslator(self._symbol_translator)
         self._manifest: PyProjectManifest | None = None
         self._analyzer: PythonWorkspaceAnalyzer | None = None
+        self._component_id_index: dict[str, PythonPackageComponentAnalysis] | None = None
         self._symbol_service: PythonSymbolService | None = None
         self._file_symbol_service: PythonFileSymbolService | None = None
         self._test_discoverer: PythonTestDiscoverer | None = None
@@ -84,6 +86,28 @@ class PythonProvider(ArchitectureProviderBase, CodeProviderBase, TestProviderBas
 
     def get_files(self) -> tuple[FileInfo, ...]:
         return tuple(sorted((self._translator.to_file_info(item) for item in self._get_files()), key=lambda item: item.id))
+
+    def get_component_dependencies(self, component_id: str) -> tuple[DependencyRef, ...]:
+        if component_id not in self._component_analysis_by_id():
+            return tuple()
+        return tuple(
+            sorted(
+                (
+                    DependencyRef(
+                        target_id=self._translator.to_external_package(item).id,
+                        target_kind="external_package",
+                        dependency_scope="declared",
+                    )
+                    for item in self._get_external_packages()
+                ),
+                key=lambda item: (item.target_kind, item.target_id, item.dependency_scope),
+            )
+        )
+
+    def get_component_dependents(self, component_id: str) -> tuple[str, ...]:
+        if component_id not in self._component_analysis_by_id():
+            return tuple()
+        return tuple()
 
     def get_symbol(self, query: str, is_case_sensitive: bool = False) -> tuple[EntityInfo, ...]:
         return tuple(
@@ -153,10 +177,19 @@ class PythonProvider(ArchitectureProviderBase, CodeProviderBase, TestProviderBas
         )
 
     def get_tests(self) -> tuple[TestDefinition, ...]:
-        return tuple(sorted((self._test_translator.to_test_definition(item) for item in self._get_tests()), key=lambda item: item.id))
+        return tuple(item.test_definition for item in self.get_discovered_tests())
+
+    def get_discovered_tests(self) -> tuple[DiscoveredTestDefinition, ...]:
+        return tuple(
+            sorted(
+                (self._test_translator.to_discovered_test_definition(item) for item in self._get_tests()),
+                key=lambda item: item.test_definition.id,
+            )
+        )
 
     def get_related_tests(self, target: RelatedTestTarget) -> tuple[RelatedTestMatch, ...]:
-        tests = self.get_tests()
+        discovered_tests = self.get_discovered_tests()
+        tests = tuple(item.test_definition for item in discovered_tests)
         if not tests:
             return tuple()
         if target.owner_id is not None:
@@ -164,24 +197,30 @@ class PythonProvider(ArchitectureProviderBase, CodeProviderBase, TestProviderBas
             if owner.kind not in {"component", "test_definition"}:
                 return tuple()
             if owner.kind == "test_definition":
-                matches = [test_definition for test_definition in tests if test_definition.id == target.owner_id]
+                matches = [item for item in discovered_tests if item.test_definition.id == target.owner_id]
                 if not matches:
                     raise ValueError(f"test owner id could not be resolved: `{target.owner_id}`")
                 return tuple(
                     RelatedTestMatch(
-                        test_definition=matches[0],
+                        test_definition=matches[0].test_definition,
                         relation_reason="same_owner",
                         matched_owner_id=target.owner_id,
+                        discovery_method=matches[0].discovery_method,
+                        discovery_tool=matches[0].discovery_tool,
+                        is_authoritative=matches[0].is_authoritative,
                     )
                     for _ in [0]
                 )
             return tuple(
                 RelatedTestMatch(
-                    test_definition=test_definition,
+                    test_definition=discovered_test.test_definition,
                     relation_reason="same_component",
                     matched_owner_id=target.owner_id,
+                    discovery_method=discovered_test.discovery_method,
+                    discovery_tool=discovered_test.discovery_tool,
+                    is_authoritative=discovered_test.is_authoritative,
                 )
-                for test_definition in tests
+                for discovered_test in discovered_tests
             )
 
         assert target.repository_rel_path is not None
@@ -190,12 +229,15 @@ class PythonProvider(ArchitectureProviderBase, CodeProviderBase, TestProviderBas
             return tuple()
         return tuple(
             RelatedTestMatch(
-                test_definition=test_definition,
+                test_definition=discovered_test.test_definition,
                 relation_reason="same_component",
                 matched_owner_id=owner_info.owner.id,
                 matched_repository_rel_path=target.repository_rel_path,
+                discovery_method=discovered_test.discovery_method,
+                discovery_tool=discovered_test.discovery_tool,
+                is_authoritative=discovered_test.is_authoritative,
             )
-            for test_definition in tests
+            for discovered_test in discovered_tests
         )
 
     def lint_file(self, repository_rel_path: str, is_fix: bool) -> QualityFileResult:
@@ -236,6 +278,16 @@ class PythonProvider(ArchitectureProviderBase, CodeProviderBase, TestProviderBas
 
     def _get_components(self) -> tuple[PythonPackageComponentAnalysis, ...]:
         return self._build_analyzer().analyze_components()
+
+    def _component_analysis_by_id(self) -> dict[str, PythonPackageComponentAnalysis]:
+        if self._component_id_index is None:
+            self._component_id_index = {}
+            for analysis in self._get_components():
+                translated = self._translator.to_component(analysis)
+                if translated.id in self._component_id_index:
+                    raise ValueError(f"duplicate python component id detected: `{translated.id}`")
+                self._component_id_index[translated.id] = analysis
+        return self._component_id_index
 
     def _get_runners(self) -> tuple[PythonRunnerAnalysis, ...]:
         return self._build_analyzer().analyze_runners()

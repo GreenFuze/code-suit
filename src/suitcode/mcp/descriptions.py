@@ -27,12 +27,18 @@ TOOL_DESCRIPTIONS = {
     "list_files_by_owner": "Use this to inspect the file footprint of one component, runner, package manager, or test definition.",
     "find_definition": "Find definition locations for a symbol or file position. This returns locations only; use `list_symbols_in_file` on the returned path to enrich the target file before opening it manually.",
     "find_references": "Find reference locations for a symbol or file position. This returns locations only; use `list_symbols_in_file` on the returned path to enrich the target file before opening it manually.",
-    "list_tests": "List test definitions discovered for a repository.",
-    "get_related_tests": "Use this to find likely related tests for a file or owner without manually exploring test directories.",
+    "list_tests": "List test definitions discovered for a repository. Each result states whether discovery was authoritative tool output or heuristic fallback.",
+    "get_related_tests": "Use this to find likely related tests for a file or owner without manually exploring test directories. Each result states whether the underlying test discovery was authoritative or heuristic.",
     "list_quality_providers": "List quality providers available for one repository.",
     "lint_file": "Run the selected quality provider on one file and return structured diagnostics and entity deltas.",
     "format_file": "Run the selected formatter provider on one file and return structured change information.",
     "repository_summary": "Use this for a compact first-pass repository summary with provider, architecture, test, and quality counts.",
+    "describe_components": "Use this when you already know exact component IDs and want rich context for several components in one call.",
+    "describe_files": "Use this when you already know exact file paths and want owner, symbol, test, and quality context before opening files manually.",
+    "describe_symbol_context": "Use this when you already know an exact symbol ID and want owner, definition, reference, and related-test context.",
+    "get_component_dependencies": "Use this to traverse outward from one component into its internal and external dependencies.",
+    "get_component_dependents": "Use this to understand the component blast radius before changing it.",
+    "analyze_impact": "Use this to estimate change impact for one exact file, owner, or symbol without manual cross-referencing.",
 }
 
 RESOURCE_DESCRIPTIONS = {

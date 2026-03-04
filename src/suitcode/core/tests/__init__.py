@@ -1,8 +1,14 @@
 from __future__ import annotations
 
-from suitcode.core.tests.models import RelatedTestMatch, RelatedTestTarget
+from suitcode.core.tests.models import DiscoveredTestDefinition, RelatedTestMatch, RelatedTestTarget, TestDiscoveryMethod
 
-__all__ = ["RelatedTestMatch", "RelatedTestTarget", "TestIntelligence"]
+__all__ = [
+    "DiscoveredTestDefinition",
+    "RelatedTestMatch",
+    "RelatedTestTarget",
+    "TestDiscoveryMethod",
+    "TestIntelligence",
+]
 
 
 def __getattr__(name: str):

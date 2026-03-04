@@ -3,7 +3,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping
 
-from suitcode.core.models.ids import normalize_repository_relative_path
+from suitcode.core.intelligence_models import (
+    ComponentContext,
+    FileContext,
+    ImpactSummary,
+    ImpactTarget,
+    SymbolContext,
+)
+from suitcode.core.ownership_index import OwnershipIndex
+from suitcode.core.context_service import ContextService
+from suitcode.core.impact_service import ImpactService
 from suitcode.core.repository_models import FileOwnerInfo, OwnedNodeInfo
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
 from suitcode.providers.code_provider_base import CodeProviderBase
@@ -86,6 +95,9 @@ class Repository:
         self._suit_dir = self.ensure_suit_layout(self._root)
         self._providers_by_id: dict[str, ProviderBase] = {}
         self._provider_roles_by_id: dict[str, frozenset[ProviderRole]] = {}
+        self._ownership_index_service: OwnershipIndex | None = None
+        self._context_service: ContextService | None = None
+        self._impact_service: ImpactService | None = None
         self._initialize_providers(support)
 
         from suitcode.core.architecture.architecture_intelligence import ArchitectureIntelligence
@@ -195,37 +207,79 @@ class Repository:
         return self._quality
 
     def get_file_owner(self, repository_rel_path: str) -> FileOwnerInfo:
-        ownership_index = {file_info.repository_rel_path: file_info for file_info in self.arch.get_files()}
-        normalized_path = normalize_repository_relative_path(repository_rel_path)
-        try:
-            file_info = ownership_index[normalized_path]
-        except KeyError as exc:
-            raise ValueError(f"unknown repository file owner for `{repository_rel_path}`") from exc
-        return FileOwnerInfo(file_info=file_info, owner=self.resolve_owner(file_info.owner_id))
+        return self._build_ownership_index().owner_for_file(repository_rel_path)
 
     def list_files_by_owner(self, owner_id: str) -> tuple["FileInfo", ...]:
-        self.resolve_owner(owner_id)
-        items = [file_info for file_info in self.arch.get_files() if file_info.owner_id == owner_id]
-        return tuple(sorted(items, key=lambda item: item.repository_rel_path))
+        return self._build_ownership_index().files_for_owner(owner_id)
 
     def resolve_owner(self, owner_id: str) -> OwnedNodeInfo:
-        owner_index = self._owner_index()
-        try:
-            return owner_index[owner_id]
-        except KeyError as exc:
-            raise ValueError(f"unknown owner id for repository `{self._root}`: `{owner_id}`") from exc
+        return self._build_ownership_index().owner_info(owner_id)
 
-    def _owner_index(self) -> dict[str, OwnedNodeInfo]:
-        owners: dict[str, OwnedNodeInfo] = {}
-        owner_nodes = (
-            *self.arch.get_components(),
-            *self.arch.get_aggregators(),
-            *self.arch.get_runners(),
-            *self.arch.get_package_managers(),
-            *self.tests.get_tests(),
+    def describe_components(
+        self,
+        component_ids: tuple[str, ...],
+        file_preview_limit: int = 20,
+        dependency_preview_limit: int = 20,
+        dependent_preview_limit: int = 20,
+        test_preview_limit: int = 10,
+    ) -> tuple[ComponentContext, ...]:
+        return self._build_context_service().describe_components(
+            component_ids,
+            file_preview_limit=file_preview_limit,
+            dependency_preview_limit=dependency_preview_limit,
+            dependent_preview_limit=dependent_preview_limit,
+            test_preview_limit=test_preview_limit,
         )
-        for node in owner_nodes:
-            if node.id in owners:
-                raise ValueError(f"duplicate owner id detected for repository `{self._root}`: `{node.id}`")
-            owners[node.id] = OwnedNodeInfo(id=node.id, kind=node.kind.value, name=node.name)
-        return owners
+
+    def describe_files(
+        self,
+        repository_rel_paths: tuple[str, ...],
+        symbol_preview_limit: int = 20,
+        test_preview_limit: int = 10,
+    ) -> tuple[FileContext, ...]:
+        return self._build_context_service().describe_files(
+            repository_rel_paths,
+            symbol_preview_limit=symbol_preview_limit,
+            test_preview_limit=test_preview_limit,
+        )
+
+    def describe_symbol_context(
+        self,
+        symbol_id: str,
+        reference_preview_limit: int = 20,
+        test_preview_limit: int = 10,
+    ) -> SymbolContext:
+        return self._build_context_service().describe_symbol_context(
+            symbol_id,
+            reference_preview_limit=reference_preview_limit,
+            test_preview_limit=test_preview_limit,
+        )
+
+    def analyze_impact(
+        self,
+        target: ImpactTarget,
+        reference_preview_limit: int = 20,
+        dependent_preview_limit: int = 20,
+        test_preview_limit: int = 20,
+    ) -> ImpactSummary:
+        return self._build_impact_service().analyze_impact(
+            target,
+            reference_preview_limit=reference_preview_limit,
+            dependent_preview_limit=dependent_preview_limit,
+            test_preview_limit=test_preview_limit,
+        )
+
+    def _build_ownership_index(self) -> OwnershipIndex:
+        if self._ownership_index_service is None:
+            self._ownership_index_service = OwnershipIndex(self)
+        return self._ownership_index_service
+
+    def _build_context_service(self) -> ContextService:
+        if self._context_service is None:
+            self._context_service = ContextService(self, self._build_ownership_index())
+        return self._context_service
+
+    def _build_impact_service(self) -> ImpactService:
+        if self._impact_service is None:
+            self._impact_service = ImpactService(self, self._build_ownership_index(), self._build_context_service())
+        return self._impact_service

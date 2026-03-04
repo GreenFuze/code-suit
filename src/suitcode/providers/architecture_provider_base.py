@@ -11,6 +11,7 @@ from suitcode.core.models import (
     PackageManager,
     Runner,
 )
+from suitcode.core.intelligence_models import DependencyRef
 from suitcode.providers.provider_base import ProviderBase
 
 if TYPE_CHECKING:
@@ -43,4 +44,12 @@ class ArchitectureProviderBase(ProviderBase, ABC):
 
     @abstractmethod
     def get_files(self) -> tuple[FileInfo, ...]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_component_dependencies(self, component_id: str) -> tuple[DependencyRef, ...]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_component_dependents(self, component_id: str) -> tuple[str, ...]:
         raise NotImplementedError

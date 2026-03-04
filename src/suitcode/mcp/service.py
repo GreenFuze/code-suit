@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from suitcode.core.code.models import SymbolLookupTarget
+from suitcode.core.intelligence_models import ImpactTarget
 from suitcode.core.tests.models import RelatedTestTarget
 from pathlib import Path
 
@@ -10,10 +11,14 @@ from suitcode.mcp.errors import McpNotFoundError, McpUnsupportedRepositoryError,
 from suitcode.mcp.models import (
     AggregatorView,
     ArchitectureSnapshotView,
+    ComponentContextView,
     ComponentView,
+    DependencyRefView,
     ExternalPackageView,
+    FileContextView,
     FileView,
     FileOwnerView,
+    ImpactSummaryView,
     ListResult,
     LocationView,
     OpenWorkspaceResult,
@@ -27,6 +32,7 @@ from suitcode.mcp.models import (
     RepositorySupportView,
     RepositoryView,
     RunnerView,
+    SymbolContextView,
     SymbolView,
     TestsSnapshotView,
     TestDefinitionView,
@@ -44,6 +50,7 @@ from suitcode.mcp.presenters import (
     TestPresenter,
     WorkspacePresenter,
     OwnershipPresenter,
+    IntelligencePresenter,
 )
 from suitcode.mcp.state import WorkspaceRegistry
 
@@ -65,6 +72,7 @@ class SuitMcpService:
         self._quality_presenter = QualityPresenter()
         self._ownership_presenter = OwnershipPresenter()
         self._repository_summary_presenter = RepositorySummaryPresenter()
+        self._intelligence_presenter = IntelligencePresenter()
 
     def list_supported_providers(self, limit: int | None = None, offset: int = 0) -> ListResult[ProviderDescriptorView]:
         items = tuple(self._provider_presenter.descriptor_view(descriptor) for descriptor in Workspace.supported_providers())
@@ -285,7 +293,7 @@ class SuitMcpService:
 
     def list_tests(self, workspace_id: str, repository_id: str, limit: int | None = None, offset: int = 0) -> ListResult[TestDefinitionView]:
         repository = self._registry.get_repository(workspace_id, repository_id)
-        items = tuple(self._test_presenter.test_view(item) for item in repository.tests.get_tests())
+        items = tuple(self._test_presenter.test_view(item) for item in repository.tests.get_discovered_tests())
         return self._pagination.paginate(items, limit, offset)
 
     def get_related_tests(
@@ -300,13 +308,22 @@ class SuitMcpService:
         repository = self._registry.get_repository(workspace_id, repository_id)
         try:
             target = RelatedTestTarget(repository_rel_path=repository_rel_path, owner_id=owner_id)
-            items = tuple(
-                self._test_presenter.related_test_view(item)
-                for item in repository.tests.get_related_tests(target)
-            )
+            discovered_tests = {
+                item.test_definition.id: item
+                for item in repository.tests.get_discovered_tests()
+            }
+            items = []
+            for match in repository.tests.get_related_tests(target):
+                try:
+                    discovered = discovered_tests[match.test_definition.id]
+                except KeyError as exc:
+                    raise ValueError(
+                        f"related test `{match.test_definition.id}` has no discovered test metadata"
+                    ) from exc
+                items.append(self._test_presenter.related_test_view(match, discovered))
         except ValueError as exc:
             raise McpValidationError(str(exc)) from exc
-        return self._pagination.paginate(items, limit, offset)
+        return self._pagination.paginate(tuple(items), limit, offset)
 
     def list_quality_providers(self, workspace_id: str, repository_id: str) -> tuple[str, ...]:
         repository = self._registry.get_repository(workspace_id, repository_id)
@@ -353,3 +370,152 @@ class SuitMcpService:
             raise McpValidationError("preview_limit must be between 1 and 25")
         repository = self._registry.get_repository(workspace_id, repository_id)
         return self._repository_summary_presenter.summary_view(repository, preview_limit)
+
+    def describe_components(
+        self,
+        workspace_id: str,
+        repository_id: str,
+        component_ids: tuple[str, ...],
+        file_preview_limit: int = 20,
+        dependency_preview_limit: int = 20,
+        dependent_preview_limit: int = 20,
+        test_preview_limit: int = 10,
+    ) -> tuple[ComponentContextView, ...]:
+        self._validate_exact_batch(component_ids, "component_ids")
+        self._validate_preview_limit(file_preview_limit, "file_preview_limit")
+        self._validate_preview_limit(dependency_preview_limit, "dependency_preview_limit")
+        self._validate_preview_limit(dependent_preview_limit, "dependent_preview_limit")
+        self._validate_preview_limit(test_preview_limit, "test_preview_limit")
+        repository = self._registry.get_repository(workspace_id, repository_id)
+        try:
+            contexts = repository.describe_components(
+                component_ids,
+                file_preview_limit=file_preview_limit,
+                dependency_preview_limit=dependency_preview_limit,
+                dependent_preview_limit=dependent_preview_limit,
+                test_preview_limit=test_preview_limit,
+            )
+        except ValueError as exc:
+            raise McpNotFoundError(str(exc)) from exc
+        return tuple(self._intelligence_presenter.component_context_view(item) for item in contexts)
+
+    def describe_files(
+        self,
+        workspace_id: str,
+        repository_id: str,
+        repository_rel_paths: tuple[str, ...],
+        symbol_preview_limit: int = 20,
+        test_preview_limit: int = 10,
+    ) -> tuple[FileContextView, ...]:
+        self._validate_exact_batch(repository_rel_paths, "repository_rel_paths")
+        self._validate_preview_limit(symbol_preview_limit, "symbol_preview_limit")
+        self._validate_preview_limit(test_preview_limit, "test_preview_limit")
+        repository = self._registry.get_repository(workspace_id, repository_id)
+        try:
+            contexts = repository.describe_files(
+                repository_rel_paths,
+                symbol_preview_limit=symbol_preview_limit,
+                test_preview_limit=test_preview_limit,
+            )
+        except ValueError as exc:
+            raise McpNotFoundError(str(exc)) from exc
+        return tuple(self._intelligence_presenter.file_context_view(item) for item in contexts)
+
+    def describe_symbol_context(
+        self,
+        workspace_id: str,
+        repository_id: str,
+        symbol_id: str,
+        reference_preview_limit: int = 20,
+        test_preview_limit: int = 10,
+    ) -> SymbolContextView:
+        self._validate_preview_limit(reference_preview_limit, "reference_preview_limit")
+        self._validate_preview_limit(test_preview_limit, "test_preview_limit")
+        repository = self._registry.get_repository(workspace_id, repository_id)
+        try:
+            context = repository.describe_symbol_context(
+                symbol_id,
+                reference_preview_limit=reference_preview_limit,
+                test_preview_limit=test_preview_limit,
+            )
+        except ValueError as exc:
+            raise McpNotFoundError(str(exc)) from exc
+        return self._intelligence_presenter.symbol_context_view(context)
+
+    def get_component_dependencies(
+        self,
+        workspace_id: str,
+        repository_id: str,
+        component_id: str,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> ListResult[DependencyRefView]:
+        repository = self._registry.get_repository(workspace_id, repository_id)
+        try:
+            dependencies = repository.arch.get_component_dependencies(component_id)
+        except ValueError as exc:
+            raise McpNotFoundError(str(exc)) from exc
+        items = tuple(self._intelligence_presenter.dependency_ref_view(item) for item in dependencies)
+        return self._pagination.paginate(items, limit, offset)
+
+    def get_component_dependents(
+        self,
+        workspace_id: str,
+        repository_id: str,
+        component_id: str,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> ListResult[str]:
+        repository = self._registry.get_repository(workspace_id, repository_id)
+        try:
+            dependents = repository.arch.get_component_dependents(component_id)
+        except ValueError as exc:
+            raise McpNotFoundError(str(exc)) from exc
+        return self._pagination.paginate(dependents, limit, offset)
+
+    def analyze_impact(
+        self,
+        workspace_id: str,
+        repository_id: str,
+        symbol_id: str | None = None,
+        repository_rel_path: str | None = None,
+        owner_id: str | None = None,
+        reference_preview_limit: int = 20,
+        dependent_preview_limit: int = 20,
+        test_preview_limit: int = 20,
+    ) -> ImpactSummaryView:
+        self._validate_preview_limit(reference_preview_limit, "reference_preview_limit")
+        self._validate_preview_limit(dependent_preview_limit, "dependent_preview_limit")
+        self._validate_preview_limit(test_preview_limit, "test_preview_limit")
+        repository = self._registry.get_repository(workspace_id, repository_id)
+        try:
+            target = ImpactTarget(
+                symbol_id=symbol_id,
+                repository_rel_path=repository_rel_path,
+                owner_id=owner_id,
+            )
+            summary = repository.analyze_impact(
+                target,
+                reference_preview_limit=reference_preview_limit,
+                dependent_preview_limit=dependent_preview_limit,
+                test_preview_limit=test_preview_limit,
+            )
+        except ValueError as exc:
+            raise McpValidationError(str(exc)) from exc
+        return self._intelligence_presenter.impact_summary_view(summary)
+
+    @staticmethod
+    def _validate_exact_batch(items: tuple[str, ...], field_name: str) -> None:
+        if not items:
+            raise McpValidationError(f"{field_name} must not be empty")
+        if len(items) > 25:
+            raise McpValidationError(f"{field_name} must not contain more than 25 items")
+        if any(not item.strip() for item in items):
+            raise McpValidationError(f"{field_name} must not contain empty values")
+        if len(set(items)) != len(items):
+            raise McpValidationError(f"{field_name} must not contain duplicates")
+
+    @staticmethod
+    def _validate_preview_limit(value: int, field_name: str) -> None:
+        if value < 1 or value > 50:
+            raise McpValidationError(f"{field_name} must be between 1 and 50")

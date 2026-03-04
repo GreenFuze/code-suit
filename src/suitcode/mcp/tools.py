@@ -8,9 +8,13 @@ from suitcode.mcp.models import (
     AggregatorView,
     CloseWorkspaceResult,
     ComponentView,
+    ComponentContextView,
+    DependencyRefView,
     ExternalPackageView,
+    FileContextView,
     FileView,
     FileOwnerView,
+    ImpactSummaryView,
     ListResult,
     LocationView,
     OpenWorkspaceResult,
@@ -23,6 +27,7 @@ from suitcode.mcp.models import (
     RepositorySummaryView,
     RepositoryView,
     RunnerView,
+    SymbolContextView,
     SymbolView,
     TestDefinitionView,
     WorkspaceView,
@@ -246,3 +251,97 @@ def register_tools(app: FastMCP, service: SuitMcpService) -> None:
         preview_limit: int = 10,
     ) -> RepositorySummaryView:
         return service.repository_summary(workspace_id, repository_id, preview_limit=preview_limit)
+
+    @app.tool(name="describe_components", description=TOOL_DESCRIPTIONS["describe_components"], structured_output=True)
+    def describe_components(
+        workspace_id: str,
+        repository_id: str,
+        component_ids: tuple[str, ...],
+        file_preview_limit: int = 20,
+        dependency_preview_limit: int = 20,
+        dependent_preview_limit: int = 20,
+        test_preview_limit: int = 10,
+    ) -> tuple[ComponentContextView, ...]:
+        return service.describe_components(
+            workspace_id,
+            repository_id,
+            component_ids,
+            file_preview_limit=file_preview_limit,
+            dependency_preview_limit=dependency_preview_limit,
+            dependent_preview_limit=dependent_preview_limit,
+            test_preview_limit=test_preview_limit,
+        )
+
+    @app.tool(name="describe_files", description=TOOL_DESCRIPTIONS["describe_files"], structured_output=True)
+    def describe_files(
+        workspace_id: str,
+        repository_id: str,
+        repository_rel_paths: tuple[str, ...],
+        symbol_preview_limit: int = 20,
+        test_preview_limit: int = 10,
+    ) -> tuple[FileContextView, ...]:
+        return service.describe_files(
+            workspace_id,
+            repository_id,
+            repository_rel_paths,
+            symbol_preview_limit=symbol_preview_limit,
+            test_preview_limit=test_preview_limit,
+        )
+
+    @app.tool(name="describe_symbol_context", description=TOOL_DESCRIPTIONS["describe_symbol_context"], structured_output=True)
+    def describe_symbol_context(
+        workspace_id: str,
+        repository_id: str,
+        symbol_id: str,
+        reference_preview_limit: int = 20,
+        test_preview_limit: int = 10,
+    ) -> SymbolContextView:
+        return service.describe_symbol_context(
+            workspace_id,
+            repository_id,
+            symbol_id,
+            reference_preview_limit=reference_preview_limit,
+            test_preview_limit=test_preview_limit,
+        )
+
+    @app.tool(name="get_component_dependencies", description=TOOL_DESCRIPTIONS["get_component_dependencies"], structured_output=True)
+    def get_component_dependencies(
+        workspace_id: str,
+        repository_id: str,
+        component_id: str,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> ListResult[DependencyRefView]:
+        return service.get_component_dependencies(workspace_id, repository_id, component_id, limit=limit, offset=offset)
+
+    @app.tool(name="get_component_dependents", description=TOOL_DESCRIPTIONS["get_component_dependents"], structured_output=True)
+    def get_component_dependents(
+        workspace_id: str,
+        repository_id: str,
+        component_id: str,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> ListResult[str]:
+        return service.get_component_dependents(workspace_id, repository_id, component_id, limit=limit, offset=offset)
+
+    @app.tool(name="analyze_impact", description=TOOL_DESCRIPTIONS["analyze_impact"], structured_output=True)
+    def analyze_impact(
+        workspace_id: str,
+        repository_id: str,
+        symbol_id: str | None = None,
+        repository_rel_path: str | None = None,
+        owner_id: str | None = None,
+        reference_preview_limit: int = 20,
+        dependent_preview_limit: int = 20,
+        test_preview_limit: int = 20,
+    ) -> ImpactSummaryView:
+        return service.analyze_impact(
+            workspace_id,
+            repository_id,
+            symbol_id=symbol_id,
+            repository_rel_path=repository_rel_path,
+            owner_id=owner_id,
+            reference_preview_limit=reference_preview_limit,
+            dependent_preview_limit=dependent_preview_limit,
+            test_preview_limit=test_preview_limit,
+        )

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from suitcode.core.models import Component, EntityInfo, ExternalPackage, FileInfo, PackageManager, Runner, TestDefinition as SuitTestDefinition
+from suitcode.core.intelligence_models import DependencyRef
 from suitcode.core.repository import Repository
-from suitcode.core.tests.models import RelatedTestTarget
+from suitcode.core.tests.models import RelatedTestTarget, TestDiscoveryMethod
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
 from suitcode.providers.code_provider_base import CodeProviderBase
 from suitcode.providers.python import PythonProvider
@@ -71,6 +72,7 @@ def test_python_provider_returns_package_manager_external_packages_tests_and_fil
     package_managers = python_provider.get_package_managers()
     external_packages = python_provider.get_external_packages()
     tests = python_provider.get_tests()
+    discovered_tests = python_provider.get_discovered_tests()
     files = python_provider.get_files()
 
     assert all(isinstance(item, PackageManager) for item in package_managers)
@@ -83,6 +85,12 @@ def test_python_provider_returns_package_manager_external_packages_tests_and_fil
     assert all(isinstance(item, SuitTestDefinition) for item in tests)
     assert tuple(item.id for item in tests) == EXPECTED_TEST_IDS
     assert {item.id: item.test_files for item in tests} == EXPECTED_TEST_FILES
+    assert tuple(item.test_definition.id for item in discovered_tests) == EXPECTED_TEST_IDS
+    assert discovered_tests[0].discovery_method in {
+        TestDiscoveryMethod.AUTHORITATIVE_PYTEST_COLLECT,
+        TestDiscoveryMethod.HEURISTIC_CONFIG_GLOB,
+    }
+    assert discovered_tests[1].discovery_method == TestDiscoveryMethod.HEURISTIC_UNITTEST
 
     assert all(isinstance(item, FileInfo) for item in files)
     owners = {item.repository_rel_path: item.owner_id for item in files}
@@ -121,4 +129,14 @@ def test_repository_related_tests_for_python_component_file(python_repository: R
 
     assert tuple(match.test_definition.id for match in matches) == EXPECTED_TEST_IDS
     assert all(match.relation_reason == 'same_component' for match in matches)
+
+
+def test_python_provider_returns_declared_component_dependencies_only(python_provider: PythonProvider) -> None:
+    dependencies = python_provider.get_component_dependencies("component:python:acme")
+    dependents = python_provider.get_component_dependents("component:python:acme")
+
+    assert all(isinstance(item, DependencyRef) for item in dependencies)
+    assert {item.target_id for item in dependencies} == EXPECTED_EXTERNAL_PACKAGE_IDS
+    assert all(item.dependency_scope == "declared" for item in dependencies)
+    assert dependents == tuple()
 

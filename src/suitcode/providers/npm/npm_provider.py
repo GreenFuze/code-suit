@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from suitcode.core.code.models import CodeLocation
+from suitcode.core.intelligence_models import DependencyRef
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -14,7 +15,7 @@ from suitcode.core.models import (
     Runner,
     TestDefinition,
 )
-from suitcode.core.tests.models import RelatedTestMatch, RelatedTestTarget
+from suitcode.core.tests.models import DiscoveredTestDefinition, RelatedTestMatch, RelatedTestTarget
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
 from suitcode.providers.code_provider_base import CodeProviderBase
 from suitcode.providers.npm.quality_models import NpmQualityOperationResult
@@ -77,6 +78,7 @@ class NPMProvider(ArchitectureProviderBase, CodeProviderBase, TestProviderBase, 
         self._quality_translator = NpmQualityTranslator(self._symbol_translator)
         self._workspace: PackageJsonWorkspace | None = None
         self._analyzer: NpmWorkspaceAnalyzer | None = None
+        self._component_id_index: dict[str, NpmPackageAnalysis] | None = None
         self._symbol_service: NpmSymbolService | None = None
         self._file_symbol_service: NpmFileSymbolService | None = None
         self._quality_service: NpmQualityService | None = None
@@ -91,7 +93,15 @@ class NPMProvider(ArchitectureProviderBase, CodeProviderBase, TestProviderBase, 
         return tuple(sorted((self._translator.to_runner(item) for item in self._get_runners()), key=lambda item: item.id))
 
     def get_tests(self) -> tuple[TestDefinition, ...]:
-        return tuple(sorted((self._translator.to_test_definition(item) for item in self._get_tests()), key=lambda item: item.id))
+        return tuple(item.test_definition for item in self.get_discovered_tests())
+
+    def get_discovered_tests(self) -> tuple[DiscoveredTestDefinition, ...]:
+        return tuple(
+            sorted(
+                (self._translator.to_discovered_test_definition(item) for item in self._get_tests()),
+                key=lambda item: item.test_definition.id,
+            )
+        )
 
     def get_package_managers(self) -> tuple[PackageManager, ...]:
         return tuple(sorted((self._translator.to_package_manager(item) for item in self._get_package_managers()), key=lambda item: item.id))
@@ -101,6 +111,68 @@ class NPMProvider(ArchitectureProviderBase, CodeProviderBase, TestProviderBase, 
 
     def get_files(self) -> tuple[FileInfo, ...]:
         return tuple(sorted((self._translator.to_file_info(item) for item in self._get_files()), key=lambda item: item.id))
+
+    def get_component_dependencies(self, component_id: str) -> tuple[DependencyRef, ...]:
+        component_index = self._component_analysis_by_id()
+        analysis = component_index.get(component_id)
+        if analysis is None:
+            return tuple()
+
+        local_components = {analysis.package_name: component_id for component_id, analysis in component_index.items()}
+        external_packages = {
+            item.package_name: self._translator.to_external_package(item).id
+            for item in self._get_external_packages()
+        }
+        dependency_refs: list[DependencyRef] = []
+        scoped_dependencies = (
+            ("runtime", analysis.manifest.dependencies.dependencies),
+            ("dev", analysis.manifest.dependencies.dev_dependencies),
+            ("peer", analysis.manifest.dependencies.peer_dependencies),
+            ("optional", analysis.manifest.dependencies.optional_dependencies),
+        )
+        for dependency_scope, dependencies in scoped_dependencies:
+            for dependency_name in sorted(dependencies):
+                if dependency_name in local_components:
+                    dependency_refs.append(
+                        DependencyRef(
+                            target_id=local_components[dependency_name],
+                            target_kind="component",
+                            dependency_scope=dependency_scope,
+                        )
+                    )
+                    continue
+                try:
+                    target_id = external_packages[dependency_name]
+                except KeyError as exc:
+                    raise ValueError(
+                        f"workspace dependency `{dependency_name}` could not be resolved for component `{component_id}`"
+                    ) from exc
+                dependency_refs.append(
+                    DependencyRef(
+                        target_id=target_id,
+                        target_kind="external_package",
+                        dependency_scope=dependency_scope,
+                    )
+                )
+        return tuple(
+            sorted(
+                dependency_refs,
+                key=lambda item: (item.target_kind, item.target_id, item.dependency_scope),
+            )
+        )
+
+    def get_component_dependents(self, component_id: str) -> tuple[str, ...]:
+        component_index = self._component_analysis_by_id()
+        if component_id not in component_index:
+            return tuple()
+        dependents: list[str] = []
+        for translated_id, analysis in component_index.items():
+            if translated_id == component_id:
+                continue
+            dependency_ids = {item.target_id for item in self.get_component_dependencies(translated_id)}
+            if component_id in dependency_ids:
+                dependents.append(translated_id)
+        return tuple(sorted(dependents))
 
     def get_symbol(self, query: str, is_case_sensitive: bool = False) -> tuple[EntityInfo, ...]:
         return tuple(
@@ -170,18 +242,22 @@ class NPMProvider(ArchitectureProviderBase, CodeProviderBase, TestProviderBase, 
         )
 
     def get_related_tests(self, target: RelatedTestTarget) -> tuple[RelatedTestMatch, ...]:
-        tests = self.get_tests()
+        discovered_tests = self.get_discovered_tests()
+        tests = tuple(item.test_definition for item in discovered_tests)
         if target.owner_id is not None:
             owner = self.repository.resolve_owner(target.owner_id)
             if owner.kind == "test_definition":
-                matches = [test_definition for test_definition in tests if test_definition.id == target.owner_id]
+                matches = [item for item in discovered_tests if item.test_definition.id == target.owner_id]
                 if not matches:
                     raise ValueError(f"test owner id could not be resolved: `{target.owner_id}`")
                 return (
                     RelatedTestMatch(
-                        test_definition=matches[0],
+                        test_definition=matches[0].test_definition,
                         relation_reason="same_owner",
                         matched_owner_id=target.owner_id,
+                        discovery_method=matches[0].discovery_method,
+                        discovery_tool=matches[0].discovery_tool,
+                        is_authoritative=matches[0].is_authoritative,
                     ),
                 )
             if owner.kind != "component":
@@ -194,17 +270,22 @@ class NPMProvider(ArchitectureProviderBase, CodeProviderBase, TestProviderBase, 
         assert target.repository_rel_path is not None
         owner_info = self.repository.get_file_owner(target.repository_rel_path)
         if owner_info.owner.kind == "test_definition":
-            matches = [test_definition for test_definition in tests if target.repository_rel_path in test_definition.test_files]
+            matches = [
+                item for item in discovered_tests if target.repository_rel_path in item.test_definition.test_files
+            ]
             if not matches:
                 raise ValueError(f"test-owned file could not be resolved to a test definition: `{target.repository_rel_path}`")
             return tuple(
                 RelatedTestMatch(
-                    test_definition=test_definition,
+                    test_definition=discovered_test.test_definition,
                     relation_reason="same_owner",
-                    matched_owner_id=test_definition.id,
+                    matched_owner_id=discovered_test.test_definition.id,
                     matched_repository_rel_path=target.repository_rel_path,
+                    discovery_method=discovered_test.discovery_method,
+                    discovery_tool=discovered_test.discovery_tool,
+                    is_authoritative=discovered_test.is_authoritative,
                 )
-                for test_definition in matches
+                for discovered_test in matches
             )
         if owner_info.owner.kind != "component":
             return tuple()
@@ -295,17 +376,30 @@ class NPMProvider(ArchitectureProviderBase, CodeProviderBase, TestProviderBase, 
         matched_owner_id: str | None = None,
         matched_repository_rel_path: str | None = None,
     ) -> tuple[RelatedTestMatch, ...]:
-        matches = [
-            test_definition
-            for test_definition in self.get_tests()
-            if any(test_file.startswith(f"{package_root}/") or test_file == package_root for test_file in test_definition.test_files)
-        ]
+        discovered_tests = self.get_discovered_tests()
         return tuple(
             RelatedTestMatch(
-                test_definition=test_definition,
+                test_definition=discovered_test.test_definition,
                 relation_reason="same_package",
                 matched_owner_id=matched_owner_id,
                 matched_repository_rel_path=matched_repository_rel_path,
+                discovery_method=discovered_test.discovery_method,
+                discovery_tool=discovered_test.discovery_tool,
+                is_authoritative=discovered_test.is_authoritative,
             )
-            for test_definition in matches
+            for discovered_test in discovered_tests
+            if any(
+                test_file.startswith(f"{package_root}/") or test_file == package_root
+                for test_file in discovered_test.test_definition.test_files
+            )
         )
+
+    def _component_analysis_by_id(self) -> dict[str, NpmPackageAnalysis]:
+        if self._component_id_index is None:
+            self._component_id_index = {}
+            for analysis in self._get_components():
+                translated = self._translator.to_component(analysis)
+                if translated.id in self._component_id_index:
+                    raise ValueError(f"duplicate npm component id detected: `{translated.id}`")
+                self._component_id_index[translated.id] = analysis
+        return self._component_id_index

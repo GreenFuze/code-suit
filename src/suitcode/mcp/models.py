@@ -159,6 +159,9 @@ class TestDefinitionView(StrictModel):
     name: str
     framework: str
     test_files: tuple[str, ...]
+    discovery_method: str
+    discovery_tool: str | None = None
+    is_authoritative: bool
 
 
 class RelatedTestView(StrictModel):
@@ -166,9 +169,63 @@ class RelatedTestView(StrictModel):
     name: str
     framework: str
     test_files: tuple[str, ...]
+    discovery_method: str
+    discovery_tool: str | None = None
+    is_authoritative: bool
     relation_reason: str
     matched_owner_id: str | None = None
     matched_path: str | None = None
+
+
+class DependencyRefView(StrictModel):
+    target_id: str
+    target_kind: str
+    dependency_scope: str
+
+
+class ComponentContextView(StrictModel):
+    component: ComponentView
+    owned_file_count: int
+    owned_files_preview: tuple[FileView, ...]
+    runner_ids: tuple[str, ...]
+    related_test_ids: tuple[str, ...]
+    dependency_count: int
+    dependencies_preview: tuple[DependencyRefView, ...]
+    dependent_count: int
+    dependents_preview: tuple[str, ...]
+
+
+class FileContextView(StrictModel):
+    file: FileView
+    owner: OwnerView
+    symbol_count: int
+    symbols_preview: tuple[SymbolView, ...]
+    related_test_count: int
+    related_tests_preview: tuple[RelatedTestView, ...]
+    quality_provider_ids: tuple[str, ...]
+
+
+class SymbolContextView(StrictModel):
+    symbol: SymbolView
+    owner: OwnerView
+    definition_count: int
+    definitions: tuple[LocationView, ...]
+    reference_count: int
+    references_preview: tuple[LocationView, ...]
+    related_test_count: int
+    related_tests_preview: tuple[RelatedTestView, ...]
+
+
+class ImpactSummaryView(StrictModel):
+    target_kind: str
+    owner: OwnerView
+    primary_component_id: str | None = None
+    dependent_component_count: int
+    dependent_component_ids_preview: tuple[str, ...]
+    reference_count: int
+    references_preview: tuple[LocationView, ...]
+    related_test_count: int
+    related_test_ids_preview: tuple[str, ...]
 
 
 class QualityDiagnosticView(StrictModel):
