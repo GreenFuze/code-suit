@@ -3,10 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from suitcode.core.code.models import CodeLocation
 from suitcode.core.intelligence_models import DependencyRef
-from suitcode.core.models import Aggregator, Component, EntityInfo, ExternalPackage, FileInfo, PackageManager, Runner, TestDefinition
-from suitcode.core.tests.models import DiscoveredTestDefinition, RelatedTestMatch, RelatedTestTarget
+from suitcode.core.models import Aggregator, Component, EntityInfo, ExternalPackage, FileInfo, PackageManager, Runner
+from suitcode.core.tests.models import RelatedTestMatch, RelatedTestTarget
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
 from suitcode.providers.code_provider_base import CodeProviderBase
 from suitcode.providers.provider_roles import ProviderRole
@@ -29,14 +28,17 @@ from suitcode.providers.python.translation import PythonModelTranslator
 from suitcode.providers.python.workspace_analyzer import PythonWorkspaceAnalyzer
 from suitcode.providers.quality_models import QualityFileResult
 from suitcode.providers.quality_provider_base import QualityProviderBase
+from suitcode.providers.shared.code_facade import CodeFacadeMixin
+from suitcode.providers.shared.component_index import ComponentIndexBuilder
 from suitcode.providers.shared.pyproject import PyProjectManifest, PyProjectWorkspaceLoader
+from suitcode.providers.shared.test_facade import TestFacadeMixin
 from suitcode.providers.test_provider_base import TestProviderBase
 
 if TYPE_CHECKING:
     from suitcode.core.repository import Repository
 
 
-class PythonProvider(ArchitectureProviderBase, CodeProviderBase, TestProviderBase, QualityProviderBase):
+class PythonProvider(CodeFacadeMixin, TestFacadeMixin, ArchitectureProviderBase, CodeProviderBase, TestProviderBase, QualityProviderBase):
     PROVIDER_ID = 'python'
     DISPLAY_NAME = 'python'
     BUILD_SYSTEMS = ('pip',)
@@ -109,88 +111,9 @@ class PythonProvider(ArchitectureProviderBase, CodeProviderBase, TestProviderBas
             return tuple()
         return tuple()
 
-    def get_symbol(self, query: str, is_case_sensitive: bool = False) -> tuple[EntityInfo, ...]:
-        return tuple(
-            sorted(
-                (self._symbol_translator.to_entity_info(item) for item in self._get_symbols(query, is_case_sensitive=is_case_sensitive)),
-                key=lambda item: (item.name, item.repository_rel_path, item.line_start or 0, item.column_start or 0, item.id),
-            )
-        )
-
-    def list_symbols_in_file(
-        self,
-        repository_rel_path: str,
-        query: str | None = None,
-        is_case_sensitive: bool = False,
-    ) -> tuple[EntityInfo, ...]:
-        return tuple(
-            sorted(
-                (
-                    self._symbol_translator.to_entity_info(item)
-                    for item in self._build_file_symbol_service().list_file_symbols(
-                        repository_rel_path,
-                        query=query,
-                        is_case_sensitive=is_case_sensitive,
-                    )
-                ),
-                key=lambda item: (item.name, item.entity_kind, item.line_start or 0, item.column_start or 0, item.id),
-            )
-        )
-
-    def find_definition(self, repository_rel_path: str, line: int, column: int) -> tuple[CodeLocation, ...]:
-        return tuple(
-            CodeLocation(
-                repository_rel_path=path,
-                line_start=line_start,
-                line_end=line_end,
-                column_start=column_start,
-                column_end=column_end,
-            )
-            for path, line_start, line_end, column_start, column_end in self._build_file_symbol_service().find_definition(
-                repository_rel_path,
-                line,
-                column,
-            )
-        )
-
-    def find_references(
-        self,
-        repository_rel_path: str,
-        line: int,
-        column: int,
-        include_definition: bool = False,
-    ) -> tuple[CodeLocation, ...]:
-        return tuple(
-            CodeLocation(
-                repository_rel_path=path,
-                line_start=line_start,
-                line_end=line_end,
-                column_start=column_start,
-                column_end=column_end,
-            )
-            for path, line_start, line_end, column_start, column_end in self._build_file_symbol_service().find_references(
-                repository_rel_path,
-                line,
-                column,
-                include_definition=include_definition,
-            )
-        )
-
-    def get_tests(self) -> tuple[TestDefinition, ...]:
-        return tuple(item.test_definition for item in self.get_discovered_tests())
-
-    def get_discovered_tests(self) -> tuple[DiscoveredTestDefinition, ...]:
-        return tuple(
-            sorted(
-                (self._test_translator.to_discovered_test_definition(item) for item in self._get_tests()),
-                key=lambda item: item.test_definition.id,
-            )
-        )
-
     def get_related_tests(self, target: RelatedTestTarget) -> tuple[RelatedTestMatch, ...]:
         discovered_tests = self.get_discovered_tests()
-        tests = tuple(item.test_definition for item in discovered_tests)
-        if not tests:
+        if not discovered_tests:
             return tuple()
         if target.owner_id is not None:
             owner = self.repository.resolve_owner(target.owner_id)
@@ -205,9 +128,6 @@ class PythonProvider(ArchitectureProviderBase, CodeProviderBase, TestProviderBas
                         test_definition=matches[0].test_definition,
                         relation_reason="same_owner",
                         matched_owner_id=target.owner_id,
-                        discovery_method=matches[0].discovery_method,
-                        discovery_tool=matches[0].discovery_tool,
-                        is_authoritative=matches[0].is_authoritative,
                     )
                     for _ in [0]
                 )
@@ -216,9 +136,6 @@ class PythonProvider(ArchitectureProviderBase, CodeProviderBase, TestProviderBas
                     test_definition=discovered_test.test_definition,
                     relation_reason="same_component",
                     matched_owner_id=target.owner_id,
-                    discovery_method=discovered_test.discovery_method,
-                    discovery_tool=discovered_test.discovery_tool,
-                    is_authoritative=discovered_test.is_authoritative,
                 )
                 for discovered_test in discovered_tests
             )
@@ -233,9 +150,6 @@ class PythonProvider(ArchitectureProviderBase, CodeProviderBase, TestProviderBas
                 relation_reason="same_component",
                 matched_owner_id=owner_info.owner.id,
                 matched_repository_rel_path=target.repository_rel_path,
-                discovery_method=discovered_test.discovery_method,
-                discovery_tool=discovered_test.discovery_tool,
-                is_authoritative=discovered_test.is_authoritative,
             )
             for discovered_test in discovered_tests
         )
@@ -281,12 +195,14 @@ class PythonProvider(ArchitectureProviderBase, CodeProviderBase, TestProviderBas
 
     def _component_analysis_by_id(self) -> dict[str, PythonPackageComponentAnalysis]:
         if self._component_id_index is None:
-            self._component_id_index = {}
-            for analysis in self._get_components():
-                translated = self._translator.to_component(analysis)
-                if translated.id in self._component_id_index:
-                    raise ValueError(f"duplicate python component id detected: `{translated.id}`")
-                self._component_id_index[translated.id] = analysis
+            self._component_id_index = {
+                key: value
+                for key, value in ComponentIndexBuilder.build(
+                    self._get_components(),
+                    lambda analysis: self._translator.to_component(analysis).id,
+                    lambda component_id: f"duplicate python component id detected: `{component_id}`",
+                ).items()
+            }
         return self._component_id_index
 
     def _get_runners(self) -> tuple[PythonRunnerAnalysis, ...]:
@@ -304,5 +220,40 @@ class PythonProvider(ArchitectureProviderBase, CodeProviderBase, TestProviderBas
     def _get_symbols(self, query: str, is_case_sensitive: bool = False) -> tuple[PythonWorkspaceSymbol, ...]:
         return self._build_symbol_service().get_symbols(query, is_case_sensitive=is_case_sensitive)
 
-    def _get_tests(self) -> tuple[PythonTestAnalysis, ...]:
+    def _list_file_symbols(
+        self,
+        repository_rel_path: str,
+        query: str | None = None,
+        is_case_sensitive: bool = False,
+    ) -> tuple[PythonWorkspaceSymbol, ...]:
+        return self._build_file_symbol_service().list_file_symbols(
+            repository_rel_path,
+            query=query,
+            is_case_sensitive=is_case_sensitive,
+        )
+
+    def _find_definition_locations(self, repository_rel_path: str, line: int, column: int) -> tuple[tuple[str, int, int, int, int], ...]:
+        return self._build_file_symbol_service().find_definition(repository_rel_path, line, column)
+
+    def _find_reference_locations(
+        self,
+        repository_rel_path: str,
+        line: int,
+        column: int,
+        include_definition: bool = False,
+    ) -> tuple[tuple[str, int, int, int, int], ...]:
+        return self._build_file_symbol_service().find_references(
+            repository_rel_path,
+            line,
+            column,
+            include_definition=include_definition,
+        )
+
+    def _to_entity_info(self, symbol: object) -> EntityInfo:
+        return self._symbol_translator.to_entity_info(symbol)
+
+    def _get_tests_internal(self) -> tuple[PythonTestAnalysis, ...]:
         return self._build_test_discoverer().discover()
+
+    def _to_discovered_test_definition(self, test_analysis: object):
+        return self._test_translator.to_discovered_test_definition(test_analysis)

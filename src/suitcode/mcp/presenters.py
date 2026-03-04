@@ -4,7 +4,7 @@ from suitcode.core.code.models import CodeLocation
 from suitcode.core.intelligence_models import ComponentContext, DependencyRef, FileContext, ImpactSummary, SymbolContext
 from suitcode.core.models import Aggregator, Component, EntityInfo, ExternalPackage, FileInfo, PackageManager, Runner
 from suitcode.core.repository_models import FileOwnerInfo, OwnedNodeInfo
-from suitcode.core.tests.models import DiscoveredTestDefinition, RelatedTestMatch
+from suitcode.core.tests.models import DiscoveredTestDefinition, ResolvedRelatedTest
 from suitcode.core.repository import Repository
 from suitcode.core.workspace import Workspace
 from suitcode.providers.provider_metadata import DetectedProviderSupport, ProviderDescriptor, RepositorySupportResult
@@ -237,7 +237,9 @@ class TestPresenter:
             test_count=len(repository.tests.get_discovered_tests()),
         )
 
-    def related_test_view(self, match: RelatedTestMatch, discovered_test: DiscoveredTestDefinition) -> RelatedTestView:
+    def related_test_view(self, related_test: ResolvedRelatedTest) -> RelatedTestView:
+        match = related_test.match
+        discovered_test = related_test.discovered_test
         return RelatedTestView(
             id=discovered_test.test_definition.id,
             name=discovered_test.test_definition.name,
@@ -334,18 +336,7 @@ class IntelligencePresenter:
             symbol_count=context.symbol_count,
             symbols_preview=tuple(code_presenter.symbol_view(item) for item in context.symbols_preview),
             related_test_count=context.related_test_count,
-            related_tests_preview=tuple(
-                test_presenter.related_test_view(
-                    item,
-                    DiscoveredTestDefinition(
-                        test_definition=item.test_definition,
-                        discovery_method=item.discovery_method,
-                        discovery_tool=item.discovery_tool,
-                        is_authoritative=item.is_authoritative,
-                    ),
-                )
-                for item in context.related_tests_preview
-            ),
+            related_tests_preview=tuple(test_presenter.related_test_view(item) for item in context.related_tests_preview),
             quality_provider_ids=context.quality_provider_ids,
         )
 
@@ -361,18 +352,7 @@ class IntelligencePresenter:
             reference_count=context.reference_count,
             references_preview=tuple(code_presenter.location_view(item) for item in context.references_preview),
             related_test_count=context.related_test_count,
-            related_tests_preview=tuple(
-                test_presenter.related_test_view(
-                    item,
-                    DiscoveredTestDefinition(
-                        test_definition=item.test_definition,
-                        discovery_method=item.discovery_method,
-                        discovery_tool=item.discovery_tool,
-                        is_authoritative=item.is_authoritative,
-                    ),
-                )
-                for item in context.related_tests_preview
-            ),
+            related_tests_preview=tuple(test_presenter.related_test_view(item) for item in context.related_tests_preview),
         )
 
     def impact_summary_view(self, summary: ImpactSummary) -> ImpactSummaryView:

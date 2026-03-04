@@ -6,7 +6,7 @@ from suitcode.core.code.models import CodeLocation
 from suitcode.core.models import Component, EntityInfo, FileInfo
 from suitcode.core.models.nodes import StrictModel
 from suitcode.core.repository_models import OwnedNodeInfo
-from suitcode.core.tests.models import RelatedTestMatch
+from suitcode.core.tests.models import ResolvedRelatedTest
 
 
 class DependencyRef(StrictModel):
@@ -56,7 +56,7 @@ class FileContext(StrictModel):
     symbol_count: int
     symbols_preview: tuple[EntityInfo, ...]
     related_test_count: int
-    related_tests_preview: tuple[RelatedTestMatch, ...]
+    related_tests_preview: tuple[ResolvedRelatedTest, ...]
     quality_provider_ids: tuple[str, ...]
 
 
@@ -68,7 +68,7 @@ class SymbolContext(StrictModel):
     reference_count: int
     references_preview: tuple[CodeLocation, ...]
     related_test_count: int
-    related_tests_preview: tuple[RelatedTestMatch, ...]
+    related_tests_preview: tuple[ResolvedRelatedTest, ...]
 
 
 class ImpactTarget(StrictModel):

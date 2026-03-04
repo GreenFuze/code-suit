@@ -39,9 +39,6 @@ class RelatedTestMatch(StrictModel):
     relation_reason: str
     matched_owner_id: str | None = None
     matched_repository_rel_path: str | None = None
-    discovery_method: TestDiscoveryMethod
-    discovery_tool: str | None = None
-    is_authoritative: bool
 
     @model_validator(mode="after")
     def _validate_reason_and_match(self) -> "RelatedTestMatch":
@@ -50,12 +47,6 @@ class RelatedTestMatch(StrictModel):
             raise ValueError(f"unsupported relation_reason: `{self.relation_reason}`")
         if self.matched_repository_rel_path is not None:
             self.matched_repository_rel_path = normalize_repository_relative_path(self.matched_repository_rel_path)
-        authoritative_methods = {
-            TestDiscoveryMethod.AUTHORITATIVE_PYTEST_COLLECT,
-            TestDiscoveryMethod.AUTHORITATIVE_JEST_LIST_TESTS,
-        }
-        if self.is_authoritative != (self.discovery_method in authoritative_methods):
-            raise ValueError("is_authoritative must be consistent with discovery_method")
         return self
 
 
@@ -74,3 +65,42 @@ class DiscoveredTestDefinition(StrictModel):
         if self.is_authoritative != (self.discovery_method in authoritative_methods):
             raise ValueError("is_authoritative must be consistent with discovery_method")
         return self
+
+
+class ResolvedRelatedTest(StrictModel):
+    match: RelatedTestMatch
+    discovered_test: DiscoveredTestDefinition
+
+    @model_validator(mode="after")
+    def _validate_join(self) -> "ResolvedRelatedTest":
+        if self.match.test_definition.id != self.discovered_test.test_definition.id:
+            raise ValueError("match and discovered_test must reference the same test_definition id")
+        return self
+
+    @property
+    def test_definition(self) -> TestDefinition:
+        return self.match.test_definition
+
+    @property
+    def relation_reason(self) -> str:
+        return self.match.relation_reason
+
+    @property
+    def matched_owner_id(self) -> str | None:
+        return self.match.matched_owner_id
+
+    @property
+    def matched_repository_rel_path(self) -> str | None:
+        return self.match.matched_repository_rel_path
+
+    @property
+    def discovery_method(self) -> TestDiscoveryMethod:
+        return self.discovered_test.discovery_method
+
+    @property
+    def discovery_tool(self) -> str | None:
+        return self.discovered_test.discovery_tool
+
+    @property
+    def is_authoritative(self) -> bool:
+        return self.discovered_test.is_authoritative

@@ -2,9 +2,63 @@
 
 SuitCode is a repository intelligence engine with an MCP server front-end.
 
-It gives agents deterministic repository understanding for supported projects so they can use semantic tools instead of broad filesystem exploration.
+Its job is to replace broad repository exploration with deterministic semantic tools.
 
-Current supported provider families:
+SuitCode is built for questions like:
+- What are the real components, runners, package managers, and external dependencies in this repository?
+- What does this component depend on, and what depends on it?
+- Which files belong to this component, runner, package manager, or test target?
+- Which symbols exist in this file or across the repository?
+- Where is this symbol defined, and where is it referenced?
+- Which tests cover this file, symbol, or component?
+- Was that test information discovered from a real tool or from a heuristic fallback?
+- What likely breaks if I change this file, symbol, or owner, given component dependents, references, and related tests?
+
+That is the current value proposition: architecture understanding, code navigation, test targeting, and impact estimation through deterministic tools.
+
+## What SuitCode Can Do Today
+
+For a supported repository, SuitCode can expose:
+- real architecture nodes:
+  - components
+  - aggregators
+  - runners
+  - package managers
+  - external packages
+- file ownership:
+  - which owner owns a file
+  - which files belong to an owner
+- code intelligence:
+  - repository-wide symbol lookup
+  - file-local symbol lookup
+  - definition lookup
+  - reference lookup
+- test intelligence:
+  - discovered test targets
+  - related tests for a file or owner
+  - discovery provenance: authoritative vs heuristic
+- quality intelligence:
+  - available quality providers
+  - linting
+  - formatting
+  - diagnostics and symbol deltas
+- higher-level context:
+  - repository summary
+  - component context
+  - file context
+  - symbol context
+  - impact analysis
+
+Concretely, SuitCode already supports:
+- real components and targets plus their dependencies
+- component dependents for blast-radius analysis
+- related tests for a component, file, symbol, or owner
+- enough test metadata to narrow to the right test targets instead of exploring test directories manually
+- impact summaries that combine ownership, references, component dependents, and related tests
+
+## Supported Provider Families
+
+Current supported providers:
 - `python`
 - `npm`
 
@@ -20,22 +74,6 @@ Design direction:
 - SuitCode keeps shared typed result objects across providers
 - SuitCode does not currently rely on a persisted graph/database for normal operation
 
-## What SuitCode Knows
-
-For a supported repository, SuitCode can expose:
-- components
-- aggregators
-- runners
-- package managers
-- external packages
-- owned files
-- symbols
-- definitions and references
-- discovered tests and related tests
-- quality providers, linting, and formatting
-- repository/component/file/symbol context
-- dependency and impact summaries
-
 ## Supported Repositories
 
 ### Python
@@ -49,6 +87,13 @@ Python provider behavior:
   - heuristic unittest fallback
 - quality: `ruff check` and `ruff format`
 
+Python repository intelligence currently supports:
+- top-level packaged components from `pyproject.toml`
+- repo-level dependency modeling from `pyproject.toml`
+- LSP-backed symbol, definition, and reference lookup
+- related-test lookup against discovered Python test targets
+- impact summaries for files, symbols, and owners
+
 ### npm
 A repository is currently considered npm-supported when it has a valid root `package.json`.
 
@@ -60,7 +105,14 @@ npm provider behavior:
   - heuristic fallback for other test setups
 - quality: ESLint and Prettier
 
-## Core Model
+npm repository intelligence currently supports:
+- workspace/package components and their internal/external dependencies
+- dependents across workspace components
+- LSP-backed symbol, definition, and reference lookup for JS/TS
+- related-test lookup for package-scoped files and owners
+- impact summaries for files, symbols, and owners
+
+## Core Runtime Model
 
 SuitCode uses shared typed objects across providers so the MCP and future higher-level flows can stay stable even when provider internals differ.
 
@@ -81,6 +133,10 @@ Current runtime model:
 - `Repository` owns provider instances and repository-scoped intelligence
 - intelligence objects aggregate provider output by role
 
+The important constraint is:
+- provider internals are allowed to differ
+- the agent-facing object model stays consistent
+
 ## MCP Server
 
 SuitCode ships an MCP server under `src/suitcode/mcp` and exposes:
@@ -99,40 +155,6 @@ The MCP server is intended to steer agents toward deterministic semantic tooling
 - opening the same canonical repository root reuses the same workspace
 - repository roots are unique across open workspaces in the same server process
 - closing a workspace releases its repository ownership
-
-## Installation
-
-### Base install
-```bash
-python -m pip install -e .
-```
-
-### Development install
-```bash
-python -m pip install -e .[dev]
-```
-
-This installs:
-- `pytest`
-- `basedpyright`
-
-## External Tooling
-
-SuitCode intentionally reuses existing tools where appropriate.
-
-### Python provider
-Recommended tools:
-- `basedpyright`
-- `pytest`
-- `ruff`
-
-### npm provider
-Recommended tools:
-- `typescript-language-server`
-- `typescript`
-- `jest` for authoritative Jest test discovery
-- `eslint`
-- `prettier`
 
 ## Running the MCP Server
 
@@ -171,6 +193,27 @@ python -m suitcode.mcp.server --transport http --host 127.0.0.1 --port 8000
 ```bash
 suitcode-mcp --transport http --host 127.0.0.1 --port 8000
 ```
+
+Once the server is running, agents can connect to `/mcp` and use the semantic tool surface instead of starting with filesystem exploration.
+
+## External Tools SuitCode Reuses
+
+### Python provider
+Recommended tools:
+- `basedpyright`
+- `pytest`
+- `ruff`
+
+### npm provider
+Recommended tools:
+- `typescript-language-server`
+- `typescript`
+- `jest` for authoritative Jest test discovery
+- `eslint`
+- `prettier`
+
+These tools are not the public interface.
+The public interface is the MCP tool surface and the shared SuitCode result types.
 
 ## MCP Tools
 
@@ -224,6 +267,91 @@ SuitCode currently exposes these MCP tools.
 - `list_files_by_owner`
 - `analyze_impact`
 
+## What Those MCP Tools Let An Agent Do
+
+### First-pass repository understanding
+Use:
+1. `inspect_repository_support`
+2. `open_workspace`
+3. `repository_summary`
+4. `list_components`
+5. `describe_components`
+
+This gives:
+- the supported provider(s)
+- repository structure
+- primary components and targets
+- dependency and dependent previews
+- related tests and owned files
+
+### File understanding without opening the file first
+Use:
+1. `get_file_owner`
+2. `describe_files`
+3. `list_symbols_in_file`
+
+This gives:
+- who owns the file
+- which tests are related
+- which symbols are inside it
+- which quality provider applies
+
+### Code navigation
+Use:
+1. `find_symbols`
+2. `list_symbols_in_file`
+3. `find_definition`
+4. `find_references`
+
+This gives:
+- exact symbol lookup
+- file-local symbol context
+- definition locations
+- reference locations
+
+### Real components and targets plus their deps
+Use:
+1. `list_components`
+2. `describe_components`
+3. `get_component_dependencies`
+4. `get_component_dependents`
+
+This answers:
+- what the real architecture targets are
+- what each one depends on
+- what depends on it
+- which files, runners, and tests are attached to it
+
+### Test targeting
+Use:
+1. `list_tests`
+2. `get_related_tests`
+3. `describe_components` or `describe_files`
+
+This answers:
+- which tests exist
+- which tests are related to a file or component
+- whether discovery came from a real tool or a heuristic fallback
+- enough information to run only the relevant test targets yourself
+
+SuitCode does not currently execute test targets for you.
+Its current role is to identify the relevant targets and test files so the agent can run only the right subset.
+
+### What breaks if I change X
+Use:
+1. `get_component_dependencies`
+2. `get_component_dependents`
+3. `find_references`
+4. `get_related_tests`
+5. `analyze_impact`
+
+This answers:
+- what this component depends on
+- what depends on it
+- where the symbol or file is referenced
+- which tests are likely relevant
+- the likely blast radius of a change to a file, symbol, or owner
+
 ## MCP Tool Semantics
 
 ### Symbol matching
@@ -248,6 +376,11 @@ Recommended flow:
 - `is_authoritative`
 
 This lets the agent distinguish tool-authoritative test discovery from heuristic fallback.
+
+This matters because SuitCode already supports:
+- real pytest-based discovery when available
+- real Jest-based discovery when available
+- explicit heuristic fallback when the authoritative tool path is not available
 
 ### Quality operations
 Quality tools require an explicit `provider_id`.
@@ -313,22 +446,6 @@ For a supported repository:
    - `analyze_impact`
 5. only then fall back to manual file exploration when needed
 
-## Testing
-
-Run the full test suite with:
-```bash
-python tests/run_all_tests.py -q
-```
-
-The project also includes focused provider, MCP, and fixture-based tests for:
-- Python repositories
-- npm repositories
-- symbol queries
-- definitions and references
-- ownership and impact
-- quality results
-- MCP presentation and tool wiring
-
 ## Current Status
 
 The project currently has:
@@ -338,11 +455,9 @@ The project currently has:
 - tool-backed code intelligence
 - partial authoritative test discovery
 - tool-backed quality operations
+- component dependency and dependent traversal
+- file, symbol, and owner context
+- impact analysis that combines ownership, references, and related tests
 
 What it does not currently depend on for normal runtime behavior:
 - a persisted graph/database
-
-## License / Project Notes
-
-No license file is currently documented here.
-If this project is intended for external distribution, add an explicit license and contribution policy.

@@ -10,6 +10,8 @@ from suitcode.core.intelligence_models import (
     ImpactTarget,
     SymbolContext,
 )
+from suitcode.core.code_reference_service import CodeReferenceService
+from suitcode.core.component_context_resolver import ComponentContextResolver
 from suitcode.core.ownership_index import OwnershipIndex
 from suitcode.core.context_service import ContextService
 from suitcode.core.impact_service import ImpactService
@@ -96,6 +98,8 @@ class Repository:
         self._providers_by_id: dict[str, ProviderBase] = {}
         self._provider_roles_by_id: dict[str, frozenset[ProviderRole]] = {}
         self._ownership_index_service: OwnershipIndex | None = None
+        self._component_context_resolver: ComponentContextResolver | None = None
+        self._code_reference_service: CodeReferenceService | None = None
         self._context_service: ContextService | None = None
         self._impact_service: ImpactService | None = None
         self._initialize_providers(support)
@@ -276,10 +280,31 @@ class Repository:
 
     def _build_context_service(self) -> ContextService:
         if self._context_service is None:
-            self._context_service = ContextService(self, self._build_ownership_index())
+            self._context_service = ContextService(
+                self,
+                self._build_ownership_index(),
+                self._build_component_context_resolver(),
+                self._build_code_reference_service(),
+            )
         return self._context_service
 
     def _build_impact_service(self) -> ImpactService:
         if self._impact_service is None:
-            self._impact_service = ImpactService(self, self._build_ownership_index(), self._build_context_service())
+            self._impact_service = ImpactService(
+                self,
+                self._build_ownership_index(),
+                self._build_context_service(),
+                self._build_component_context_resolver(),
+                self._build_code_reference_service(),
+            )
         return self._impact_service
+
+    def _build_component_context_resolver(self) -> ComponentContextResolver:
+        if self._component_context_resolver is None:
+            self._component_context_resolver = ComponentContextResolver(self, self._build_ownership_index())
+        return self._component_context_resolver
+
+    def _build_code_reference_service(self) -> CodeReferenceService:
+        if self._code_reference_service is None:
+            self._code_reference_service = CodeReferenceService(self, self._build_ownership_index())
+        return self._code_reference_service
