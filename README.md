@@ -16,6 +16,11 @@ SuitCode is built for questions like:
 
 That is the current value proposition: architecture understanding, code navigation, test targeting, and impact estimation through deterministic tools.
 
+The near-term direction is:
+- make provenance explicit everywhere, not only for selected outputs
+- compose high-level change analysis from provider-backed evidence
+- expose deterministic action surfaces so agents can run the right tests, runners, and builds without guessing commands
+
 ## What SuitCode Can Do Today
 
 For a supported repository, SuitCode can expose:
@@ -73,6 +78,7 @@ Design direction:
 - the MCP exposes compact semantic tools over those providers
 - SuitCode keeps shared typed result objects across providers
 - SuitCode does not currently rely on a persisted graph/database for normal operation
+- SuitCode prefers real toolchains, servers, and protocols over custom reimplementation whenever practical
 
 ## Supported Repositories
 
