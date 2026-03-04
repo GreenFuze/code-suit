@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 from suitcode.core.models import (
     Aggregator,
@@ -10,8 +11,10 @@ from suitcode.core.models import (
     PackageManager,
     Runner,
 )
-from suitcode.core.repository import Repository
 from suitcode.providers.provider_base import ProviderBase
+
+if TYPE_CHECKING:
+    from suitcode.core.repository import Repository
 
 
 class ArchitectureProviderBase(ProviderBase, ABC):

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
-from suitcode.core.repository import Repository
 from suitcode.providers.provider_base import ProviderBase
 from suitcode.providers.quality_models import QualityFileResult
+
+if TYPE_CHECKING:
+    from suitcode.core.repository import Repository
 
 
 class QualityProviderBase(ProviderBase, ABC):

@@ -2,6 +2,7 @@ from suitcode.providers.shared.lsp.client import LspClient
 from suitcode.providers.shared.lsp.errors import LspError, LspProcessError, LspProtocolError
 from suitcode.providers.shared.lsp.messages import (
     LspDocumentSymbol,
+    LspLocationLink,
     LspLocation,
     LspPosition,
     LspRange,
@@ -17,6 +18,7 @@ __all__ = [
     "LspClient",
     "LspDocumentSymbol",
     "LspError",
+    "LspLocationLink",
     "LspLocation",
     "LspPosition",
     "LspProcessError",

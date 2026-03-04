@@ -1,0 +1,90 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from suitcode.core.code.models import CodeLocation, SymbolLookupTarget
+from suitcode.core.code.code_intelligence import CodeIntelligence
+from suitcode.core.models import EntityInfo
+from suitcode.providers.code_provider_base import CodeProviderBase
+from suitcode.providers.provider_roles import ProviderRole
+
+
+class _FakeRepository:
+    def __init__(self, providers):
+        self._providers = providers
+
+    def get_providers_for_role(self, role: ProviderRole):
+        if role == ProviderRole.CODE:
+            return self._providers
+        return tuple()
+
+
+class _CodeProvider(CodeProviderBase):
+    PROVIDER_ID = "fake-code"
+    DISPLAY_NAME = "fake-code"
+    BUILD_SYSTEMS = ("fake",)
+    PROGRAMMING_LANGUAGES = ("other",)
+
+    @classmethod
+    def detect_roles(cls, repository_root: Path) -> frozenset[ProviderRole]:
+        return frozenset({ProviderRole.CODE})
+
+    def __init__(self, repository, name: str, line: int) -> None:
+        super().__init__(repository)
+        self._name = name
+        self._line = line
+
+    def get_symbol(self, query: str, is_case_sensitive: bool = False):
+        return (
+            EntityInfo(
+                id=f"entity:file.ts:function:{self._name}:{self._line}-{self._line}",
+                name=self._name,
+                repository_rel_path="file.ts",
+                entity_kind="function",
+                line_start=self._line,
+                line_end=self._line,
+                column_start=1,
+                column_end=5,
+            ),
+        )
+
+    def list_symbols_in_file(self, repository_rel_path: str, query: str | None = None, is_case_sensitive: bool = False):
+        return self.get_symbol(query or self._name, is_case_sensitive=is_case_sensitive)
+
+    def find_definition(self, repository_rel_path: str, line: int, column: int):
+        return (
+            CodeLocation(
+                repository_rel_path=repository_rel_path,
+                line_start=line,
+                line_end=line,
+                column_start=column,
+                column_end=column,
+            ),
+        )
+
+    def find_references(self, repository_rel_path: str, line: int, column: int, include_definition: bool = False):
+        return self.find_definition(repository_rel_path, line, column)
+
+
+def test_code_intelligence_concatenates_and_sorts_symbols() -> None:
+    repo = _FakeRepository(
+        (
+            _CodeProvider(repository=None, name="Beta", line=2),  # type: ignore[arg-type]
+            _CodeProvider(repository=None, name="Alpha", line=1),  # type: ignore[arg-type]
+        )
+    )
+    intelligence = CodeIntelligence(repo)  # type: ignore[arg-type]
+
+    assert tuple(node.name for node in intelligence.get_symbol("a")) == ("Alpha", "Beta")
+
+
+def test_code_intelligence_resolves_symbol_id_for_definitions() -> None:
+    repo = _FakeRepository((_CodeProvider(repository=None, name="Alpha", line=3),))  # type: ignore[arg-type]
+    intelligence = CodeIntelligence(repo)  # type: ignore[arg-type]
+
+    result = intelligence.find_definition(
+        SymbolLookupTarget(symbol_id="entity:file.ts:function:Alpha:3-3")
+    )
+
+    assert result[0].repository_rel_path == "file.ts"
+    assert result[0].line_start == 3

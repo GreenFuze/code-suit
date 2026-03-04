@@ -3,9 +3,12 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from suitcode.core.repository import Repository
 from suitcode.providers.npm.quality_models import NpmResolvedTool
+
+if TYPE_CHECKING:
+    from suitcode.core.repository import Repository
 
 
 class NpmQualityToolResolver:

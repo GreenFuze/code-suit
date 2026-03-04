@@ -42,9 +42,18 @@ class TypeScriptLanguageServerResolver:
 
     def resolve(self, repository_root: Path) -> tuple[str, ...]:
         root = repository_root.expanduser().resolve()
+        local_module_command = self._resolve_local_language_server_module_command(root)
+        if local_module_command is not None:
+            self._resolve_tsserver(root)
+            return local_module_command
         language_server = self._resolve_language_server(root)
+        self._resolve_tsserver(root)
+        return (language_server, "--stdio")
+
+    def resolve_initialization_options(self, repository_root: Path) -> dict[str, object]:
+        root = repository_root.expanduser().resolve()
         tsserver = self._resolve_tsserver(root)
-        return (language_server, "--stdio", "--tsserver-path", tsserver)
+        return {"tsserver": {"path": tsserver}}
 
     def _resolve_language_server(self, repository_root: Path) -> str:
         error_message = (
@@ -77,6 +86,32 @@ class TypeScriptLanguageServerResolver:
         if os.name == "nt":
             names.insert(0, "typescript-language-server.cmd")
         return tuple(bin_dir / name for name in names)
+
+    def _resolve_local_language_server_module_command(self, repository_root: Path) -> tuple[str, ...] | None:
+        node = self._resolve_node_executable()
+        if node is None:
+            return None
+        cli_module = repository_root / "node_modules" / "typescript-language-server" / "lib" / "cli.mjs"
+        if not cli_module.exists():
+            return None
+        return (node, str(cli_module.resolve()), "--stdio")
+
+    def _resolve_node_executable(self) -> str | None:
+        resolved = shutil.which("node")
+        if resolved is not None:
+            return resolved
+        if os.name != "nt":
+            return None
+        candidates: list[Path] = []
+        for env_name in ("ProgramFiles", "ProgramFiles(x86)", "LocalAppData"):
+            base = os.environ.get(env_name)
+            if not base:
+                continue
+            candidates.append(Path(base) / "nodejs" / "node.exe")
+        for candidate in candidates:
+            if candidate.exists():
+                return str(candidate.resolve())
+        return None
 
     def _local_tsserver_candidates(self, repository_root: Path) -> tuple[Path, ...]:
         candidates = [repository_root / "node_modules" / "typescript" / "lib" / "tsserver.js"]

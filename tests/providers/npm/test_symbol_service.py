@@ -34,6 +34,12 @@ class _FakeClient:
     def document_symbol(self, file_path: Path) -> tuple[LspDocumentSymbol, ...]:
         return tuple()
 
+    def definition(self, file_path: Path, line: int, column: int) -> tuple[LspLocation, ...]:
+        return tuple()
+
+    def references(self, file_path: Path, line: int, column: int, include_declaration: bool = False) -> tuple[LspLocation, ...]:
+        return tuple()
+
     def shutdown(self) -> None:
         return None
 
@@ -69,10 +75,39 @@ class _FakeDocumentClient:
     def document_symbol(self, file_path: Path) -> tuple[LspDocumentSymbol, ...]:
         return self._results
 
+    def definition(self, file_path: Path, line: int, column: int) -> tuple[LspLocation, ...]:
+        return tuple()
+
+    def references(self, file_path: Path, line: int, column: int, include_declaration: bool = False) -> tuple[LspLocation, ...]:
+        return tuple()
+
     def shutdown(self) -> None:
         return None
 
     def __enter__(self) -> "_FakeDocumentClient":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.shutdown()
+
+
+class _FakeLocationClient:
+    def __init__(self, locations: tuple[LspLocation, ...]) -> None:
+        self._locations = locations
+
+    def initialize(self, root_path: Path) -> None:
+        return None
+
+    def definition(self, file_path: Path, line: int, column: int) -> tuple[LspLocation, ...]:
+        return self._locations
+
+    def references(self, file_path: Path, line: int, column: int, include_declaration: bool = False) -> tuple[LspLocation, ...]:
+        return self._locations
+
+    def shutdown(self) -> None:
+        return None
+
+    def __enter__(self) -> "_FakeLocationClient":
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -281,6 +316,61 @@ def test_symbol_service_filters_results_to_repository_local_js_ts_files(tmp_path
     assert symbols[0].column_start == 1
 
 
+def test_symbol_service_matches_exact_names_case_insensitively(npm_repository: Repository) -> None:
+    inside_ts = (npm_repository.root / "packages" / "core" / "src" / "index.ts").resolve().as_uri()
+
+    service = NpmSymbolService(
+        npm_repository,
+        resolver=_FakeResolver(),
+        client_factory=lambda command, cwd: _FakeClient(
+            (
+                _symbol(inside_ts, name="Core", kind=5),
+                _symbol(inside_ts, name="CoreFactory", kind=5),
+            )
+        ),
+    )
+
+    symbols = service.get_symbols("core")
+
+    assert [item.name for item in symbols] == ["Core"]
+
+
+def test_symbol_service_respects_case_sensitive_flag(npm_repository: Repository) -> None:
+    inside_ts = (npm_repository.root / "packages" / "core" / "src" / "index.ts").resolve().as_uri()
+
+    service = NpmSymbolService(
+        npm_repository,
+        resolver=_FakeResolver(),
+        client_factory=lambda command, cwd: _FakeClient(
+            (
+                _symbol(inside_ts, name="Core", kind=5),
+            )
+        ),
+    )
+
+    assert service.get_symbols("core", is_case_sensitive=True) == tuple()
+    assert [item.name for item in service.get_symbols("Core", is_case_sensitive=True)] == ["Core"]
+
+
+def test_symbol_service_uses_glob_matching_when_query_contains_wildcards(npm_repository: Repository) -> None:
+    inside_ts = (npm_repository.root / "packages" / "core" / "src" / "index.ts").resolve().as_uri()
+
+    service = NpmSymbolService(
+        npm_repository,
+        resolver=_FakeResolver(),
+        client_factory=lambda command, cwd: _FakeClient(
+            (
+                _symbol(inside_ts, name="Core", kind=5),
+                _symbol(inside_ts, name="CoreFactory", kind=5),
+            )
+        ),
+    )
+
+    symbols = service.get_symbols("Core*")
+
+    assert [item.name for item in symbols] == ["Core", "CoreFactory"]
+
+
 def test_expected_symbol_data_covers_all_fixture_js_ts_sources(npm_fixture_root: Path) -> None:
     actual_files = {
         path.relative_to(npm_fixture_root).as_posix()
@@ -320,3 +410,43 @@ def test_file_symbol_service_returns_expected_fixture_entities(
         }
         for symbol in symbols
     ] == list(EXPECTED_FILE_SYMBOLS[repository_rel_path])
+
+
+def test_file_symbol_service_supports_exact_and_glob_filtering(npm_repository: Repository) -> None:
+    document_symbols = _document_symbols_by_path()["packages/core/src/index.ts"]
+    service = NpmFileSymbolService(
+        npm_repository,
+        resolver=_FakeResolver(),
+        client_factory=lambda command, cwd: _FakeDocumentClient(document_symbols),
+    )
+
+    exact = service.list_file_symbols("packages/core/src/index.ts", query="Core")
+    globbed = service.list_file_symbols("packages/core/src/index.ts", query="*Value")
+
+    assert [item.name for item in exact] == ["Core"]
+    assert [item.name for item in globbed] == ["getValue", "setValue"]
+
+
+def test_file_symbol_service_definition_and_references_translate_locations(npm_repository: Repository) -> None:
+    location = LspLocation(
+        uri='file:///c%3A'
+        + (npm_repository.root / "packages" / "core" / "src" / "index.ts")
+        .resolve()
+        .as_posix()
+        .removeprefix('C:'),
+        range=LspRange(
+            start=LspPosition(line=6, character=2),
+            end=LspPosition(line=6, character=8),
+        ),
+    )
+    service = NpmFileSymbolService(
+        npm_repository,
+        resolver=_FakeResolver(),
+        client_factory=lambda command, cwd: _FakeLocationClient((location,)),
+    )
+
+    definition = service.find_definition("packages/core/src/index.ts", 7, 3)
+    references = service.find_references("packages/core/src/index.ts", 7, 3, include_definition=True)
+
+    assert definition == (("packages/core/src/index.ts", 7, 7, 3, 9),)
+    assert references == definition

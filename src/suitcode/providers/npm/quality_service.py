@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from suitcode.core.models import normalize_repository_relative_path
-from suitcode.core.repository import Repository
 from suitcode.providers.npm.entity_delta import NpmEntityDeltaBuilder
 from suitcode.providers.npm.eslint_runner import EslintRunner
 from suitcode.providers.npm.prettier_runner import PrettierRunner
@@ -15,6 +15,9 @@ from suitcode.providers.npm.quality_models import (
 )
 from suitcode.providers.npm.symbol_service import NpmFileSymbolService
 from suitcode.providers.npm.tool_resolution import NpmQualityToolResolver
+
+if TYPE_CHECKING:
+    from suitcode.core.repository import Repository
 
 
 class NpmQualityService:

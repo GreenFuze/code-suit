@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from suitcode.core.repository import Repository
 from suitcode.providers.npm.quality_models import NpmFormatRunResult, NpmResolvedTool
+
+if TYPE_CHECKING:
+    from suitcode.core.repository import Repository
 
 
 class PrettierRunner:

@@ -22,6 +22,13 @@ class LspLocation:
 
 
 @dataclass(frozen=True)
+class LspLocationLink:
+    target_uri: str
+    target_range: LspRange
+    target_selection_range: LspRange | None = None
+
+
+@dataclass(frozen=True)
 class LspWorkspaceSymbol:
     name: str
     kind: int
@@ -36,4 +43,5 @@ class LspDocumentSymbol:
     range: LspRange
     selection_range: LspRange
     detail: str | None = None
+    container_name: str | None = None
     children: tuple["LspDocumentSymbol", ...] = ()

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 from suitcode.core.models import TestDefinition
-from suitcode.core.repository import Repository
+from suitcode.core.tests.models import RelatedTestMatch, RelatedTestTarget
 from suitcode.providers.provider_base import ProviderBase
+
+if TYPE_CHECKING:
+    from suitcode.core.repository import Repository
 
 
 class TestProviderBase(ProviderBase, ABC):
@@ -13,4 +17,8 @@ class TestProviderBase(ProviderBase, ABC):
 
     @abstractmethod
     def get_tests(self) -> tuple[TestDefinition, ...]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_related_tests(self, target: RelatedTestTarget) -> tuple[RelatedTestMatch, ...]:
         raise NotImplementedError
