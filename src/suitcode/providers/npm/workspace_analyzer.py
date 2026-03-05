@@ -100,20 +100,30 @@ class NpmWorkspaceAnalyzer:
 
     def analyze_external_packages(self) -> tuple[NpmExternalPackageAnalysis, ...]:
         if self._external_packages_cache is None:
-            external_packages: dict[str, str] = {}
-            for manifest in [self._workspace.root_manifest, *(package.manifest for package in self._workspace_model.packages)]:
+            external_packages: dict[str, tuple[str, set[str]]] = {}
+            manifests: list[tuple[PackageJsonManifest, str]] = [
+                (self._workspace.root_manifest, "package.json"),
+                *((package.manifest, package.package_json_rel_path) for package in self._workspace_model.packages),
+            ]
+            for manifest, manifest_path in manifests:
                 for dependency_name in manifest.dependencies.all_dependency_names():
                     if dependency_name in self._workspace_model.workspace_package_names:
                         continue
                     version_spec = manifest.dependencies.version_for(dependency_name)
                     if version_spec is None:
                         raise ValueError(f"missing version spec for dependency {dependency_name}")
-                    external_packages.setdefault(dependency_name, version_spec)
+                    if dependency_name not in external_packages:
+                        external_packages[dependency_name] = (version_spec, {manifest_path})
+                        continue
+                    existing_version_spec, evidence_paths = external_packages[dependency_name]
+                    evidence_paths.add(manifest_path)
+                    external_packages[dependency_name] = (existing_version_spec, evidence_paths)
             analyses = [
                 NpmExternalPackageAnalysis(
                     package_name=name,
-                    version_spec=external_packages[name],
+                    version_spec=external_packages[name][0],
                     manager_id="pkgmgr:npm:root",
+                    evidence_paths=tuple(sorted(external_packages[name][1])),
                 )
                 for name in sorted(external_packages)
             ]

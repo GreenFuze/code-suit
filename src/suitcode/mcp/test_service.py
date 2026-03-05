@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from suitcode.core.tests.models import RelatedTestTarget
 from suitcode.mcp.errors import McpValidationError
-from suitcode.mcp.models import ListResult, RelatedTestView, TestDefinitionView
+from suitcode.mcp.models import (
+    ListResult,
+    RelatedTestView,
+    RunTestTargetsView,
+    TestDefinitionView,
+    TestTargetDescriptionView,
+)
 from suitcode.mcp.pagination import PaginationPolicy
 from suitcode.mcp.presenters import TestPresenter
 from suitcode.mcp.state import WorkspaceRegistry
@@ -44,3 +50,30 @@ class TestMcpService:
         except ValueError as exc:
             raise McpValidationError(str(exc)) from exc
         return self._pagination.paginate(items, limit, offset)
+
+    def describe_test_target(self, workspace_id: str, repository_id: str, test_id: str) -> TestTargetDescriptionView:
+        repository = self._registry.get_repository(workspace_id, repository_id)
+        try:
+            description = repository.describe_test_target(test_id)
+        except ValueError as exc:
+            raise McpValidationError(str(exc)) from exc
+        return self._test_presenter.test_target_description_view(description)
+
+    def run_test_targets(
+        self,
+        workspace_id: str,
+        repository_id: str,
+        test_ids: tuple[str, ...],
+        timeout_seconds: int = 120,
+    ) -> RunTestTargetsView:
+        repository = self._registry.get_repository(workspace_id, repository_id)
+        try:
+            results = repository.run_test_targets(test_ids, timeout_seconds=timeout_seconds)
+        except ValueError as exc:
+            raise McpValidationError(str(exc)) from exc
+        return self._test_presenter.run_test_targets_view(
+            workspace_id=workspace_id,
+            repository_id=repository_id,
+            timeout_seconds=timeout_seconds,
+            results=results,
+        )

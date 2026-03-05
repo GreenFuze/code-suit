@@ -29,20 +29,46 @@ class CodeReferenceService:
             raise ValueError(f"symbol id resolved ambiguously: `{symbol_id}`")
         return matches[0]
 
-    def references_for_file(self, repository_rel_path: str) -> tuple[CodeLocation, ...]:
+    def references_for_file(
+        self,
+        repository_rel_path: str,
+        max_locations: int | None = None,
+    ) -> tuple[CodeLocation, ...]:
+        if max_locations is not None and max_locations < 1:
+            raise ValueError("max_locations must be at least 1")
         references: dict[tuple[str, int, int, int | None, int | None, str | None], CodeLocation] = {}
         for symbol in self._repository.code.list_symbols_in_file(repository_rel_path):
             for location in self._repository.code.find_references_by_symbol_id(symbol.id):
                 key = self._location_key(location)
                 references.setdefault(key, location)
+                if max_locations is not None and len(references) >= max_locations:
+                    return tuple(sorted(references.values(), key=self._location_sort_key))
         return tuple(sorted(references.values(), key=self._location_sort_key))
 
-    def references_for_owner(self, owner_id: str) -> tuple[CodeLocation, ...]:
+    def references_for_owner(
+        self,
+        owner_id: str,
+        *,
+        max_locations: int | None = None,
+        max_files: int | None = None,
+    ) -> tuple[CodeLocation, ...]:
+        if max_locations is not None and max_locations < 1:
+            raise ValueError("max_locations must be at least 1")
+        if max_files is not None and max_files < 1:
+            raise ValueError("max_files must be at least 1")
         references: dict[tuple[str, int, int, int | None, int | None, str | None], CodeLocation] = {}
-        for file_info in self._ownership_index.files_for_owner(owner_id):
-            for location in self.references_for_file(file_info.repository_rel_path):
+        files = self._ownership_index.files_for_owner(owner_id)
+        if max_files is not None:
+            files = files[:max_files]
+        for file_info in files:
+            for location in self.references_for_file(
+                file_info.repository_rel_path,
+                max_locations=max_locations,
+            ):
                 key = self._location_key(location)
                 references.setdefault(key, location)
+                if max_locations is not None and len(references) >= max_locations:
+                    return tuple(sorted(references.values(), key=self._location_sort_key))
         return tuple(sorted(references.values(), key=self._location_sort_key))
 
     @staticmethod

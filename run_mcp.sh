@@ -17,4 +17,4 @@ fi
 
 export PYTHONPATH="$repo_root/src${PYTHONPATH:+:$PYTHONPATH}"
 
-exec "$python_exe" -m suitcode.mcp.server --transport http --host 127.0.0.1 --port 8000 "$@"
+exec "$python_exe" -m suitcode.mcp.server "$@"

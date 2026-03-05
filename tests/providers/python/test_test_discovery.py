@@ -49,8 +49,10 @@ def test_test_discovery_uses_authoritative_pytest_when_available(python_repo_roo
     assert pytest_test.discovery_method == TestDiscoveryMethod.AUTHORITATIVE_PYTEST_COLLECT
     assert pytest_test.discovery_tool == 'pytest'
     assert pytest_test.test_files == ('tests/test_basic.py',)
+    assert pytest_test.evidence_paths == ('pyproject.toml', 'tests/test_basic.py')
     assert unittest_test.discovery_method == TestDiscoveryMethod.HEURISTIC_UNITTEST
     assert unittest_test.discovery_tool is None
+    assert unittest_test.evidence_paths[0] == 'pyproject.toml'
 
 
 def test_test_discovery_falls_back_to_heuristic_pytest_when_tool_is_unavailable(python_repo_root) -> None:
@@ -67,6 +69,7 @@ def test_test_discovery_falls_back_to_heuristic_pytest_when_tool_is_unavailable(
     assert pytest_test.discovery_method == TestDiscoveryMethod.HEURISTIC_CONFIG_GLOB
     assert pytest_test.discovery_tool is None
     assert pytest_test.test_files == ('tests/test_basic.py',)
+    assert pytest_test.evidence_paths == ('pyproject.toml', 'tests/test_basic.py')
 
 
 def test_pytest_runner_malformed_output_raises(tmp_path: Path) -> None:

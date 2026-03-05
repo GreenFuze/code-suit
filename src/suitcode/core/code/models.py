@@ -4,6 +4,7 @@ from pydantic import field_validator, model_validator
 
 from suitcode.core.models.ids import normalize_repository_relative_path
 from suitcode.core.models.nodes import StrictModel
+from suitcode.core.provenance import ProvenanceEntry, SourceKind
 
 
 class SymbolLookupTarget(StrictModel):
@@ -48,6 +49,7 @@ class CodeLocation(StrictModel):
     column_start: int
     column_end: int | None = None
     symbol_id: str | None = None
+    provenance: tuple[ProvenanceEntry, ...]
 
     @field_validator("repository_rel_path")
     @classmethod
@@ -82,3 +84,11 @@ class CodeLocation(StrictModel):
             if column_start is not None and value < column_start:
                 raise ValueError("column_end must be >= column_start")
         return value
+
+    @model_validator(mode="after")
+    def _validate_provenance(self) -> "CodeLocation":
+        if not self.provenance:
+            raise ValueError("CodeLocation.provenance must not be empty")
+        if SourceKind.LSP not in {item.source_kind for item in self.provenance}:
+            raise ValueError("CodeLocation must include lsp provenance")
+        return self

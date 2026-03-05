@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from suitcode.core.models.graph_types import (
     BuildSystemKind,
@@ -13,6 +13,7 @@ from suitcode.core.models.graph_types import (
     ProgrammingLanguage,
     TestFramework,
 )
+from suitcode.core.provenance import ProvenanceEntry, SourceKind
 
 
 class StrictModel(BaseModel):
@@ -42,6 +43,7 @@ class GraphNode(StrictModel):
     kind: NodeKind
     name: str
     evidence_ids: tuple[EvidenceId, ...] = Field(default_factory=tuple)
+    provenance: tuple[ProvenanceEntry, ...] = Field(default_factory=tuple)
 
 
 class RepositoryInfo(GraphNode):
@@ -64,9 +66,27 @@ class Component(GraphNode):
     source_roots: tuple[str, ...] = Field(default_factory=tuple)
     artifact_paths: tuple[str, ...] = Field(default_factory=tuple)
 
+    @model_validator(mode="after")
+    def _validate_provenance(self):
+        if not self.provenance:
+            raise ValueError("component provenance must not be empty")
+        for item in self.provenance:
+            if item.source_kind == SourceKind.LSP:
+                raise ValueError("component provenance must not be sourced from lsp")
+        return self
+
 
 class Aggregator(GraphNode):
     kind: Literal[NodeKind.AGGREGATOR] = NodeKind.AGGREGATOR
+
+    @model_validator(mode="after")
+    def _validate_provenance(self):
+        if not self.provenance:
+            raise ValueError("aggregator provenance must not be empty")
+        for item in self.provenance:
+            if item.source_kind == SourceKind.LSP:
+                raise ValueError("aggregator provenance must not be sourced from lsp")
+        return self
 
 
 class Runner(GraphNode):
@@ -74,11 +94,25 @@ class Runner(GraphNode):
     argv: tuple[str, ...] = Field(default_factory=tuple)
     cwd: str | None = None
 
+    @model_validator(mode="after")
+    def _validate_provenance(self):
+        if not self.provenance:
+            raise ValueError("runner provenance must not be empty")
+        if all(item.source_kind == SourceKind.OWNERSHIP for item in self.provenance):
+            raise ValueError("runner provenance must not be ownership-only")
+        return self
+
 
 class TestDefinition(GraphNode):
     kind: Literal[NodeKind.TEST_DEFINITION] = NodeKind.TEST_DEFINITION
     framework: TestFramework
     test_files: tuple[str, ...] = Field(default_factory=tuple)
+
+    @model_validator(mode="after")
+    def _validate_provenance(self):
+        if not self.provenance:
+            raise ValueError("test definition provenance must not be empty")
+        return self
 
 
 class PackageManager(GraphNode):
@@ -86,11 +120,29 @@ class PackageManager(GraphNode):
     manager: str
     lockfile_path: str | None = None
 
+    @model_validator(mode="after")
+    def _validate_provenance(self):
+        if not self.provenance:
+            raise ValueError("package manager provenance must not be empty")
+        for item in self.provenance:
+            if item.source_kind == SourceKind.LSP:
+                raise ValueError("package manager provenance must not be sourced from lsp")
+        return self
+
 
 class ExternalPackage(GraphNode):
     kind: Literal[NodeKind.EXTERNAL_PACKAGE] = NodeKind.EXTERNAL_PACKAGE
     manager_id: str | None = None
     version_spec: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_provenance(self):
+        if not self.provenance:
+            raise ValueError("external package provenance must not be empty")
+        for item in self.provenance:
+            if item.source_kind == SourceKind.LSP:
+                raise ValueError("external package provenance must not be sourced from lsp")
+        return self
 
 
 class FileInfo(GraphNode):
@@ -98,6 +150,12 @@ class FileInfo(GraphNode):
     repository_rel_path: str
     language: ProgrammingLanguage | None = None
     owner_id: NodeId
+
+    @model_validator(mode="after")
+    def _validate_provenance(self):
+        if not self.provenance:
+            raise ValueError("file provenance must not be empty")
+        return self
 
 
 class EntityInfo(GraphNode):
@@ -109,6 +167,14 @@ class EntityInfo(GraphNode):
     column_start: int | None = None
     column_end: int | None = None
     signature: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_provenance(self):
+        if not self.provenance:
+            raise ValueError("entity provenance must not be empty")
+        if all(item.source_kind != SourceKind.LSP for item in self.provenance):
+            raise ValueError("entity provenance must include lsp evidence")
+        return self
 
     @field_validator("line_end")
     @classmethod

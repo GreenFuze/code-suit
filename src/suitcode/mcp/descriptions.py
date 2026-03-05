@@ -21,6 +21,7 @@ TOOL_DESCRIPTIONS = {
     "list_package_managers": "List detected package managers for a repository.",
     "list_external_packages": "List external package dependencies for a repository.",
     "list_files": "List owned files from repository intelligence instead of manual file discovery.",
+    "list_actions": "List deterministic provider-backed actions (test, runner, build) for a repository or exact target, including invocation and provenance.",
     "find_symbols": "Use this to query repository symbols before manual code exploration. Exact full match by default, use `*` or `?` for glob matching, and `is_case_sensitive` defaults to false.",
     "list_symbols_in_file": "Use this before opening a file manually. Lists symbols from one file with exact full match by default, `*` or `?` for glob matching, and `is_case_sensitive` defaults to false.",
     "get_file_owner": "Use this to identify which component, runner, package manager, or test definition owns a file.",
@@ -29,6 +30,8 @@ TOOL_DESCRIPTIONS = {
     "find_references": "Find reference locations for a symbol or file position. This returns locations only; use `list_symbols_in_file` on the returned path to enrich the target file before opening it manually.",
     "list_tests": "List test definitions discovered for a repository. Each result states whether discovery was authoritative tool output or heuristic fallback.",
     "get_related_tests": "Use this to find likely related tests for a file or owner without manually exploring test directories. Each result states whether the underlying test discovery was authoritative or heuristic.",
+    "describe_test_target": "Use this when you already have one test ID and want the exact deterministic command and scope metadata to run only that target.",
+    "run_test_targets": "Run one or more exact test IDs using provider-backed deterministic commands, with bounded timeout, per-target logs, and structured failure snippets.",
     "list_quality_providers": "List quality providers available for one repository.",
     "lint_file": "Run the selected quality provider on one file and return structured diagnostics and entity deltas.",
     "format_file": "Run the selected formatter provider on one file and return structured change information.",
@@ -39,6 +42,7 @@ TOOL_DESCRIPTIONS = {
     "get_component_dependencies": "Use this to traverse outward from one component into its internal and external dependencies.",
     "get_component_dependents": "Use this to understand the component blast radius before changing it.",
     "analyze_impact": "Use this to estimate change impact for one exact file, owner, or symbol without manual cross-referencing.",
+    "analyze_change": "Use this for one high-level, provenance-backed change analysis of an exact file, symbol, or owner. It tells you what owns the target, what depends on it, which references, tests, runners, and quality gates matter, and why.",
 }
 
 RESOURCE_DESCRIPTIONS = {

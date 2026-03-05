@@ -1,2 +1,3 @@
 [mcp_servers.suitcode]
-url = "http://127.0.0.1:8011/mcp"
+command = "cmd"
+args = ["/c", "run_mcp.bat"]

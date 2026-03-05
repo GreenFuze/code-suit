@@ -5,6 +5,8 @@ from pathlib import Path
 from suitcode.core.code.models import CodeLocation, SymbolLookupTarget
 from suitcode.core.code.code_intelligence import CodeIntelligence
 from suitcode.core.models import EntityInfo
+from suitcode.core.provenance_builders import lsp_provenance
+from suitcode.core.provenance_builders import lsp_location_provenance
 from suitcode.providers.code_provider_base import CodeProviderBase
 from suitcode.providers.provider_roles import ProviderRole
 
@@ -45,6 +47,13 @@ class _CodeProvider(CodeProviderBase):
                 line_end=self._line,
                 column_start=1,
                 column_end=5,
+                provenance=(
+                    lsp_provenance(
+                        source_tool="typescript-language-server",
+                        evidence_summary="discovered from fake LSP provider",
+                        evidence_paths=("file.ts",),
+                    ),
+                ),
             ),
         )
 
@@ -59,11 +68,33 @@ class _CodeProvider(CodeProviderBase):
                 line_end=line,
                 column_start=column,
                 column_end=column,
+                provenance=(
+                    lsp_location_provenance(
+                        source_tool="typescript-language-server",
+                        repository_rel_path=repository_rel_path,
+                        operation="definition",
+                    ),
+                ),
             ),
         )
 
     def find_references(self, repository_rel_path: str, line: int, column: int, include_definition: bool = False):
-        return self.find_definition(repository_rel_path, line, column)
+        return (
+            CodeLocation(
+                repository_rel_path=repository_rel_path,
+                line_start=line,
+                line_end=line,
+                column_start=column,
+                column_end=column,
+                provenance=(
+                    lsp_location_provenance(
+                        source_tool="typescript-language-server",
+                        repository_rel_path=repository_rel_path,
+                        operation="references",
+                    ),
+                ),
+            ),
+        )
 
 
 def test_code_intelligence_concatenates_and_sorts_symbols() -> None:
@@ -88,3 +119,4 @@ def test_code_intelligence_resolves_symbol_id_for_definitions() -> None:
 
     assert result[0].repository_rel_path == "file.ts"
     assert result[0].line_start == 3
+    assert result[0].provenance[0].source_kind.value == "lsp"

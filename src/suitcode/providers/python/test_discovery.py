@@ -52,6 +52,7 @@ class PythonTestDiscoverer:
                 test_files=files,
                 discovery_method=TestDiscoveryMethod.HEURISTIC_CONFIG_GLOB,
                 discovery_tool=None,
+                evidence_paths=('pyproject.toml', *files),
             )
         files = self._pytest_runner_factory(executable).collect_test_files()
         return PythonTestAnalysis(
@@ -61,6 +62,7 @@ class PythonTestDiscoverer:
             test_files=files,
             discovery_method=TestDiscoveryMethod.AUTHORITATIVE_PYTEST_COLLECT,
             discovery_tool='pytest',
+            evidence_paths=('pyproject.toml', *files),
         )
 
     def _discover_unittest(self) -> PythonTestAnalysis | None:
@@ -75,6 +77,7 @@ class PythonTestDiscoverer:
             test_files=files,
             discovery_method=TestDiscoveryMethod.HEURISTIC_UNITTEST,
             discovery_tool=None,
+            evidence_paths=('pyproject.toml', *files),
         )
 
     def _has_pytest_signal(self) -> bool:

@@ -11,7 +11,7 @@ SuitCode is built for questions like:
 - Which symbols exist in this file or across the repository?
 - Where is this symbol defined, and where is it referenced?
 - Which tests cover this file, symbol, or component?
-- Was that test information discovered from a real tool or from a heuristic fallback?
+- Did that test information come from a real test tool or from a heuristic fallback, and what evidence supports it?
 - What likely breaks if I change this file, symbol, or owner, given component dependents, references, and related tests?
 
 That is the current value proposition: architecture understanding, code navigation, test targeting, and impact estimation through deterministic tools.
@@ -41,7 +41,7 @@ For a supported repository, SuitCode can expose:
 - test intelligence:
   - discovered test targets
   - related tests for a file or owner
-  - discovery provenance: authoritative vs heuristic
+  - provenance showing whether discovery came from a real test tool or a heuristic fallback
 - quality intelligence:
   - available quality providers
   - linting
@@ -351,6 +351,10 @@ SuitCode currently exposes these MCP tools.
   Answers:
   - What breaks if I change this file, symbol, or owner?
   - Given build graph, references, ownership, and related tests, what is the likely impact?
+- `analyze_change`
+  Answers:
+  - For this exact file, symbol, or owner, what is the full change context?
+  - What owns it, what depends on it, which references, tests, runners, and quality gates matter, and why?
 
 ## What Those MCP Tools Let An Agent Do
 
@@ -429,6 +433,7 @@ Use:
 3. `find_references`
 4. `get_related_tests`
 5. `analyze_impact`
+6. `analyze_change`
 
 This answers:
 - what this component depends on
@@ -436,6 +441,20 @@ This answers:
 - where the symbol or file is referenced
 - which tests are likely relevant
 - the likely blast radius of a change to a file, symbol, or owner
+
+### High-level change analysis
+Use:
+1. `analyze_change`
+
+This answers:
+- who owns the target
+- what the primary component is
+- which components depend on it
+- which references matter
+- which tests matter
+- which runners matter
+- which quality gates apply
+- why each of those things was included
 
 ## MCP Tool Semantics
 
@@ -447,20 +466,29 @@ This answers:
 - set `is_case_sensitive=true` for case-sensitive exact or glob matching
 
 ### Definitions and references
-`find_definition` and `find_references` return locations only.
+`find_definition` and `find_references` return locations only, and those locations carry provenance.
 
 Recommended flow:
 1. use `find_definition` or `find_references`
 2. use `list_symbols_in_file` on the returned path to enrich the file semantically
 3. only then open the file manually if needed
 
-### Test discovery provenance
-`list_tests` and `get_related_tests` expose:
-- `discovery_method`
-- `discovery_tool`
-- `is_authoritative`
+Agents should inspect location provenance to confirm:
+- the answer came from the relevant LSP backend
+- which file path the evidence refers to
+- whether the location is authoritative or derived
 
-This lets the agent distinguish tool-authoritative test discovery from heuristic fallback.
+### Test discovery provenance
+`list_tests` and `get_related_tests` expose provenance.
+
+Agents should inspect:
+- `confidence_mode`
+- `source_kind`
+- `source_tool`
+- `evidence_summary`
+- `evidence_paths`
+
+This is how SuitCode communicates whether test discovery is tool-backed or heuristic.
 
 This matters because SuitCode already supports:
 - real pytest-based discovery when available
@@ -529,6 +557,7 @@ For a supported repository:
    - `find_references`
    - `get_related_tests`
    - `analyze_impact`
+   - `analyze_change`
 5. only then fall back to manual file exploration when needed
 
 ## Current Status
@@ -543,6 +572,7 @@ The project currently has:
 - component dependency and dependent traversal
 - file, symbol, and owner context
 - impact analysis that combines ownership, references, and related tests
+- a high-level change analysis artifact that combines ownership, primary component, dependents, references, related tests, runners, quality gates, and provenance
 
 What it does not currently depend on for normal runtime behavior:
 - a persisted graph/database

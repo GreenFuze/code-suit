@@ -54,6 +54,7 @@ def test_repository_detects_registered_providers_and_intelligence() -> None:
         assert repository.code.repository is repository
         assert repository.tests.repository is repository
         assert repository.quality.repository is repository
+        assert repository.actions.repository is repository
 
 
 def test_repository_root_candidate_prefers_vcs_root() -> None:
@@ -131,3 +132,40 @@ def test_repository_list_files_by_owner_and_batch_validation_fail_fast() -> None
             assert "must not be empty" in str(exc)
         else:
             raise AssertionError("expected empty file batch to fail")
+
+
+def test_repository_exposes_test_target_description_and_run_methods() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        repository = Workspace(_make_supported_npm_repo(Path(td) / "repo")).repositories[0]
+        description = repository.describe_test_target("test:npm:@repo/app")
+        assert description.test_definition.id == "test:npm:@repo/app"
+        assert description.command_argv
+
+        class _FakeExecutionService:
+            def run_target(self, target_description, timeout_seconds: int):
+                from suitcode.core.provenance_builders import heuristic_provenance
+                from suitcode.core.tests.models import TestExecutionResult, TestExecutionStatus
+
+                return TestExecutionResult(
+                    test_id=target_description.test_definition.id,
+                    status=TestExecutionStatus.PASSED,
+                    success=True,
+                    command_argv=target_description.command_argv,
+                    command_cwd=target_description.command_cwd,
+                    exit_code=0,
+                    duration_ms=timeout_seconds,
+                    log_path=".suit/runs/tests/fake.log",
+                    warning=target_description.warning,
+                    output_excerpt="ok",
+                    provenance=(
+                        heuristic_provenance(
+                            evidence_summary="fake execution result",
+                            evidence_paths=("packages/app/package.json",),
+                        ),
+                    ),
+                )
+
+        repository.get_provider("npm")._test_execution_service = _FakeExecutionService()  # type: ignore[attr-defined]
+        result = repository.run_test_targets(("test:npm:@repo/app",), timeout_seconds=15)
+        assert result[0].test_id == "test:npm:@repo/app"
+        assert result[0].duration_ms == 15

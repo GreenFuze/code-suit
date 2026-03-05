@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from suitcode.core.intelligence_models import DependencyRef
+from suitcode.core.action_models import ActionKind, ActionQuery, RepositoryAction
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -14,9 +15,12 @@ from suitcode.core.models import (
     Runner,
     TestDefinition,
 )
-from suitcode.core.tests.models import RelatedTestMatch, RelatedTestTarget
+from suitcode.core.tests.models import RelatedTestMatch, RelatedTestTarget, TestExecutionResult, TestTargetDescription
+from suitcode.core.provenance_builders import manifest_provenance
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
+from suitcode.providers.action_provider_base import ActionProviderBase
 from suitcode.providers.code_provider_base import CodeProviderBase
+from suitcode.providers.npm.action_service import NpmActionService
 from suitcode.providers.npm.quality_models import NpmQualityOperationResult
 from suitcode.providers.npm.quality_service import NpmQualityService
 from suitcode.providers.npm.quality_translation import NpmQualityTranslator
@@ -32,6 +36,7 @@ from suitcode.providers.npm.models import (
     NpmRunnerAnalysis,
     NpmTestAnalysis,
 )
+from suitcode.providers.npm.location_translation import NpmLocationTranslator
 from suitcode.providers.npm.symbol_models import NpmWorkspaceSymbol
 from suitcode.providers.npm.symbol_service import NpmFileSymbolService, NpmSymbolService
 from suitcode.providers.npm.symbol_translation import NpmSymbolTranslator
@@ -40,15 +45,25 @@ from suitcode.providers.npm.workspace_analyzer import NpmWorkspaceAnalyzer
 from suitcode.providers.provider_roles import ProviderRole
 from suitcode.providers.shared.code_facade import CodeFacadeMixin
 from suitcode.providers.shared.component_index import ComponentIndexBuilder
+from suitcode.providers.shared.actions import ProviderActionSpec, ProviderActionTranslator
 from suitcode.providers.shared.package_json import PackageJsonWorkspaceLoader
 from suitcode.providers.shared.package_json.models import PackageJsonWorkspace
 from suitcode.providers.shared.test_facade import TestFacadeMixin
+from suitcode.providers.shared.test_execution import TestExecutionService
 
 if TYPE_CHECKING:
     from suitcode.core.repository import Repository
 
 
-class NPMProvider(CodeFacadeMixin, TestFacadeMixin, ArchitectureProviderBase, CodeProviderBase, TestProviderBase, QualityProviderBase):
+class NPMProvider(
+    CodeFacadeMixin,
+    TestFacadeMixin,
+    ArchitectureProviderBase,
+    CodeProviderBase,
+    TestProviderBase,
+    QualityProviderBase,
+    ActionProviderBase,
+):
     PROVIDER_ID = "npm"
     DISPLAY_NAME = "npm"
     BUILD_SYSTEMS = ("npm",)
@@ -76,14 +91,18 @@ class NPMProvider(CodeFacadeMixin, TestFacadeMixin, ArchitectureProviderBase, Co
         super().__init__(repository)
         self._workspace_loader = PackageJsonWorkspaceLoader()
         self._translator = NpmModelTranslator()
+        self._action_translator = ProviderActionTranslator(provider_id="npm", default_test_tool="jest")
         self._symbol_translator = NpmSymbolTranslator()
+        self._location_translator = NpmLocationTranslator()
         self._quality_translator = NpmQualityTranslator(self._symbol_translator)
+        self._action_service = NpmActionService()
         self._workspace: PackageJsonWorkspace | None = None
         self._analyzer: NpmWorkspaceAnalyzer | None = None
         self._component_id_index: dict[str, NpmPackageAnalysis] | None = None
         self._symbol_service: NpmSymbolService | None = None
         self._file_symbol_service: NpmFileSymbolService | None = None
         self._quality_service: NpmQualityService | None = None
+        self._test_execution_service: TestExecutionService | None = None
 
     def get_components(self) -> tuple[Component, ...]:
         return tuple(sorted((self._translator.to_component(item) for item in self._get_components()), key=lambda item: item.id))
@@ -129,6 +148,12 @@ class NPMProvider(CodeFacadeMixin, TestFacadeMixin, ArchitectureProviderBase, Co
                             target_id=local_components[dependency_name],
                             target_kind="component",
                             dependency_scope=dependency_scope,
+                            provenance=(
+                                manifest_provenance(
+                                    evidence_summary="derived from workspace package.json dependency metadata",
+                                    evidence_paths=(analysis.manifest_path,),
+                                ),
+                            ),
                         )
                     )
                     continue
@@ -143,6 +168,12 @@ class NPMProvider(CodeFacadeMixin, TestFacadeMixin, ArchitectureProviderBase, Co
                         target_id=target_id,
                         target_kind="external_package",
                         dependency_scope=dependency_scope,
+                        provenance=(
+                            manifest_provenance(
+                                evidence_summary="derived from workspace package.json dependency metadata",
+                                evidence_paths=(analysis.manifest_path,),
+                            ),
+                        ),
                     )
                 )
         return tuple(
@@ -164,6 +195,14 @@ class NPMProvider(CodeFacadeMixin, TestFacadeMixin, ArchitectureProviderBase, Co
             if component_id in dependency_ids:
                 dependents.append(translated_id)
         return tuple(sorted(dependents))
+
+    def get_actions(self) -> tuple[RepositoryAction, ...]:
+        return tuple(
+            sorted(
+                (self._action_translator.to_repository_action(item) for item in self._get_actions()),
+                key=lambda item: item.id,
+            )
+        )
 
     def get_related_tests(self, target: RelatedTestTarget) -> tuple[RelatedTestMatch, ...]:
         discovered_tests = self.get_discovered_tests()
@@ -217,6 +256,33 @@ class NPMProvider(CodeFacadeMixin, TestFacadeMixin, ArchitectureProviderBase, Co
     def format_file(self, repository_rel_path: str) -> QualityFileResult:
         return self._quality_translator.to_quality_file_result(self._format_file(repository_rel_path))
 
+    def describe_test_target(self, test_id: str) -> TestTargetDescription:
+        discovered = self._discovered_test_by_id(test_id)
+        action = self._test_action_for_id(test_id)
+        warning = None
+        if not discovered.is_authoritative:
+            warning = (
+                "Test target scope is heuristic; command is deterministic but may include tests beyond exact ownership."
+            )
+        return TestTargetDescription(
+            test_definition=discovered.test_definition,
+            command_argv=action.invocation.argv,
+            command_cwd=action.invocation.cwd,
+            is_authoritative=discovered.is_authoritative,
+            warning=warning,
+            provenance=(*discovered.provenance, *action.provenance),
+        )
+
+    def run_test_targets(self, test_ids: tuple[str, ...], timeout_seconds: int) -> tuple[TestExecutionResult, ...]:
+        self._validate_test_id_batch(test_ids)
+        if timeout_seconds < 1 or timeout_seconds > 3600:
+            raise ValueError("timeout_seconds must be between 1 and 3600")
+        execution_service = self._build_test_execution_service()
+        return tuple(
+            execution_service.run_target(self.describe_test_target(test_id), timeout_seconds=timeout_seconds)
+            for test_id in test_ids
+        )
+
     def _load_workspace(self) -> PackageJsonWorkspace:
         if self._workspace is None:
             self._workspace = self._workspace_loader.load(self.repository.root)
@@ -248,6 +314,13 @@ class NPMProvider(CodeFacadeMixin, TestFacadeMixin, ArchitectureProviderBase, Co
     def _get_files(self) -> tuple[NpmOwnedFileAnalysis, ...]:
         return self._build_analyzer().analyze_files()
 
+    def _get_actions(self) -> tuple[ProviderActionSpec, ...]:
+        return self._action_service.discover(
+            components=self._get_components(),
+            runners=self._get_runners(),
+            tests=self._get_tests(),
+        )
+
     def _build_symbol_service(self) -> NpmSymbolService:
         if self._symbol_service is None:
             self._symbol_service = NpmSymbolService(self.repository, workspace_loader=self._workspace_loader)
@@ -265,6 +338,14 @@ class NPMProvider(CodeFacadeMixin, TestFacadeMixin, ArchitectureProviderBase, Co
         if self._quality_service is None:
             self._quality_service = NpmQualityService(self.repository)
         return self._quality_service
+
+    def _build_test_execution_service(self) -> TestExecutionService:
+        if self._test_execution_service is None:
+            self._test_execution_service = TestExecutionService(
+                repository_root=self.repository.root,
+                suit_dir=self.repository.suit_dir,
+            )
+        return self._test_execution_service
 
     def _lint_file(self, repository_rel_path: str, is_fix: bool) -> NpmQualityOperationResult:
         return self._build_quality_service().lint_file(repository_rel_path, is_fix)
@@ -352,8 +433,45 @@ class NPMProvider(CodeFacadeMixin, TestFacadeMixin, ArchitectureProviderBase, Co
     def _to_entity_info(self, symbol: object) -> EntityInfo:
         return self._symbol_translator.to_entity_info(symbol)
 
+    def _to_code_location(
+        self,
+        location: tuple[str, int, int, int, int],
+        *,
+        operation: str,
+    ):
+        return self._location_translator.to_code_location(location, operation=operation)
+
     def _get_tests_internal(self) -> tuple[NpmTestAnalysis, ...]:
         return self._get_tests()
 
     def _to_discovered_test_definition(self, test_analysis: object):
         return self._translator.to_discovered_test_definition(test_analysis)
+
+    def _discovered_test_by_id(self, test_id: str):
+        for discovered in self.get_discovered_tests():
+            if discovered.test_definition.id == test_id:
+                return discovered
+        raise ValueError(f"unknown npm test id: `{test_id}`")
+
+    def _test_action_for_id(self, test_id: str):
+        actions = tuple(
+            action
+            for action in self.repository.list_actions(ActionQuery(test_id=test_id))
+            if action.provider_id == self.PROVIDER_ID and action.kind == ActionKind.TEST_EXECUTION
+        )
+        if not actions:
+            raise ValueError(f"missing npm test action for test id `{test_id}`")
+        if len(actions) != 1:
+            raise ValueError(f"ambiguous npm test actions for test id `{test_id}`")
+        return actions[0]
+
+    @staticmethod
+    def _validate_test_id_batch(test_ids: tuple[str, ...]) -> None:
+        if not test_ids:
+            raise ValueError("test_ids must not be empty")
+        if len(test_ids) > 25:
+            raise ValueError("test_ids must not contain more than 25 items")
+        if any(not test_id.strip() for test_id in test_ids):
+            raise ValueError("test_ids must not contain empty values")
+        if len(set(test_ids)) != len(test_ids):
+            raise ValueError("test_ids must not contain duplicates")

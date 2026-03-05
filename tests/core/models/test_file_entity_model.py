@@ -7,6 +7,7 @@ from suitcode.core.models.edges import Edge
 from suitcode.core.models.graph_types import EdgeKind, NodeKind
 from suitcode.core.models.ids import make_entity_id, make_file_id, normalize_repository_relative_path
 from suitcode.core.models.nodes import EntityInfo, FileInfo
+from suitcode.core.provenance_builders import lsp_provenance, ownership_provenance
 from suitcode.core.models.workspace_graph import WorkspaceGraph
 
 
@@ -31,6 +32,12 @@ def test_file_contains_entity_edge_query() -> None:
                     name="src/pkg/a.py",
                     repository_rel_path="src/pkg/a.py",
                     owner_id="component:demo",
+                    provenance=(
+                        ownership_provenance(
+                            evidence_summary="assigned to owner by test fixture",
+                            evidence_paths=("src/pkg/a.py",),
+                        ),
+                    ),
                 ),
                 SCOPE,
             )
@@ -42,6 +49,13 @@ def test_file_contains_entity_edge_query() -> None:
                     entity_kind="function",
                     line_start=1,
                     line_end=3,
+                    provenance=(
+                        lsp_provenance(
+                            source_tool="basedpyright",
+                            evidence_summary="discovered from test lsp fixture",
+                            evidence_paths=("src/pkg/a.py",),
+                        ),
+                    ),
                 ),
                 SCOPE,
             )

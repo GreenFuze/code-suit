@@ -21,4 +21,4 @@ if defined PYTHONPATH (
     set "PYTHONPATH=%REPO_ROOT%src"
 )
 
-"%PYTHON_EXE%" -m suitcode.mcp.server --transport http --host 127.0.0.1 --port 8000 %*
+"%PYTHON_EXE%" -m suitcode.mcp.server %*

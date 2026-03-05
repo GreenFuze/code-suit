@@ -87,11 +87,13 @@ class ComponentView(StrictModel):
     language: str
     source_roots: tuple[str, ...]
     artifact_paths: tuple[str, ...]
+    provenance: tuple[ProvenanceView, ...]
 
 
 class AggregatorView(StrictModel):
     id: str
     name: str
+    provenance: tuple[ProvenanceView, ...]
 
 
 class RunnerView(StrictModel):
@@ -99,6 +101,7 @@ class RunnerView(StrictModel):
     name: str
     argv: tuple[str, ...]
     cwd: str | None = None
+    provenance: tuple[ProvenanceView, ...]
 
 
 class PackageManagerView(StrictModel):
@@ -106,6 +109,7 @@ class PackageManagerView(StrictModel):
     name: str
     manager: str
     lockfile_path: str | None = None
+    provenance: tuple[ProvenanceView, ...]
 
 
 class ExternalPackageView(StrictModel):
@@ -113,6 +117,7 @@ class ExternalPackageView(StrictModel):
     name: str
     manager_id: str | None = None
     version_spec: str | None = None
+    provenance: tuple[ProvenanceView, ...]
 
 
 class FileView(StrictModel):
@@ -120,6 +125,7 @@ class FileView(StrictModel):
     path: str
     language: str | None = None
     owner_id: str
+    provenance: tuple[ProvenanceView, ...]
 
 
 class SymbolView(StrictModel):
@@ -132,6 +138,7 @@ class SymbolView(StrictModel):
     column_start: int | None = None
     column_end: int | None = None
     signature: str | None = None
+    provenance: tuple[ProvenanceView, ...]
 
 
 class LocationView(StrictModel):
@@ -141,6 +148,7 @@ class LocationView(StrictModel):
     column_start: int
     column_end: int | None = None
     symbol_id: str | None = None
+    provenance: tuple[ProvenanceView, ...]
 
 
 class OwnerView(StrictModel):
@@ -154,14 +162,20 @@ class FileOwnerView(StrictModel):
     owner: OwnerView
 
 
+class ProvenanceView(StrictModel):
+    confidence_mode: str
+    source_kind: str
+    source_tool: str | None = None
+    evidence_summary: str
+    evidence_paths: tuple[str, ...]
+
+
 class TestDefinitionView(StrictModel):
     id: str
     name: str
     framework: str
     test_files: tuple[str, ...]
-    discovery_method: str
-    discovery_tool: str | None = None
-    is_authoritative: bool
+    provenance: tuple[ProvenanceView, ...]
 
 
 class RelatedTestView(StrictModel):
@@ -169,18 +183,64 @@ class RelatedTestView(StrictModel):
     name: str
     framework: str
     test_files: tuple[str, ...]
-    discovery_method: str
-    discovery_tool: str | None = None
-    is_authoritative: bool
     relation_reason: str
     matched_owner_id: str | None = None
     matched_path: str | None = None
+    provenance: tuple[ProvenanceView, ...]
+
+
+class TestTargetDescriptionView(StrictModel):
+    id: str
+    name: str
+    framework: str
+    test_files: tuple[str, ...]
+    command_argv: tuple[str, ...]
+    command_cwd: str | None = None
+    is_authoritative: bool
+    warning: str | None = None
+    provenance: tuple[ProvenanceView, ...]
+
+
+class TestFailureSnippetView(StrictModel):
+    repository_rel_path: str
+    line_start: int
+    line_end: int
+    snippet: str
+    provenance: tuple[ProvenanceView, ...]
+
+
+class TestExecutionResultView(StrictModel):
+    test_id: str
+    status: str
+    success: bool
+    command_argv: tuple[str, ...]
+    command_cwd: str | None = None
+    exit_code: int | None = None
+    duration_ms: int
+    log_path: str
+    warning: str | None = None
+    output_excerpt: str | None = None
+    failure_snippets: tuple[TestFailureSnippetView, ...] = Field(default_factory=tuple)
+    provenance: tuple[ProvenanceView, ...]
+
+
+class RunTestTargetsView(StrictModel):
+    workspace_id: str
+    repository_id: str
+    timeout_seconds: int
+    total: int
+    passed: int
+    failed: int
+    errors: int
+    timeouts: int
+    results: tuple[TestExecutionResultView, ...]
 
 
 class DependencyRefView(StrictModel):
     target_id: str
     target_kind: str
     dependency_scope: str
+    provenance: tuple[ProvenanceView, ...]
 
 
 class ComponentContextView(StrictModel):
@@ -193,6 +253,7 @@ class ComponentContextView(StrictModel):
     dependencies_preview: tuple[DependencyRefView, ...]
     dependent_count: int
     dependents_preview: tuple[str, ...]
+    provenance: tuple[ProvenanceView, ...]
 
 
 class FileContextView(StrictModel):
@@ -203,6 +264,7 @@ class FileContextView(StrictModel):
     related_test_count: int
     related_tests_preview: tuple[RelatedTestView, ...]
     quality_provider_ids: tuple[str, ...]
+    provenance: tuple[ProvenanceView, ...]
 
 
 class SymbolContextView(StrictModel):
@@ -214,6 +276,7 @@ class SymbolContextView(StrictModel):
     references_preview: tuple[LocationView, ...]
     related_test_count: int
     related_tests_preview: tuple[RelatedTestView, ...]
+    provenance: tuple[ProvenanceView, ...]
 
 
 class ImpactSummaryView(StrictModel):
@@ -226,6 +289,60 @@ class ImpactSummaryView(StrictModel):
     references_preview: tuple[LocationView, ...]
     related_test_count: int
     related_test_ids_preview: tuple[str, ...]
+    provenance: tuple[ProvenanceView, ...]
+
+
+class QualityGateView(StrictModel):
+    provider_id: str
+    provider_roles: tuple[str, ...]
+    applies: bool
+    reason: str
+    provenance: tuple[ProvenanceView, ...]
+
+
+class RunnerImpactView(StrictModel):
+    runner: RunnerView
+    reason: str
+    provenance: tuple[ProvenanceView, ...]
+
+
+class TestImpactView(StrictModel):
+    test: RelatedTestView
+    reason: str
+    provenance: tuple[ProvenanceView, ...]
+
+
+class ChangeImpactView(StrictModel):
+    target_kind: str
+    owner: OwnerView
+    primary_component: ComponentView | None = None
+    component_context: ComponentContextView | None = None
+    file_context: FileContextView | None = None
+    symbol_context: SymbolContextView | None = None
+    dependent_components: tuple[ComponentView, ...]
+    reference_locations: tuple[LocationView, ...]
+    related_tests: tuple[TestImpactView, ...]
+    related_runners: tuple[RunnerImpactView, ...]
+    quality_gates: tuple[QualityGateView, ...]
+    provenance: tuple[ProvenanceView, ...]
+
+
+class ActionInvocationView(StrictModel):
+    argv: tuple[str, ...]
+    cwd: str | None = None
+
+
+class ActionView(StrictModel):
+    id: str
+    name: str
+    kind: str
+    provider_id: str
+    target_id: str
+    target_kind: str
+    owner_ids: tuple[str, ...]
+    invocation: ActionInvocationView
+    dry_run_supported: bool
+    provenance: tuple[ProvenanceView, ...]
 
 
 class QualityDiagnosticView(StrictModel):
@@ -237,12 +354,14 @@ class QualityDiagnosticView(StrictModel):
     column_start: int | None = None
     column_end: int | None = None
     rule_id: str | None = None
+    provenance: tuple[ProvenanceView, ...]
 
 
 class QualityEntityDeltaView(StrictModel):
     added: tuple[SymbolView, ...] = Field(default_factory=tuple)
     removed: tuple[SymbolView, ...] = Field(default_factory=tuple)
     updated: tuple[SymbolView, ...] = Field(default_factory=tuple)
+    provenance: tuple[ProvenanceView, ...]
 
 
 class QualityFileResultView(StrictModel):
@@ -260,6 +379,7 @@ class QualityFileResultView(StrictModel):
     applied_fixes: bool
     content_sha_before: str
     content_sha_after: str
+    provenance: tuple[ProvenanceView, ...]
 
 
 class WorkspaceSnapshotView(StrictModel):
@@ -319,3 +439,4 @@ class RepositorySummaryView(StrictModel):
     package_manager_ids_preview: tuple[str, ...]
     test_ids_preview: tuple[str, ...]
     preview_limit: int
+    provenance: tuple[ProvenanceView, ...]

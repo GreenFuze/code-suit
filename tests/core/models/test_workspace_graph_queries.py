@@ -9,6 +9,7 @@ from suitcode.core.models.edges import Edge
 from suitcode.core.models.errors import GraphQueryLimitError
 from suitcode.core.models.graph_types import ComponentKind, EdgeKind, NodeKind, ProgrammingLanguage
 from suitcode.core.models.nodes import Component, Evidence
+from suitcode.core.provenance_builders import manifest_provenance
 from suitcode.core.models.workspace_graph import WorkspaceGraph
 
 
@@ -21,6 +22,12 @@ def _component(node_id: str, name: str) -> Component:
         name=name,
         component_kind=ComponentKind.LIBRARY,
         language=ProgrammingLanguage.PYTHON,
+        provenance=(
+            manifest_provenance(
+                evidence_summary="derived from test component fixture",
+                evidence_paths=("pyproject.toml",),
+            ),
+        ),
     )
 
 

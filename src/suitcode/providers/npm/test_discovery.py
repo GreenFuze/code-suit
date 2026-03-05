@@ -59,6 +59,7 @@ class NpmTestDiscoverer:
             test_files=test_files,
             discovery_method=discovery_method,
             discovery_tool=discovery_tool,
+            evidence_paths=(f"{package.repository_rel_path}/package.json", *test_files),
         )
 
     def _infer_framework(self, command: str) -> TestFramework:

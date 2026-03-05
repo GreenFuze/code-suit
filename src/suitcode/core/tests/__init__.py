@@ -1,12 +1,27 @@
 from __future__ import annotations
 
-from suitcode.core.tests.models import DiscoveredTestDefinition, RelatedTestMatch, RelatedTestTarget, TestDiscoveryMethod
+from suitcode.core.tests.models import (
+    DiscoveredTestDefinition,
+    RelatedTestMatch,
+    RelatedTestTarget,
+    ResolvedRelatedTest,
+    TestExecutionResult,
+    TestExecutionStatus,
+    TestDiscoveryMethod,
+    TestFailureSnippet,
+    TestTargetDescription,
+)
 
 __all__ = [
     "DiscoveredTestDefinition",
     "RelatedTestMatch",
     "RelatedTestTarget",
+    "ResolvedRelatedTest",
+    "TestExecutionResult",
+    "TestExecutionStatus",
     "TestDiscoveryMethod",
+    "TestFailureSnippet",
+    "TestTargetDescription",
     "TestIntelligence",
 ]
 

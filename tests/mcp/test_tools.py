@@ -17,6 +17,7 @@ def test_app_registers_expected_tools(app) -> None:
 
     assert "open_workspace" in tool_names
     assert "list_components" in tool_names
+    assert "list_actions" in tool_names
     assert "find_symbols" in tool_names
     assert "list_symbols_in_file" in tool_names
     assert "get_file_owner" in tool_names
@@ -24,6 +25,8 @@ def test_app_registers_expected_tools(app) -> None:
     assert "find_definition" in tool_names
     assert "find_references" in tool_names
     assert "get_related_tests" in tool_names
+    assert "describe_test_target" in tool_names
+    assert "run_test_targets" in tool_names
     assert "repository_summary" in tool_names
     assert "describe_components" in tool_names
     assert "describe_files" in tool_names
@@ -31,6 +34,7 @@ def test_app_registers_expected_tools(app) -> None:
     assert "get_component_dependencies" in tool_names
     assert "get_component_dependents" in tool_names
     assert "analyze_impact" in tool_names
+    assert "analyze_change" in tool_names
     assert "lint_file" in tool_names
 
     find_symbols = next(tool for tool in tools if tool.name == "find_symbols")
@@ -45,8 +49,19 @@ def test_app_registers_expected_tools(app) -> None:
     repository_summary = next(tool for tool in tools if tool.name == "repository_summary")
     assert "compact first-pass" in repository_summary.description
 
+    list_actions = next(tool for tool in tools if tool.name == "list_actions")
+    assert "deterministic provider-backed actions" in list_actions.description
+
+    run_test_targets = next(tool for tool in tools if tool.name == "run_test_targets")
+    assert "bounded timeout" in run_test_targets.description
+    assert "failure snippets" in run_test_targets.description
+
     analyze_impact = next(tool for tool in tools if tool.name == "analyze_impact")
     assert "change impact" in analyze_impact.description
+
+    analyze_change = next(tool for tool in tools if tool.name == "analyze_change")
+    assert "high-level" in analyze_change.description
+    assert "quality gates" in analyze_change.description
 
 
 def test_open_workspace_tool_returns_structured_result(app, npm_repo_root) -> None:

@@ -6,6 +6,9 @@ from suitcode.core.intelligence_models import ComponentContext, FileContext, Sym
 from suitcode.core.component_context_resolver import ComponentContextResolver
 from suitcode.core.ownership_index import OwnershipIndex
 from suitcode.core.code_reference_service import CodeReferenceService
+from suitcode.core.provenance import ProvenanceEntry, SourceKind
+from suitcode.core.provenance_builders import derived_summary_provenance, lsp_provenance, ownership_provenance
+from suitcode.core.tests.provenance import is_authoritative_test_provenance
 from suitcode.core.tests.models import RelatedTestTarget
 
 if TYPE_CHECKING:
@@ -56,6 +59,12 @@ class ContextService:
                     dependencies_preview=dependencies[:dependency_preview_limit],
                     dependent_count=len(dependents),
                     dependents_preview=dependents[:dependent_preview_limit],
+                    provenance=self._component_context_provenance(
+                        component_id,
+                        owned_files,
+                        dependencies,
+                        related_tests,
+                    ),
                 )
             )
         return tuple(contexts)
@@ -81,6 +90,7 @@ class ContextService:
                     related_test_count=len(related_tests),
                     related_tests_preview=related_tests[:test_preview_limit],
                     quality_provider_ids=self._repository.quality.provider_ids,
+                    provenance=self._file_context_provenance(repository_rel_path, symbols, related_tests),
                 )
             )
         return tuple(contexts)
@@ -105,6 +115,7 @@ class ContextService:
             references_preview=references[:reference_preview_limit],
             related_test_count=len(related_tests),
             related_tests_preview=related_tests[:test_preview_limit],
+            provenance=self._symbol_context_provenance(symbol.repository_rel_path, related_tests),
         )
 
     @staticmethod
@@ -115,3 +126,95 @@ class ContextService:
             raise ValueError(f"{field_name} must not contain empty values")
         if len(set(items)) != len(items):
             raise ValueError(f"{field_name} must not contain duplicates")
+
+    def _component_context_provenance(
+        self,
+        component_id: str,
+        owned_files,
+        dependencies,
+        related_tests,
+    ) -> tuple[ProvenanceEntry, ...]:
+        entries: list[ProvenanceEntry] = [
+            ownership_provenance(
+                evidence_summary=f"component context derived from ownership index for `{component_id}`",
+                evidence_paths=tuple(item.repository_rel_path for item in owned_files[:10]),
+            )
+        ]
+        if dependencies:
+            dependency_paths = self._summarized_dependency_paths(dependencies)
+            entries.append(
+                derived_summary_provenance(
+                    source_kind=SourceKind.MANIFEST,
+                    evidence_summary=f"dependency context summarized from {len(dependencies)} declared component dependencies",
+                    evidence_paths=dependency_paths,
+                )
+            )
+        if related_tests:
+            entries.append(self._summarized_test_provenance(related_tests, "component-related tests"))
+        return tuple(entries)
+
+    def _file_context_provenance(self, repository_rel_path: str, symbols, related_tests) -> tuple[ProvenanceEntry, ...]:
+        entries: list[ProvenanceEntry] = [
+            ownership_provenance(
+                evidence_summary=f"file context derived from ownership index for `{repository_rel_path}`",
+                evidence_paths=(repository_rel_path,),
+            )
+        ]
+        if symbols:
+            entries.append(
+                lsp_provenance(
+                    source_tool=self._lsp_tool_for_path(repository_rel_path),
+                    evidence_summary=f"file symbols derived from LSP document symbols for `{repository_rel_path}`",
+                    evidence_paths=(repository_rel_path,),
+                )
+            )
+        if related_tests:
+            entries.append(self._summarized_test_provenance(related_tests, "file-related tests"))
+        return tuple(entries)
+
+    def _symbol_context_provenance(self, repository_rel_path: str, related_tests) -> tuple[ProvenanceEntry, ...]:
+        entries: list[ProvenanceEntry] = [
+            lsp_provenance(
+                source_tool=self._lsp_tool_for_path(repository_rel_path),
+                evidence_summary=f"symbol context derived from LSP symbol, definition, and reference queries for `{repository_rel_path}`",
+                evidence_paths=(repository_rel_path,),
+            )
+        ]
+        if related_tests:
+            entries.append(self._summarized_test_provenance(related_tests, "symbol-related tests"))
+        return tuple(entries)
+
+    @staticmethod
+    def _summarized_dependency_paths(dependencies) -> tuple[str, ...]:
+        paths: list[str] = []
+        for dependency in dependencies:
+            for provenance in dependency.provenance:
+                for path in provenance.evidence_paths:
+                    if path not in paths:
+                        paths.append(path)
+        return tuple(paths[:10])
+
+    @staticmethod
+    def _summarized_test_provenance(related_tests, label: str) -> ProvenanceEntry:
+        paths: list[str] = []
+        authoritative = True
+        for related_test in related_tests:
+            authoritative = authoritative and is_authoritative_test_provenance(related_test.provenance)
+            for provenance in related_test.provenance:
+                for path in provenance.evidence_paths:
+                    if path not in paths:
+                        paths.append(path)
+        return ProvenanceEntry(
+            confidence_mode=("authoritative" if authoritative else "derived"),
+            source_kind=(SourceKind.TEST_TOOL if authoritative else SourceKind.HEURISTIC),
+            source_tool=None,
+            evidence_summary=f"{label} derived from discovered test metadata",
+            evidence_paths=tuple(paths[:10]),
+        )
+
+    @staticmethod
+    def _lsp_tool_for_path(repository_rel_path: str) -> str:
+        lowered = repository_rel_path.lower()
+        if lowered.endswith(".py"):
+            return "basedpyright"
+        return "typescript-language-server"

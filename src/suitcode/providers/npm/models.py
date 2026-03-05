@@ -48,6 +48,7 @@ class NpmTestAnalysis:
     test_files: tuple[str, ...]
     discovery_method: TestDiscoveryMethod
     discovery_tool: str | None
+    evidence_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,7 @@ class NpmExternalPackageAnalysis:
     package_name: str
     version_spec: str
     manager_id: str
+    evidence_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

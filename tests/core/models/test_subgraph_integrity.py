@@ -6,6 +6,7 @@ from suitcode.core.models.edges import Edge
 from suitcode.core.models.errors import GraphIntegrityError
 from suitcode.core.models.graph_types import EdgeKind
 from suitcode.core.models.nodes import Evidence, FileInfo
+from suitcode.core.provenance_builders import ownership_provenance
 from suitcode.core.models.subgraph import Subgraph
 
 
@@ -15,6 +16,12 @@ def _node(node_id: str) -> FileInfo:
         name=node_id.split(":", 1)[1],
         repository_rel_path=node_id.split(":", 1)[1],
         owner_id="component:test",
+        provenance=(
+            ownership_provenance(
+                evidence_summary="assigned to owner by test fixture",
+                evidence_paths=(node_id.split(":", 1)[1],),
+            ),
+        ),
     )
 
 

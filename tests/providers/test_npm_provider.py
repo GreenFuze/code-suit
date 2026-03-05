@@ -10,10 +10,18 @@ from suitcode.core.models import (
     Runner,
     TestDefinition as DefinitionNode,
 )
+from suitcode.core.action_models import ActionKind
 from suitcode.core.intelligence_models import DependencyRef
-from suitcode.core.tests.models import RelatedTestTarget, TestDiscoveryMethod
+from suitcode.core.provenance import SourceKind
+from suitcode.core.tests.models import (
+    RelatedTestTarget,
+    TestExecutionResult as CoreTestExecutionResult,
+    TestExecutionStatus as CoreTestExecutionStatus,
+)
+from suitcode.core.provenance_builders import heuristic_provenance
 from suitcode.core.repository import Repository
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
+from suitcode.providers.action_provider_base import ActionProviderBase
 from suitcode.providers.code_provider_base import CodeProviderBase
 from suitcode.providers.npm import NPMProvider
 from suitcode.providers.npm.quality_models import NpmQualityEntityDelta, NpmQualityOperationResult
@@ -43,6 +51,10 @@ from tests.providers.npm.expected_npm_provider_data import (
 
 def test_architecture_provider_base_contract() -> None:
     assert issubclass(NPMProvider, ArchitectureProviderBase)
+
+
+def test_action_provider_base_contract() -> None:
+    assert issubclass(NPMProvider, ActionProviderBase)
 
 
 def test_code_provider_base_contract() -> None:
@@ -75,6 +87,8 @@ def test_npm_provider_returns_monorepo_components(npm_provider: NPMProvider) -> 
     assert component_ids == EXPECTED_COMPONENT_IDS
     assert component_languages == EXPECTED_COMPONENT_LANGUAGES
     assert component_kinds == EXPECTED_COMPONENT_KINDS
+    assert all(component.provenance for component in components)
+    assert all(component.provenance[0].source_kind.value == "manifest" for component in components)
 
 
 def test_npm_provider_returns_aggregators_runners_and_tests(npm_provider: NPMProvider) -> None:
@@ -87,14 +101,14 @@ def test_npm_provider_returns_aggregators_runners_and_tests(npm_provider: NPMPro
     assert {node.id for node in aggregators} == EXPECTED_AGGREGATOR_IDS
     assert any(node.id == "runner:npm:@monorepo/codegen:build" for node in runners)
     assert any(node.id == "runner:npm:@monorepo/codegen:test" for node in runners)
+    assert all(node.provenance for node in aggregators)
+    assert all(node.provenance for node in runners)
     assert {node.id for node in tests} == EXPECTED_TEST_IDS
     assert all(isinstance(node, Runner) for node in runners)
     assert all(isinstance(node, DefinitionNode) for node in tests)
+    assert all(node.provenance for node in tests)
     assert tuple(item.test_definition.id for item in discovered_tests) == tuple(sorted(EXPECTED_TEST_IDS))
-    assert all(
-        item.discovery_method in {TestDiscoveryMethod.AUTHORITATIVE_JEST_LIST_TESTS, TestDiscoveryMethod.HEURISTIC_MANIFEST_GLOB}
-        for item in discovered_tests
-    )
+    assert all(item.primary_source_kind in {SourceKind.TEST_TOOL, SourceKind.HEURISTIC} for item in discovered_tests)
 
 
 def test_npm_provider_returns_package_managers_external_packages_and_files(npm_provider: NPMProvider) -> None:
@@ -107,8 +121,11 @@ def test_npm_provider_returns_package_managers_external_packages_and_files(npm_p
     assert all(isinstance(node, ExternalPackage) for node in external_packages)
     assert {node.id for node in external_packages} == EXPECTED_EXTERNAL_PACKAGE_IDS
     assert all(node.manager_id == "pkgmgr:npm:root" for node in external_packages)
+    assert all(node.provenance for node in package_managers)
+    assert all(node.provenance for node in external_packages)
 
     assert all(isinstance(node, FileInfo) for node in files)
+    assert all(node.provenance for node in files)
     owned = {node.repository_rel_path: node.owner_id for node in files}
     assert {path: owned[path] for path in EXPECTED_REPRESENTATIVE_FILE_OWNERS} == EXPECTED_REPRESENTATIVE_FILE_OWNERS
 
@@ -152,6 +169,26 @@ def test_npm_provider_get_symbol_returns_entity_info(npm_provider: NPMProvider) 
     assert isinstance(symbols[0], EntityInfo)
     assert symbols[0].id == "entity:packages/core/src/index.ts:class:Core:1-11"
     assert symbols[0].signature == "CoreContainer"
+    assert symbols[0].provenance[0].source_kind.value == "lsp"
+
+
+def test_npm_provider_definition_and_reference_locations_include_provenance(npm_provider: NPMProvider) -> None:
+    class _FakeFileSymbolService:
+        def find_definition(self, repository_rel_path: str, line: int, column: int):
+            return (("packages/core/src/index.ts", 1, 13, 1, 2),)
+
+        def find_references(self, repository_rel_path: str, line: int, column: int, include_definition: bool = False):
+            return (("packages/utils/src/index.ts", 7, 9, 1, 2),)
+
+    npm_provider._file_symbol_service = _FakeFileSymbolService()  # type: ignore[assignment]
+
+    definitions = npm_provider.find_definition("packages/core/src/index.ts", 1, 1)
+    references = npm_provider.find_references("packages/core/src/index.ts", 1, 1)
+
+    assert definitions[0].provenance[0].source_kind.value == "lsp"
+    assert definitions[0].provenance[0].source_tool == "typescript-language-server"
+    assert references[0].provenance[0].source_kind.value == "lsp"
+    assert references[0].provenance[0].source_tool == "typescript-language-server"
 
 
 def test_npm_provider_internal_symbol_analysis_stays_npm_specific(npm_provider: NPMProvider) -> None:
@@ -322,3 +359,51 @@ def test_npm_provider_returns_component_dependencies_and_dependents(npm_provider
     assert all(isinstance(item, DependencyRef) for item in dependencies)
     assert any(item.target_id == "component:npm:@monorepo/core" and item.dependency_scope == "runtime" for item in dependencies)
     assert "component:npm:@monorepo/utils" in dependents
+
+
+def test_npm_provider_exposes_deterministic_actions(npm_provider: NPMProvider) -> None:
+    actions = npm_provider.get_actions()
+
+    assert actions
+    assert all(item.provider_id == "npm" for item in actions)
+    assert all(item.invocation.argv for item in actions)
+    assert all(item.provenance for item in actions)
+    assert any(item.kind == ActionKind.RUNNER_EXECUTION for item in actions)
+    assert any(item.kind == ActionKind.TEST_EXECUTION for item in actions)
+    assert any(item.kind == ActionKind.BUILD_EXECUTION for item in actions)
+
+
+def test_npm_provider_describe_and_run_test_targets(npm_provider: NPMProvider) -> None:
+    description = npm_provider.describe_test_target("test:npm:@monorepo/core")
+
+    assert description.test_definition.id == "test:npm:@monorepo/core"
+    assert description.command_argv
+    assert description.provenance
+
+    class _FakeExecutionService:
+        def run_target(self, target_description, timeout_seconds: int):
+            return CoreTestExecutionResult(
+                test_id=target_description.test_definition.id,
+                status=CoreTestExecutionStatus.PASSED,
+                success=True,
+                command_argv=target_description.command_argv,
+                command_cwd=target_description.command_cwd,
+                exit_code=0,
+                duration_ms=timeout_seconds,
+                log_path=".suit/runs/tests/fake.log",
+                warning=target_description.warning,
+                output_excerpt="ok",
+                provenance=(
+                    heuristic_provenance(
+                        evidence_summary="fake execution result",
+                        evidence_paths=("packages/core/src/index.test.ts",),
+                    ),
+                ),
+            )
+
+    npm_provider._test_execution_service = _FakeExecutionService()  # type: ignore[attr-defined]
+    results = npm_provider.run_test_targets(("test:npm:@monorepo/core",), timeout_seconds=45)
+
+    assert results[0].test_id == "test:npm:@monorepo/core"
+    assert results[0].duration_ms == 45
+    assert results[0].warning == description.warning

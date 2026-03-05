@@ -6,6 +6,7 @@ from suitcode.core.intelligence_models import DependencyRef
 from suitcode.core.architecture.architecture_intelligence import ArchitectureIntelligence
 from suitcode.core.models import Aggregator, Component, ExternalPackage, FileInfo, PackageManager, Runner
 from suitcode.core.models.graph_types import ComponentKind, NodeKind, ProgrammingLanguage
+from suitcode.core.provenance_builders import manifest_node_provenance, manifest_provenance, ownership_provenance
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
 from suitcode.providers.provider_roles import ProviderRole
 
@@ -41,20 +42,73 @@ class _ArchitectureProvider(ArchitectureProviderBase):
                 name=f"component-{self._suffix}",
                 component_kind=ComponentKind.PACKAGE,
                 language=ProgrammingLanguage.TYPESCRIPT,
+                provenance=(
+                    manifest_provenance(
+                        evidence_summary="derived from fake manifest component metadata",
+                        evidence_paths=(f"{self._suffix}/package.json",),
+                    ),
+                ),
             ),
         )
 
     def get_aggregators(self):
-        return (Aggregator(id=f"aggregator:{self._suffix}", name=f"aggregator-{self._suffix}"),)
+        return (
+            Aggregator(
+                id=f"aggregator:{self._suffix}",
+                name=f"aggregator-{self._suffix}",
+                provenance=(
+                    manifest_node_provenance(
+                        evidence_summary="derived from fake aggregator classification",
+                        evidence_paths=(f"{self._suffix}/package.json",),
+                    ),
+                ),
+            ),
+        )
 
     def get_runners(self):
-        return (Runner(id=f"runner:{self._suffix}", name=f"runner-{self._suffix}", argv=("echo", self._suffix)),)
+        return (
+            Runner(
+                id=f"runner:{self._suffix}",
+                name=f"runner-{self._suffix}",
+                argv=("echo", self._suffix),
+                provenance=(
+                    manifest_provenance(
+                        evidence_summary="derived from fake runner manifest metadata",
+                        evidence_paths=(f"{self._suffix}/package.json",),
+                    ),
+                ),
+            ),
+        )
 
     def get_package_managers(self):
-        return (PackageManager(id=f"pkg:{self._suffix}", name=f"pkg-{self._suffix}", manager="fake"),)
+        return (
+            PackageManager(
+                id=f"pkg:{self._suffix}",
+                name=f"pkg-{self._suffix}",
+                manager="fake",
+                provenance=(
+                    manifest_node_provenance(
+                        evidence_summary="derived from fake package-manager metadata",
+                        evidence_paths=(f"{self._suffix}/package.json",),
+                    ),
+                ),
+            ),
+        )
 
     def get_external_packages(self):
-        return (ExternalPackage(id=f"ext:{self._suffix}", name=f"ext-{self._suffix}", manager_id="pkg"),)
+        return (
+            ExternalPackage(
+                id=f"ext:{self._suffix}",
+                name=f"ext-{self._suffix}",
+                manager_id="pkg",
+                provenance=(
+                    manifest_provenance(
+                        evidence_summary="derived from fake external dependency metadata",
+                        evidence_paths=(f"{self._suffix}/package.json",),
+                    ),
+                ),
+            ),
+        )
 
     def get_files(self):
         return (
@@ -64,6 +118,12 @@ class _ArchitectureProvider(ArchitectureProviderBase):
                 repository_rel_path=f"{self._suffix}.ts",
                 language=ProgrammingLanguage.TYPESCRIPT,
                 owner_id=f"component:{self._suffix}",
+                provenance=(
+                    ownership_provenance(
+                        evidence_summary="assigned to owner by fake architecture provider",
+                        evidence_paths=(f"{self._suffix}.ts",),
+                    ),
+                ),
             ),
         )
 
@@ -75,6 +135,12 @@ class _ArchitectureProvider(ArchitectureProviderBase):
                 target_id=f"ext:{self._suffix}",
                 target_kind="external_package",
                 dependency_scope="runtime",
+                provenance=(
+                    manifest_provenance(
+                        evidence_summary="derived from fake manifest dependency metadata",
+                        evidence_paths=(f"{self._suffix}/package.json",),
+                    ),
+                ),
             ),
         )
 

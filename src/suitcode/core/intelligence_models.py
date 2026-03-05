@@ -5,6 +5,7 @@ from pydantic import field_validator, model_validator
 from suitcode.core.code.models import CodeLocation
 from suitcode.core.models import Component, EntityInfo, FileInfo
 from suitcode.core.models.nodes import StrictModel
+from suitcode.core.provenance import ProvenanceEntry, SourceKind
 from suitcode.core.repository_models import OwnedNodeInfo
 from suitcode.core.tests.models import ResolvedRelatedTest
 
@@ -13,6 +14,7 @@ class DependencyRef(StrictModel):
     target_id: str
     target_kind: str
     dependency_scope: str
+    provenance: tuple[ProvenanceEntry, ...]
 
     @field_validator("target_id")
     @classmethod
@@ -37,6 +39,14 @@ class DependencyRef(StrictModel):
             raise ValueError(f"unsupported dependency_scope: `{value}`")
         return value
 
+    @model_validator(mode="after")
+    def _validate_provenance(self) -> "DependencyRef":
+        if not self.provenance:
+            raise ValueError("provenance must not be empty")
+        if any(item.source_kind == SourceKind.LSP for item in self.provenance):
+            raise ValueError("dependency provenance must not use LSP source_kind")
+        return self
+
 
 class ComponentContext(StrictModel):
     component: Component
@@ -48,6 +58,13 @@ class ComponentContext(StrictModel):
     dependencies_preview: tuple[DependencyRef, ...]
     dependent_count: int
     dependents_preview: tuple[str, ...]
+    provenance: tuple[ProvenanceEntry, ...]
+
+    @model_validator(mode="after")
+    def _validate_provenance(self) -> "ComponentContext":
+        if not self.provenance:
+            raise ValueError("provenance must not be empty")
+        return self
 
 
 class FileContext(StrictModel):
@@ -58,6 +75,15 @@ class FileContext(StrictModel):
     related_test_count: int
     related_tests_preview: tuple[ResolvedRelatedTest, ...]
     quality_provider_ids: tuple[str, ...]
+    provenance: tuple[ProvenanceEntry, ...]
+
+    @model_validator(mode="after")
+    def _validate_provenance(self) -> "FileContext":
+        if not self.provenance:
+            raise ValueError("provenance must not be empty")
+        if self.symbol_count > 0 and not any(item.source_kind == SourceKind.LSP for item in self.provenance):
+            raise ValueError("file contexts with symbols must include LSP provenance")
+        return self
 
 
 class SymbolContext(StrictModel):
@@ -69,6 +95,17 @@ class SymbolContext(StrictModel):
     references_preview: tuple[CodeLocation, ...]
     related_test_count: int
     related_tests_preview: tuple[ResolvedRelatedTest, ...]
+    provenance: tuple[ProvenanceEntry, ...]
+
+    @model_validator(mode="after")
+    def _validate_provenance(self) -> "SymbolContext":
+        if not self.provenance:
+            raise ValueError("provenance must not be empty")
+        if (self.definition_count > 0 or self.reference_count > 0) and not any(
+            item.source_kind == SourceKind.LSP for item in self.provenance
+        ):
+            raise ValueError("symbol contexts with definitions or references must include LSP provenance")
+        return self
 
 
 class ImpactTarget(StrictModel):
@@ -104,6 +141,7 @@ class ImpactSummary(StrictModel):
     references_preview: tuple[CodeLocation, ...]
     related_test_count: int
     related_test_ids_preview: tuple[str, ...]
+    provenance: tuple[ProvenanceEntry, ...]
 
     @field_validator("target_kind")
     @classmethod
@@ -112,3 +150,9 @@ class ImpactSummary(StrictModel):
         if value not in allowed:
             raise ValueError(f"unsupported target_kind: `{value}`")
         return value
+
+    @model_validator(mode="after")
+    def _validate_provenance(self) -> "ImpactSummary":
+        if not self.provenance:
+            raise ValueError("provenance must not be empty")
+        return self

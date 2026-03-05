@@ -4,6 +4,7 @@ import pytest
 
 from suitcode.core.models.graph_types import NodeKind, ProgrammingLanguage
 from suitcode.core.models.nodes import EntityInfo, Evidence, FileInfo, RepositoryInfo
+from suitcode.core.provenance_builders import lsp_provenance, ownership_provenance
 
 
 def test_models_forbid_extra_fields() -> None:
@@ -29,6 +30,12 @@ def test_file_and_entity_models() -> None:
         repository_rel_path="src/app.py",
         language=ProgrammingLanguage.PYTHON,
         owner_id="component:demo",
+        provenance=(
+            ownership_provenance(
+                evidence_summary="assigned to owner by test fixture",
+                evidence_paths=("src/app.py",),
+            ),
+        ),
     )
     entity = EntityInfo(
         id="entity:src/app.py:function:main:1-3",
@@ -37,6 +44,13 @@ def test_file_and_entity_models() -> None:
         entity_kind="function",
         line_start=1,
         line_end=3,
+        provenance=(
+            lsp_provenance(
+                source_tool="basedpyright",
+                evidence_summary="discovered from test lsp fixture",
+                evidence_paths=("src/app.py",),
+            ),
+        ),
     )
 
     assert file_node.kind == NodeKind.FILE
@@ -53,6 +67,13 @@ def test_entity_column_range_validation() -> None:
         line_end=3,
         column_start=2,
         column_end=5,
+        provenance=(
+            lsp_provenance(
+                source_tool="basedpyright",
+                evidence_summary="discovered from test lsp fixture",
+                evidence_paths=("src/app.py",),
+            ),
+        ),
     )
     assert entity.column_start == 2
     assert entity.column_end == 5
@@ -65,4 +86,11 @@ def test_entity_column_range_validation() -> None:
             entity_kind="function",
             column_start=5,
             column_end=4,
+            provenance=(
+                lsp_provenance(
+                    source_tool="basedpyright",
+                    evidence_summary="discovered from test lsp fixture",
+                    evidence_paths=("src/app.py",),
+                ),
+            ),
         )

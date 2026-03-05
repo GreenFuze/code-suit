@@ -45,5 +45,8 @@ def test_quality_translation_maps_internal_result_to_public_result() -> None:
     assert result.tool == "eslint"
     assert result.changed is True
     assert result.diagnostics[0].message == "issue"
+    assert result.diagnostics[0].provenance[0].source_kind.value == "quality_tool"
     assert [item.name for item in result.entity_delta.added] == ["newFn"]
     assert [item.name for item in result.entity_delta.updated] == ["updatedFn"]
+    assert result.entity_delta.provenance[0].source_kind.value == "lsp"
+    assert {item.source_kind.value for item in result.provenance} == {"quality_tool", "lsp"}

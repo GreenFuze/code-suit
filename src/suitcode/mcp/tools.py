@@ -6,6 +6,7 @@ from suitcode.mcp.descriptions import TOOL_DESCRIPTIONS
 from suitcode.mcp.models import (
     AddRepositoryResult,
     AggregatorView,
+    ActionView,
     CloseWorkspaceResult,
     ComponentView,
     ComponentContextView,
@@ -22,7 +23,9 @@ from suitcode.mcp.models import (
     ProviderDescriptorView,
     QualityFileResultView,
     QualityProvidersView,
+    ChangeImpactView,
     RelatedTestView,
+    RunTestTargetsView,
     RepositorySupportView,
     RepositorySummaryView,
     RepositoryView,
@@ -30,6 +33,7 @@ from suitcode.mcp.models import (
     SymbolContextView,
     SymbolView,
     TestDefinitionView,
+    TestTargetDescriptionView,
     WorkspaceView,
 )
 from suitcode.mcp.service import SuitMcpService
@@ -100,6 +104,32 @@ def register_tools(app: FastMCP, service: SuitMcpService) -> None:
     @app.tool(name="list_files", description=TOOL_DESCRIPTIONS["list_files"], structured_output=True)
     def list_files(workspace_id: str, repository_id: str, limit: int | None = None, offset: int = 0) -> ListResult[FileView]:
         return service.list_files(workspace_id, repository_id, limit=limit, offset=offset)
+
+    @app.tool(name="list_actions", description=TOOL_DESCRIPTIONS["list_actions"], structured_output=True)
+    def list_actions(
+        workspace_id: str,
+        repository_id: str,
+        repository_rel_path: str | None = None,
+        owner_id: str | None = None,
+        component_id: str | None = None,
+        runner_id: str | None = None,
+        test_id: str | None = None,
+        action_kinds: tuple[str, ...] | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> ListResult[ActionView]:
+        return service.list_actions(
+            workspace_id,
+            repository_id,
+            repository_rel_path=repository_rel_path,
+            owner_id=owner_id,
+            component_id=component_id,
+            runner_id=runner_id,
+            test_id=test_id,
+            action_kinds=action_kinds,
+            limit=limit,
+            offset=offset,
+        )
 
     @app.tool(name="find_symbols", description=TOOL_DESCRIPTIONS["find_symbols"], structured_output=True)
     def find_symbols(
@@ -219,6 +249,24 @@ def register_tools(app: FastMCP, service: SuitMcpService) -> None:
             owner_id=owner_id,
             limit=limit,
             offset=offset,
+        )
+
+    @app.tool(name="describe_test_target", description=TOOL_DESCRIPTIONS["describe_test_target"], structured_output=True)
+    def describe_test_target(workspace_id: str, repository_id: str, test_id: str) -> TestTargetDescriptionView:
+        return service.describe_test_target(workspace_id, repository_id, test_id)
+
+    @app.tool(name="run_test_targets", description=TOOL_DESCRIPTIONS["run_test_targets"], structured_output=True)
+    def run_test_targets(
+        workspace_id: str,
+        repository_id: str,
+        test_ids: tuple[str, ...],
+        timeout_seconds: int = 120,
+    ) -> RunTestTargetsView:
+        return service.run_test_targets(
+            workspace_id,
+            repository_id,
+            test_ids=test_ids,
+            timeout_seconds=timeout_seconds,
         )
 
     @app.tool(name="list_quality_providers", description=TOOL_DESCRIPTIONS["list_quality_providers"], structured_output=True)
@@ -344,4 +392,28 @@ def register_tools(app: FastMCP, service: SuitMcpService) -> None:
             reference_preview_limit=reference_preview_limit,
             dependent_preview_limit=dependent_preview_limit,
             test_preview_limit=test_preview_limit,
+        )
+
+    @app.tool(name="analyze_change", description=TOOL_DESCRIPTIONS["analyze_change"], structured_output=True)
+    def analyze_change(
+        workspace_id: str,
+        repository_id: str,
+        symbol_id: str | None = None,
+        repository_rel_path: str | None = None,
+        owner_id: str | None = None,
+        reference_preview_limit: int = 50,
+        dependent_preview_limit: int = 50,
+        test_preview_limit: int = 25,
+        runner_preview_limit: int = 25,
+    ) -> ChangeImpactView:
+        return service.analyze_change(
+            workspace_id,
+            repository_id,
+            symbol_id=symbol_id,
+            repository_rel_path=repository_rel_path,
+            owner_id=owner_id,
+            reference_preview_limit=reference_preview_limit,
+            dependent_preview_limit=dependent_preview_limit,
+            test_preview_limit=test_preview_limit,
+            runner_preview_limit=runner_preview_limit,
         )

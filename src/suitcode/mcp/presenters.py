@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from suitcode.core.action_models import RepositoryAction
 from suitcode.core.code.models import CodeLocation
+from suitcode.core.change_models import ChangeImpact, QualityGateInfo, RunnerImpact, TestImpact
 from suitcode.core.intelligence_models import ComponentContext, DependencyRef, FileContext, ImpactSummary, SymbolContext
 from suitcode.core.models import Aggregator, Component, EntityInfo, ExternalPackage, FileInfo, PackageManager, Runner
+from suitcode.core.provenance import ProvenanceEntry, SourceKind
+from suitcode.core.provenance_builders import derived_summary_provenance
 from suitcode.core.repository_models import FileOwnerInfo, OwnedNodeInfo
 from suitcode.core.tests.models import DiscoveredTestDefinition, ResolvedRelatedTest
 from suitcode.core.repository import Repository
@@ -13,6 +17,8 @@ from suitcode.providers.quality_models import QualityDiagnostic, QualityEntityDe
 from suitcode.mcp.models import (
     AddRepositoryResult,
     AggregatorView,
+    ActionInvocationView,
+    ActionView,
     ArchitectureSnapshotView,
     ComponentContextView,
     ComponentView,
@@ -23,27 +29,36 @@ from suitcode.mcp.models import (
     FileView,
     FileOwnerView,
     ImpactSummaryView,
+    ChangeImpactView,
     OpenWorkspaceResult,
     LocationView,
     OwnerView,
     PackageManagerView,
+    ProvenanceView,
     ProviderDescriptorView,
     QualityDiagnosticView,
     QualityEntityDeltaView,
     QualityFileResultView,
+    QualityGateView,
     QualitySnapshotView,
     RepositorySnapshotView,
     RepositorySummaryView,
     RepositorySupportView,
     RepositoryView,
     RunnerView,
+    RunnerImpactView,
     SymbolContextView,
     SymbolView,
     TestsSnapshotView,
     TestDefinitionView,
     RelatedTestView,
+    RunTestTargetsView,
+    TestImpactView,
+    TestExecutionResultView,
+    TestFailureSnippetView,
     WorkspaceSnapshotView,
     WorkspaceView,
+    TestTargetDescriptionView,
 )
 
 
@@ -137,6 +152,9 @@ class RepositoryPresenter:
 
 
 class ArchitecturePresenter:
+    def _provenance_views(self, items: tuple[ProvenanceEntry, ...]) -> tuple[ProvenanceView, ...]:
+        return tuple(IntelligencePresenter().provenance_view(item) for item in items)
+
     def component_view(self, component: Component) -> ComponentView:
         return ComponentView(
             id=component.id,
@@ -145,13 +163,24 @@ class ArchitecturePresenter:
             language=component.language.value,
             source_roots=component.source_roots,
             artifact_paths=component.artifact_paths,
+            provenance=self._provenance_views(component.provenance),
         )
 
     def aggregator_view(self, aggregator: Aggregator) -> AggregatorView:
-        return AggregatorView(id=aggregator.id, name=aggregator.name)
+        return AggregatorView(
+            id=aggregator.id,
+            name=aggregator.name,
+            provenance=self._provenance_views(aggregator.provenance),
+        )
 
     def runner_view(self, runner: Runner) -> RunnerView:
-        return RunnerView(id=runner.id, name=runner.name, argv=runner.argv, cwd=runner.cwd)
+        return RunnerView(
+            id=runner.id,
+            name=runner.name,
+            argv=runner.argv,
+            cwd=runner.cwd,
+            provenance=self._provenance_views(runner.provenance),
+        )
 
     def package_manager_view(self, package_manager: PackageManager) -> PackageManagerView:
         return PackageManagerView(
@@ -159,6 +188,7 @@ class ArchitecturePresenter:
             name=package_manager.name,
             manager=package_manager.manager,
             lockfile_path=package_manager.lockfile_path,
+            provenance=self._provenance_views(package_manager.provenance),
         )
 
     def external_package_view(self, external_package: ExternalPackage) -> ExternalPackageView:
@@ -167,6 +197,7 @@ class ArchitecturePresenter:
             name=external_package.name,
             manager_id=external_package.manager_id,
             version_spec=external_package.version_spec,
+            provenance=self._provenance_views(external_package.provenance),
         )
 
     def file_view(self, file_info: FileInfo) -> FileView:
@@ -175,6 +206,7 @@ class ArchitecturePresenter:
             path=file_info.repository_rel_path,
             language=file_info.language.value if file_info.language else None,
             owner_id=file_info.owner_id,
+            provenance=self._provenance_views(file_info.provenance),
         )
 
     def architecture_snapshot(self, repository: Repository) -> ArchitectureSnapshotView:
@@ -203,6 +235,7 @@ class CodePresenter:
             column_start=entity.column_start,
             column_end=entity.column_end,
             signature=entity.signature,
+            provenance=tuple(IntelligencePresenter().provenance_view(item) for item in entity.provenance),
         )
 
     def location_view(self, location: CodeLocation) -> LocationView:
@@ -213,10 +246,14 @@ class CodePresenter:
             column_start=location.column_start,
             column_end=location.column_end,
             symbol_id=location.symbol_id,
+            provenance=tuple(IntelligencePresenter().provenance_view(item) for item in location.provenance),
         )
 
 
 class TestPresenter:
+    def _provenance_views(self, items: tuple[ProvenanceEntry, ...]) -> tuple[ProvenanceView, ...]:
+        return tuple(IntelligencePresenter().provenance_view(item) for item in items)
+
     def test_view(self, discovered_test: DiscoveredTestDefinition) -> TestDefinitionView:
         test_definition = discovered_test.test_definition
         return TestDefinitionView(
@@ -224,9 +261,7 @@ class TestPresenter:
             name=test_definition.name,
             framework=test_definition.framework.value,
             test_files=test_definition.test_files,
-            discovery_method=discovered_test.discovery_method.value,
-            discovery_tool=discovered_test.discovery_tool,
-            is_authoritative=discovered_test.is_authoritative,
+            provenance=self._provenance_views(discovered_test.provenance),
         )
 
     def tests_snapshot(self, repository: Repository) -> TestsSnapshotView:
@@ -245,18 +280,82 @@ class TestPresenter:
             name=discovered_test.test_definition.name,
             framework=discovered_test.test_definition.framework.value,
             test_files=discovered_test.test_definition.test_files,
-            discovery_method=discovered_test.discovery_method.value,
-            discovery_tool=discovered_test.discovery_tool,
-            is_authoritative=discovered_test.is_authoritative,
             relation_reason=match.relation_reason,
             matched_owner_id=match.matched_owner_id,
             matched_path=match.matched_repository_rel_path,
+            provenance=self._provenance_views(related_test.provenance),
+        )
+
+    def test_target_description_view(self, description) -> TestTargetDescriptionView:
+        test_definition = description.test_definition
+        return TestTargetDescriptionView(
+            id=test_definition.id,
+            name=test_definition.name,
+            framework=test_definition.framework.value,
+            test_files=test_definition.test_files,
+            command_argv=description.command_argv,
+            command_cwd=description.command_cwd,
+            is_authoritative=description.is_authoritative,
+            warning=description.warning,
+            provenance=self._provenance_views(description.provenance),
+        )
+
+    def test_execution_result_view(self, result) -> TestExecutionResultView:
+        return TestExecutionResultView(
+            test_id=result.test_id,
+            status=result.status.value,
+            success=result.success,
+            command_argv=result.command_argv,
+            command_cwd=result.command_cwd,
+            exit_code=result.exit_code,
+            duration_ms=result.duration_ms,
+            log_path=result.log_path,
+            warning=result.warning,
+            output_excerpt=result.output_excerpt,
+            failure_snippets=tuple(
+                TestFailureSnippetView(
+                    repository_rel_path=item.repository_rel_path,
+                    line_start=item.line_start,
+                    line_end=item.line_end,
+                    snippet=item.snippet,
+                    provenance=self._provenance_views(item.provenance),
+                )
+                for item in result.failure_snippets
+            ),
+            provenance=self._provenance_views(result.provenance),
+        )
+
+    def run_test_targets_view(
+        self,
+        workspace_id: str,
+        repository_id: str,
+        timeout_seconds: int,
+        results,
+    ) -> RunTestTargetsView:
+        views = tuple(self.test_execution_result_view(item) for item in results)
+        passed = sum(1 for item in views if item.status == "passed")
+        failed = sum(1 for item in views if item.status == "failed")
+        errors = sum(1 for item in views if item.status == "error")
+        timeouts = sum(1 for item in views if item.status == "timeout")
+        return RunTestTargetsView(
+            workspace_id=workspace_id,
+            repository_id=repository_id,
+            timeout_seconds=timeout_seconds,
+            total=len(views),
+            passed=passed,
+            failed=failed,
+            errors=errors,
+            timeouts=timeouts,
+            results=views,
         )
 
 
 class QualityPresenter:
     def diagnostic_view(self, diagnostic: QualityDiagnostic) -> QualityDiagnosticView:
-        return QualityDiagnosticView(**diagnostic.model_dump())
+        return QualityDiagnosticView(
+            **diagnostic.model_dump(exclude={"provenance"}),
+            provenance=tuple(IntelligencePresenter().provenance_view(item) for item in diagnostic.provenance),
+        )
 
     def entity_delta_view(self, delta: QualityEntityDelta) -> QualityEntityDeltaView:
         code_presenter = CodePresenter()
@@ -264,6 +363,7 @@ class QualityPresenter:
             added=tuple(code_presenter.symbol_view(item) for item in delta.added),
             removed=tuple(code_presenter.symbol_view(item) for item in delta.removed),
             updated=tuple(code_presenter.symbol_view(item) for item in delta.updated),
+            provenance=tuple(IntelligencePresenter().provenance_view(item) for item in delta.provenance),
         )
 
     def quality_file_result_view(
@@ -288,6 +388,7 @@ class QualityPresenter:
             applied_fixes=result.applied_fixes,
             content_sha_before=result.content_sha_before,
             content_sha_after=result.content_sha_after,
+            provenance=tuple(IntelligencePresenter().provenance_view(item) for item in result.provenance),
         )
 
     def quality_snapshot(self, repository: Repository) -> QualitySnapshotView:
@@ -308,8 +409,22 @@ class OwnershipPresenter:
 
 
 class IntelligencePresenter:
+    def provenance_view(self, provenance: ProvenanceEntry) -> ProvenanceView:
+        return ProvenanceView(
+            confidence_mode=provenance.confidence_mode.value,
+            source_kind=provenance.source_kind.value,
+            source_tool=provenance.source_tool,
+            evidence_summary=provenance.evidence_summary,
+            evidence_paths=provenance.evidence_paths,
+        )
+
     def dependency_ref_view(self, dependency_ref: DependencyRef) -> DependencyRefView:
-        return DependencyRefView(**dependency_ref.model_dump())
+        return DependencyRefView(
+            target_id=dependency_ref.target_id,
+            target_kind=dependency_ref.target_kind,
+            dependency_scope=dependency_ref.dependency_scope,
+            provenance=tuple(self.provenance_view(item) for item in dependency_ref.provenance),
+        )
 
     def component_context_view(self, context: ComponentContext) -> ComponentContextView:
         architecture_presenter = ArchitecturePresenter()
@@ -323,6 +438,7 @@ class IntelligencePresenter:
             dependencies_preview=tuple(self.dependency_ref_view(item) for item in context.dependencies_preview),
             dependent_count=context.dependent_count,
             dependents_preview=context.dependents_preview,
+            provenance=tuple(self.provenance_view(item) for item in context.provenance),
         )
 
     def file_context_view(self, context: FileContext) -> FileContextView:
@@ -338,6 +454,7 @@ class IntelligencePresenter:
             related_test_count=context.related_test_count,
             related_tests_preview=tuple(test_presenter.related_test_view(item) for item in context.related_tests_preview),
             quality_provider_ids=context.quality_provider_ids,
+            provenance=tuple(self.provenance_view(item) for item in context.provenance),
         )
 
     def symbol_context_view(self, context: SymbolContext) -> SymbolContextView:
@@ -353,6 +470,7 @@ class IntelligencePresenter:
             references_preview=tuple(code_presenter.location_view(item) for item in context.references_preview),
             related_test_count=context.related_test_count,
             related_tests_preview=tuple(test_presenter.related_test_view(item) for item in context.related_tests_preview),
+            provenance=tuple(self.provenance_view(item) for item in context.provenance),
         )
 
     def impact_summary_view(self, summary: ImpactSummary) -> ImpactSummaryView:
@@ -368,6 +486,92 @@ class IntelligencePresenter:
             references_preview=tuple(code_presenter.location_view(item) for item in summary.references_preview),
             related_test_count=summary.related_test_count,
             related_test_ids_preview=summary.related_test_ids_preview,
+            provenance=tuple(self.provenance_view(item) for item in summary.provenance),
+        )
+
+
+class ChangeImpactPresenter:
+    def __init__(self) -> None:
+        self._architecture_presenter = ArchitecturePresenter()
+        self._code_presenter = CodePresenter()
+        self._test_presenter = TestPresenter()
+        self._ownership_presenter = OwnershipPresenter()
+        self._intelligence_presenter = IntelligencePresenter()
+
+    def quality_gate_view(self, gate: QualityGateInfo) -> QualityGateView:
+        return QualityGateView(
+            provider_id=gate.provider_id,
+            provider_roles=gate.provider_roles,
+            applies=gate.applies,
+            reason=gate.reason,
+            provenance=tuple(self._intelligence_presenter.provenance_view(item) for item in gate.provenance),
+        )
+
+    def runner_impact_view(self, runner_impact: RunnerImpact) -> RunnerImpactView:
+        return RunnerImpactView(
+            runner=self._architecture_presenter.runner_view(runner_impact.runner),
+            reason=runner_impact.reason,
+            provenance=tuple(self._intelligence_presenter.provenance_view(item) for item in runner_impact.provenance),
+        )
+
+    def test_impact_view(self, test_impact: TestImpact) -> TestImpactView:
+        return TestImpactView(
+            test=self._test_presenter.related_test_view(test_impact.related_test),
+            reason=test_impact.reason,
+            provenance=tuple(self._intelligence_presenter.provenance_view(item) for item in test_impact.provenance),
+        )
+
+    def change_impact_view(self, impact: ChangeImpact) -> ChangeImpactView:
+        return ChangeImpactView(
+            target_kind=impact.target_kind,
+            owner=self._ownership_presenter.owner_view(impact.owner),
+            primary_component=(
+                self._architecture_presenter.component_view(impact.primary_component)
+                if impact.primary_component is not None
+                else None
+            ),
+            component_context=(
+                self._intelligence_presenter.component_context_view(impact.component_context)
+                if impact.component_context is not None
+                else None
+            ),
+            file_context=(
+                self._intelligence_presenter.file_context_view(impact.file_context)
+                if impact.file_context is not None
+                else None
+            ),
+            symbol_context=(
+                self._intelligence_presenter.symbol_context_view(impact.symbol_context)
+                if impact.symbol_context is not None
+                else None
+            ),
+            dependent_components=tuple(
+                self._architecture_presenter.component_view(item) for item in impact.dependent_components
+            ),
+            reference_locations=tuple(self._code_presenter.location_view(item) for item in impact.reference_locations),
+            related_tests=tuple(self.test_impact_view(item) for item in impact.related_tests),
+            related_runners=tuple(self.runner_impact_view(item) for item in impact.related_runners),
+            quality_gates=tuple(self.quality_gate_view(item) for item in impact.quality_gates),
+            provenance=tuple(self._intelligence_presenter.provenance_view(item) for item in impact.provenance),
+        )
+
+
+class ActionPresenter:
+    def __init__(self) -> None:
+        self._intelligence_presenter = IntelligencePresenter()
+
+    def action_view(self, action: RepositoryAction) -> ActionView:
+        return ActionView(
+            id=action.id,
+            name=action.name,
+            kind=action.kind.value,
+            provider_id=action.provider_id,
+            target_id=action.target_id,
+            target_kind=action.target_kind.value,
+            owner_ids=action.owner_ids,
+            invocation=ActionInvocationView(argv=action.invocation.argv, cwd=action.invocation.cwd),
+            dry_run_supported=action.dry_run_supported,
+            provenance=tuple(self._intelligence_presenter.provenance_view(item) for item in action.provenance),
         )
 
 
@@ -379,6 +583,36 @@ class RepositorySummaryPresenter:
         external_packages = repository.arch.get_external_packages()
         tests = repository.tests.get_discovered_tests()
         files = repository.arch.get_files()
+        intelligence_presenter = IntelligencePresenter()
+        provenance_entries = [
+            derived_summary_provenance(
+                source_kind=SourceKind.MANIFEST,
+                evidence_summary="repository summary derived from provider-backed architecture metadata",
+                evidence_paths=tuple(pm.lockfile_path for pm in package_managers if pm.lockfile_path)[:10],
+            )
+        ]
+        if tests:
+            test_paths: list[str] = []
+            for item in tests:
+                for provenance in item.provenance:
+                    for path in provenance.evidence_paths:
+                        if path not in test_paths:
+                            test_paths.append(path)
+            provenance_entries.append(
+                derived_summary_provenance(
+                    source_kind=SourceKind.TEST_TOOL,
+                    evidence_summary="repository summary includes discovered test metadata",
+                    evidence_paths=tuple(test_paths[:10]),
+                )
+            )
+        if files:
+            provenance_entries.append(
+                derived_summary_provenance(
+                    source_kind=SourceKind.OWNERSHIP,
+                    evidence_summary="repository summary includes file ownership counts",
+                    evidence_paths=tuple(file.repository_rel_path for file in files[:10]),
+                )
+            )
         return RepositorySummaryView(
             workspace_id=repository.workspace.id,
             repository_id=repository.id,
@@ -399,4 +633,5 @@ class RepositorySummaryPresenter:
             package_manager_ids_preview=tuple(sorted(item.id for item in package_managers)[:preview_limit]),
             test_ids_preview=tuple(sorted(item.test_definition.id for item in tests)[:preview_limit]),
             preview_limit=preview_limit,
+            provenance=tuple(intelligence_presenter.provenance_view(item) for item in provenance_entries),
         )

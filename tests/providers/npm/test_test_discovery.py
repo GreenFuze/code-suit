@@ -42,6 +42,7 @@ def test_npm_test_discovery_uses_authoritative_jest_when_available(npm_fixture_r
     assert analysis.discovery_method == TestDiscoveryMethod.AUTHORITATIVE_JEST_LIST_TESTS
     assert analysis.discovery_tool == 'jest'
     assert analysis.test_files == ('packages/core/src/index.test.ts',)
+    assert analysis.evidence_paths == ('packages/core/package.json', 'packages/core/src/index.test.ts')
 
 
 def test_npm_test_discovery_falls_back_to_heuristic_when_jest_is_unavailable(npm_fixture_root: Path) -> None:
@@ -57,3 +58,4 @@ def test_npm_test_discovery_falls_back_to_heuristic_when_jest_is_unavailable(npm
     assert analysis.discovery_method == TestDiscoveryMethod.HEURISTIC_MANIFEST_GLOB
     assert analysis.discovery_tool is None
     assert 'packages/core/src/index.test.ts' in analysis.test_files
+    assert analysis.evidence_paths[0] == 'packages/core/package.json'

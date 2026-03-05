@@ -14,3 +14,4 @@ class PythonTestAnalysis:
     test_files: tuple[str, ...]
     discovery_method: TestDiscoveryMethod
     discovery_tool: str | None
+    evidence_paths: tuple[str, ...] = ()

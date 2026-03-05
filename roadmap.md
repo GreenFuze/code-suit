@@ -43,19 +43,20 @@ It is an engineering backlog, not a strategy essay. Each phase is intentionally 
 Make provenance a first-class, consistent concept across SuitCode instead of scattered per-feature metadata.
 
 ### Capability work
-- [ ] Add a shared provenance model used across:
+- [x] Add a shared provenance model used across current public outputs:
   - architecture outputs
+  - code outputs, including definition/reference locations
   - dependency outputs
   - related-test outputs
   - impact outputs
   - quality outputs where appropriate
-  - future action outputs
-- [ ] Normalize core provenance concepts:
+- [x] Deliver Phase 1 incrementally so provenance can land in focused slices without widening risk.
+- [x] Normalize core provenance concepts:
   - `confidence_mode`
   - `source_kind`
   - `source_tool`
   - short explanation / evidence summary
-- [ ] Attach provenance to:
+- [x] Attach provenance to:
   - dependencies
   - component context
   - file context
@@ -63,25 +64,28 @@ Make provenance a first-class, consistent concept across SuitCode instead of sca
   - impact outputs
 
 ### Refactor / design hardening
-- [ ] Remove duplicated provenance-like fields where they exist in ad hoc forms.
-- [ ] Ensure provenance is added in the correct layer:
+- [x] Remove duplicated provenance-like fields where they exist in ad hoc forms.
+- [x] Ensure provenance is added in the correct layer:
   - provider-native evidence at provider/internal translation layer
   - cross-provider joins at intelligence/core layer
   - presentation-only shaping at MCP presenter layer
-- [ ] Review OO boundaries so provenance assembly is not duplicated across providers and MCP presenters.
+- [x] Review OO boundaries so provenance assembly is not duplicated across providers and MCP presenters.
 
 ### Tests / acceptance
-- [ ] Add tests for provenance consistency across:
+- [x] Add tests for provenance consistency across:
   - authoritative outputs
   - derived outputs
   - heuristic fallback outputs
-- [ ] Add fail-fast tests for missing or contradictory provenance.
-- [ ] Add MCP tests to ensure provenance reaches the agent intact.
+- [x] Add fail-fast tests for missing or contradictory provenance.
+- [x] Add MCP tests to ensure provenance reaches the agent intact.
 
 ### Done when
-- [ ] Provenance is a shared typed concept.
-- [ ] Heuristic vs authoritative is not special-cased per feature anymore.
-- [ ] Every high-value answer class can explain where it came from.
+- [x] Provenance is a shared typed concept.
+- [x] Heuristic vs authoritative is not special-cased per feature anymore.
+- [x] Every high-value answer class can explain where it came from.
+- [x] Retrofit provenance onto raw architecture/code node outputs.
+- [x] Normalize quality result provenance onto the shared provenance model.
+- [x] Remove legacy test provenance fields once shared provenance becomes the sole contract.
 
 ## Phase 2: ChangeImpact North-Star Artifact
 
@@ -96,9 +100,9 @@ Introduce one high-value composed artifact that answers:
 - why
 
 ### Capability work
-- [ ] Add a first-class `ChangeImpact` or `ChangeAnalysis` model.
-- [ ] Add a new MCP tool, likely `analyze_change`, or evolve `analyze_impact` into the north-star artifact if that keeps naming cleaner.
-- [ ] Include:
+- [x] Add a first-class `ChangeImpact` or `ChangeAnalysis` model.
+- [x] Add a new MCP tool, likely `analyze_change`, or evolve `analyze_impact` into the north-star artifact if that keeps naming cleaner.
+- [x] Include:
   - owner
   - primary component
   - dependent components
@@ -109,23 +113,22 @@ Introduce one high-value composed artifact that answers:
   - provenance per contributing category
 
 ### Refactor / design hardening
-- [ ] Avoid bloating `Repository` or one MCP service with the full composition logic.
-- [ ] Introduce dedicated orchestration objects if needed:
+- [x] Avoid bloating `Repository` or one MCP service with the full composition logic.
+- [x] Introduce dedicated orchestration objects where needed:
   - `ChangeImpactService`
-  - `ChangeEvidenceAssembler`
-- [ ] Reuse existing context and reference services instead of duplicating logic.
+- [x] Reuse existing context and reference services instead of duplicating logic.
 
 ### Tests / acceptance
-- [ ] Add representative file target coverage.
-- [ ] Add representative symbol target coverage.
-- [ ] Add representative owner target coverage.
-- [ ] Add explicit failure coverage for unresolved targets.
-- [ ] Add provenance coverage for each contributing evidence type.
+- [x] Add representative file target coverage.
+- [x] Add representative symbol target coverage.
+- [x] Add representative owner target coverage.
+- [x] Add explicit failure coverage for unresolved targets.
+- [x] Add provenance coverage for each contributing evidence type.
 
 ### Done when
-- [ ] SuitCode exposes one high-level change artifact.
-- [ ] The output is factual, deterministic, and provenance-backed.
-- [ ] It does not pretend to be an execution plan yet.
+- [x] SuitCode exposes one high-level change artifact.
+- [x] The output is factual, deterministic, and provenance-backed.
+- [x] It does not pretend to be an execution plan yet.
 
 ## Phase 3: Action Model Foundation
 
@@ -133,11 +136,11 @@ Introduce one high-value composed artifact that answers:
 Introduce a typed, provider-backed action model so SuitCode can expose real executable surfaces instead of forcing agents to infer commands.
 
 ### Capability work
-- [ ] Add shared action/result types for deterministic actions such as:
+- [x] Add shared action/result types for deterministic actions such as:
   - test execution
   - runner execution
   - build execution
-- [ ] Model action concepts explicitly, for example:
+- [x] Model action concepts explicitly, for example:
   - action kind
   - provider
   - target ID
@@ -145,27 +148,28 @@ Introduce a typed, provider-backed action model so SuitCode can expose real exec
   - working directory
   - provenance
   - dry-run capability if applicable
-- [ ] Add a way to represent what actions are available for this repository, component, runner, or test target.
+- [x] Add a way to represent what actions are available for this repository, component, runner, or test target.
+- [x] Add shared provenance to action outputs when action surfaces are introduced.
 
 ### Refactor / design hardening
-- [ ] Keep actions separate from pure intelligence outputs.
-- [ ] Do not leak raw shell/process concepts directly into MCP DTOs.
-- [ ] Introduce provider-native action abstractions instead of scattering command rendering through providers and MCP layers.
-- [ ] Enforce OO separation between:
+- [x] Keep actions separate from pure intelligence outputs.
+- [x] Do not leak raw shell/process concepts directly into MCP DTOs.
+- [x] Introduce provider-native action abstractions instead of scattering command rendering through providers and MCP layers.
+- [x] Enforce OO separation between:
   - discovery
   - context
   - execution rendering
   - execution results
 
 ### Tests / acceptance
-- [ ] Add action model validation tests.
-- [ ] Add fail-fast tests for unsupported targets.
-- [ ] Add provenance tests for action outputs.
-- [ ] Verify no generic shell-execution abstraction slips in.
+- [x] Add action model validation tests.
+- [x] Add fail-fast tests for unsupported targets.
+- [x] Add provenance tests for action outputs.
+- [x] Verify no generic shell-execution abstraction slips in.
 
 ### Done when
-- [ ] SuitCode has a typed foundation for deterministic actions.
-- [ ] Future test/build/run tools can be added without inventing ad hoc command payloads.
+- [x] SuitCode has a typed foundation for deterministic actions.
+- [x] Future test/build/run tools can be added without inventing ad hoc command payloads.
 
 ## Phase 4: Test Execution Guidance and Actions
 
@@ -176,38 +180,38 @@ Turn related tests into a deterministic executable answer:
 - optionally run them through SuitCode
 
 ### Capability work
-- [ ] Add exact run instructions for discovered test targets.
-- [ ] Add a test-target context model or tool, likely `describe_test_target` and/or `how_to_run_related_tests`.
-- [ ] Add a test action tool, likely `run_test_target`.
-- [ ] For each supported framework, return:
+- [x] Add exact run instructions for discovered test targets.
+- [x] Add a test-target context model or tool, likely `describe_test_target` and/or `how_to_run_related_tests`.
+- [x] Add a test action tool, likely `run_test_targets`.
+- [x] For each supported framework, return:
   - exact runnable command pattern
   - whether the target is authoritative or heuristic
   - narrowed file/target scope when deterministic
-- [ ] Prefer existing test tools:
+- [x] Prefer existing test tools:
   - pytest
   - jest
   - future framework-specific tools when supported
 
 ### Refactor / design hardening
-- [ ] Separate:
+- [x] Separate:
   - test discovery
   - test relation logic
   - test execution rendering
   - test execution actions
-- [ ] Keep command construction framework-specific and OO, not scattered string building.
-- [ ] Avoid provider duplication by introducing shared test execution formatting helpers where appropriate.
+- [x] Keep command construction framework-specific and OO, not scattered string building.
+- [x] Avoid provider duplication by introducing shared test execution formatting helpers where appropriate.
 
 ### Tests / acceptance
-- [ ] Add pytest authoritative run guidance coverage.
-- [ ] Add jest authoritative run guidance coverage.
-- [ ] Add `run_test_target` structured result tests.
-- [ ] Keep heuristic fallback cases clearly marked.
-- [ ] Add fail-fast tests for malformed or unsupported execution metadata.
+- [x] Add pytest authoritative run guidance coverage.
+- [x] Add jest authoritative run guidance coverage.
+- [x] Add `run_test_targets` structured result tests.
+- [x] Keep heuristic fallback cases clearly marked.
+- [x] Add fail-fast tests for malformed or unsupported execution metadata.
 
 ### Done when
-- [ ] The agent can ask how to run only the relevant tests and get a deterministic answer.
-- [ ] The agent can invoke a real test target through a provider-backed action.
-- [ ] The result distinguishes authoritative from heuristic narrowing.
+- [x] The agent can ask how to run only the relevant tests and get a deterministic answer.
+- [x] The agent can invoke a real test target through a provider-backed action.
+- [x] The result distinguishes authoritative from heuristic narrowing.
 
 ## Phase 5: Runner Context and Operational Actions
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from suitcode.mcp.action_service import ActionMcpService
 from suitcode.mcp.architecture_service import ArchitectureMcpService
 from suitcode.mcp.code_service import CodeMcpService
 from suitcode.mcp.context_service import ContextMcpService
@@ -7,7 +8,9 @@ from suitcode.mcp.errors import McpNotFoundError
 from suitcode.mcp.models import (
     AddRepositoryResult,
     AggregatorView,
+    ActionView,
     ArchitectureSnapshotView,
+    ChangeImpactView,
     ComponentContextView,
     ComponentView,
     DependencyRefView,
@@ -24,6 +27,7 @@ from suitcode.mcp.models import (
     QualityFileResultView,
     QualitySnapshotView,
     RelatedTestView,
+    RunTestTargetsView,
     RepositorySnapshotView,
     RepositorySummaryView,
     RepositorySupportView,
@@ -33,11 +37,14 @@ from suitcode.mcp.models import (
     SymbolView,
     TestsSnapshotView,
     TestDefinitionView,
+    TestTargetDescriptionView,
     WorkspaceView,
 )
 from suitcode.mcp.pagination import PaginationPolicy
 from suitcode.mcp.presenters import (
     ArchitecturePresenter,
+    ActionPresenter,
+    ChangeImpactPresenter,
     CodePresenter,
     IntelligencePresenter,
     OwnershipPresenter,
@@ -66,12 +73,14 @@ class SuitMcpService:
         self._workspace_presenter = WorkspacePresenter()
         self._repository_presenter = RepositoryPresenter()
         self._architecture_presenter = ArchitecturePresenter()
+        self._action_presenter = ActionPresenter()
         self._code_presenter = CodePresenter()
         self._test_presenter = TestPresenter()
         self._quality_presenter = QualityPresenter()
         self._ownership_presenter = OwnershipPresenter()
         self._repository_summary_presenter = RepositorySummaryPresenter()
         self._intelligence_presenter = IntelligencePresenter()
+        self._change_impact_presenter = ChangeImpactPresenter()
 
         self._workspace_service = WorkspaceMcpService(
             self._registry,
@@ -85,6 +94,11 @@ class SuitMcpService:
             self._pagination,
             self._architecture_presenter,
             self._intelligence_presenter,
+        )
+        self._action_service = ActionMcpService(
+            self._registry,
+            self._pagination,
+            self._action_presenter,
         )
         self._code_service = CodeMcpService(
             self._registry,
@@ -104,6 +118,7 @@ class SuitMcpService:
             self._registry,
             self._intelligence_presenter,
             self._repository_summary_presenter,
+            self._change_impact_presenter,
         )
 
     def list_supported_providers(self, limit: int | None = None, offset: int = 0) -> ListResult[ProviderDescriptorView]:
@@ -153,6 +168,32 @@ class SuitMcpService:
 
     def list_files(self, workspace_id: str, repository_id: str, limit: int | None = None, offset: int = 0) -> ListResult[FileView]:
         return self._architecture_service.list_files(workspace_id, repository_id, limit=limit, offset=offset)
+
+    def list_actions(
+        self,
+        workspace_id: str,
+        repository_id: str,
+        repository_rel_path: str | None = None,
+        owner_id: str | None = None,
+        component_id: str | None = None,
+        runner_id: str | None = None,
+        test_id: str | None = None,
+        action_kinds: tuple[str, ...] | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> ListResult[ActionView]:
+        return self._action_service.list_actions(
+            workspace_id,
+            repository_id,
+            repository_rel_path=repository_rel_path,
+            owner_id=owner_id,
+            component_id=component_id,
+            runner_id=runner_id,
+            test_id=test_id,
+            action_kinds=action_kinds,
+            limit=limit,
+            offset=offset,
+        )
 
     def find_symbols(
         self,
@@ -279,6 +320,23 @@ class SuitMcpService:
             owner_id=owner_id,
             limit=limit,
             offset=offset,
+        )
+
+    def describe_test_target(self, workspace_id: str, repository_id: str, test_id: str) -> TestTargetDescriptionView:
+        return self._test_service.describe_test_target(workspace_id, repository_id, test_id)
+
+    def run_test_targets(
+        self,
+        workspace_id: str,
+        repository_id: str,
+        test_ids: tuple[str, ...],
+        timeout_seconds: int = 120,
+    ) -> RunTestTargetsView:
+        return self._test_service.run_test_targets(
+            workspace_id,
+            repository_id,
+            test_ids=test_ids,
+            timeout_seconds=timeout_seconds,
         )
 
     def list_quality_providers(self, workspace_id: str, repository_id: str) -> tuple[str, ...]:
@@ -417,4 +475,28 @@ class SuitMcpService:
             reference_preview_limit=reference_preview_limit,
             dependent_preview_limit=dependent_preview_limit,
             test_preview_limit=test_preview_limit,
+        )
+
+    def analyze_change(
+        self,
+        workspace_id: str,
+        repository_id: str,
+        symbol_id: str | None = None,
+        repository_rel_path: str | None = None,
+        owner_id: str | None = None,
+        reference_preview_limit: int = 50,
+        dependent_preview_limit: int = 50,
+        test_preview_limit: int = 25,
+        runner_preview_limit: int = 25,
+    ) -> ChangeImpactView:
+        return self._context_service.analyze_change(
+            workspace_id,
+            repository_id,
+            symbol_id=symbol_id,
+            repository_rel_path=repository_rel_path,
+            owner_id=owner_id,
+            reference_preview_limit=reference_preview_limit,
+            dependent_preview_limit=dependent_preview_limit,
+            test_preview_limit=test_preview_limit,
+            runner_preview_limit=runner_preview_limit,
         )

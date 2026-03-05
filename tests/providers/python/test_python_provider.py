@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+from suitcode.core.action_models import ActionKind
 from suitcode.core.models import Component, EntityInfo, ExternalPackage, FileInfo, PackageManager, Runner, TestDefinition as SuitTestDefinition
 from suitcode.core.intelligence_models import DependencyRef
 from suitcode.core.repository import Repository
-from suitcode.core.tests.models import RelatedTestTarget, TestDiscoveryMethod
+from suitcode.core.provenance import SourceKind
+from suitcode.core.provenance_builders import heuristic_provenance
+from suitcode.core.tests.models import (
+    RelatedTestTarget,
+    TestExecutionResult as CoreTestExecutionResult,
+    TestExecutionStatus as CoreTestExecutionStatus,
+)
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
+from suitcode.providers.action_provider_base import ActionProviderBase
 from suitcode.providers.code_provider_base import CodeProviderBase
 from suitcode.providers.python import PythonProvider
 from suitcode.providers.python.models import (
@@ -47,6 +55,7 @@ class _FakeSymbolService:
 
 def test_python_provider_implements_all_provider_contracts() -> None:
     assert issubclass(PythonProvider, ArchitectureProviderBase)
+    assert issubclass(PythonProvider, ActionProviderBase)
     assert issubclass(PythonProvider, CodeProviderBase)
     assert issubclass(PythonProvider, TestProviderBase)
     assert issubclass(PythonProvider, QualityProviderBase)
@@ -57,6 +66,8 @@ def test_python_provider_returns_top_level_package_components_only(python_provid
 
     assert all(isinstance(item, Component) for item in components)
     assert {item.id for item in components} == EXPECTED_COMPONENT_IDS
+    assert all(item.provenance for item in components)
+    assert all(item.provenance[0].source_kind.value == "manifest" for item in components)
 
 
 def test_python_provider_returns_explicit_runners_only(python_provider: PythonProvider) -> None:
@@ -65,6 +76,7 @@ def test_python_provider_returns_explicit_runners_only(python_provider: PythonPr
 
     assert all(isinstance(item, Runner) for item in runners)
     assert tuple(item.id for item in runners) == EXPECTED_RUNNER_IDS
+    assert all(item.provenance for item in runners)
     assert aggregators == tuple()
 
 
@@ -77,22 +89,25 @@ def test_python_provider_returns_package_manager_external_packages_tests_and_fil
 
     assert all(isinstance(item, PackageManager) for item in package_managers)
     assert tuple(item.id for item in package_managers) == EXPECTED_PACKAGE_MANAGER_IDS
+    assert all(item.provenance for item in package_managers)
 
     assert all(isinstance(item, ExternalPackage) for item in external_packages)
     assert {item.id for item in external_packages} == EXPECTED_EXTERNAL_PACKAGE_IDS
     assert {item.id: item.version_spec for item in external_packages} == EXPECTED_EXTERNAL_VERSION_SPECS
+    assert all(item.provenance for item in external_packages)
 
     assert all(isinstance(item, SuitTestDefinition) for item in tests)
     assert tuple(item.id for item in tests) == EXPECTED_TEST_IDS
     assert {item.id: item.test_files for item in tests} == EXPECTED_TEST_FILES
+    assert all(item.provenance for item in tests)
     assert tuple(item.test_definition.id for item in discovered_tests) == EXPECTED_TEST_IDS
-    assert discovered_tests[0].discovery_method in {
-        TestDiscoveryMethod.AUTHORITATIVE_PYTEST_COLLECT,
-        TestDiscoveryMethod.HEURISTIC_CONFIG_GLOB,
-    }
-    assert discovered_tests[1].discovery_method == TestDiscoveryMethod.HEURISTIC_UNITTEST
+    assert discovered_tests[0].primary_source_kind in {SourceKind.TEST_TOOL, SourceKind.HEURISTIC}
+    assert discovered_tests[1].primary_source_kind == SourceKind.HEURISTIC
+    assert discovered_tests[0].primary_source_tool in {"pytest", None}
+    assert discovered_tests[1].primary_source_tool is None
 
     assert all(isinstance(item, FileInfo) for item in files)
+    assert all(item.provenance for item in files)
     owners = {item.repository_rel_path: item.owner_id for item in files}
     assert {path: owners[path] for path in EXPECTED_REPRESENTATIVE_FILE_OWNERS} == EXPECTED_REPRESENTATIVE_FILE_OWNERS
 
@@ -112,6 +127,26 @@ def test_python_provider_get_symbol_translates_python_symbols(python_provider: P
     assert all(isinstance(item, EntityInfo) for item in symbols)
     assert symbols[0].name == 'RepositoryManager'
     assert symbols[0].repository_rel_path == 'src/acme/core/repository.py'
+    assert symbols[0].provenance[0].source_kind.value == "lsp"
+
+
+def test_python_provider_definition_and_reference_locations_include_provenance(python_provider: PythonProvider) -> None:
+    class _FakeFileSymbolService:
+        def find_definition(self, repository_rel_path: str, line: int, column: int):
+            return (("src/acme/core/repository.py", 1, 7, 1, 30),)
+
+        def find_references(self, repository_rel_path: str, line: int, column: int, include_definition: bool = False):
+            return (("src/acme/core/repository.py", 5, 7, 1, 12),)
+
+    python_provider._file_symbol_service = _FakeFileSymbolService()  # type: ignore[assignment]
+
+    definitions = python_provider.find_definition("src/acme/core/repository.py", 1, 1)
+    references = python_provider.find_references("src/acme/core/repository.py", 1, 1)
+
+    assert definitions[0].provenance[0].source_kind.value == "lsp"
+    assert definitions[0].provenance[0].source_tool == "basedpyright"
+    assert references[0].provenance[0].source_kind.value == "lsp"
+    assert references[0].provenance[0].source_tool == "basedpyright"
 
 
 def test_repository_intelligence_wraps_registered_python_provider(python_repository: Repository) -> None:
@@ -139,4 +174,52 @@ def test_python_provider_returns_declared_component_dependencies_only(python_pro
     assert {item.target_id for item in dependencies} == EXPECTED_EXTERNAL_PACKAGE_IDS
     assert all(item.dependency_scope == "declared" for item in dependencies)
     assert dependents == tuple()
+
+
+def test_python_provider_exposes_deterministic_actions(python_provider: PythonProvider) -> None:
+    actions = python_provider.get_actions()
+
+    assert actions
+    assert all(item.provider_id == "python" for item in actions)
+    assert all(item.invocation.argv for item in actions)
+    assert all(item.provenance for item in actions)
+    assert any(item.kind == ActionKind.RUNNER_EXECUTION for item in actions)
+    assert any(item.kind == ActionKind.TEST_EXECUTION for item in actions)
+    assert any(item.kind == ActionKind.BUILD_EXECUTION for item in actions)
+
+
+def test_python_provider_describe_and_run_test_targets(python_provider: PythonProvider) -> None:
+    description = python_provider.describe_test_target("test:python:pytest:root")
+
+    assert description.test_definition.id == "test:python:pytest:root"
+    assert description.command_argv
+    assert description.provenance
+
+    class _FakeExecutionService:
+        def run_target(self, target_description, timeout_seconds: int):
+            return CoreTestExecutionResult(
+                test_id=target_description.test_definition.id,
+                status=CoreTestExecutionStatus.PASSED,
+                success=True,
+                command_argv=target_description.command_argv,
+                command_cwd=target_description.command_cwd,
+                exit_code=0,
+                duration_ms=timeout_seconds,
+                log_path=".suit/runs/tests/fake.log",
+                warning=target_description.warning,
+                output_excerpt="ok",
+                provenance=(
+                    heuristic_provenance(
+                        evidence_summary="fake execution result",
+                        evidence_paths=("tests/test_basic.py",),
+                    ),
+                ),
+            )
+
+    python_provider._test_execution_service = _FakeExecutionService()  # type: ignore[attr-defined]
+    results = python_provider.run_test_targets(("test:python:pytest:root",), timeout_seconds=30)
+
+    assert results[0].test_id == "test:python:pytest:root"
+    assert results[0].duration_ms == 30
+    assert results[0].warning == description.warning
 

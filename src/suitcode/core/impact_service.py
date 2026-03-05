@@ -7,6 +7,9 @@ from suitcode.core.code_reference_service import CodeReferenceService
 from suitcode.core.component_context_resolver import ComponentContextResolver
 from suitcode.core.intelligence_models import ImpactSummary, ImpactTarget
 from suitcode.core.ownership_index import OwnershipIndex
+from suitcode.core.provenance import ProvenanceEntry, SourceKind
+from suitcode.core.provenance_builders import derived_summary_provenance, ownership_provenance
+from suitcode.core.tests.provenance import is_authoritative_test_provenance
 from suitcode.core.tests.models import RelatedTestTarget
 
 if TYPE_CHECKING:
@@ -56,6 +59,13 @@ class ImpactService:
                 related_test_ids_preview=tuple(
                     item.match.test_definition.id for item in symbol_context.related_tests_preview[:test_preview_limit]
                 ),
+                provenance=self._impact_provenance(
+                    owner_id=symbol_context.owner.id,
+                    symbol_path=symbol_context.symbol.repository_rel_path,
+                    has_references=symbol_context.reference_count > 0,
+                    dependent_ids=dependent_ids,
+                    related_tests=symbol_context.related_tests_preview,
+                ),
             )
 
         if target.repository_rel_path is not None:
@@ -82,6 +92,13 @@ class ImpactService:
                 related_test_ids_preview=tuple(
                     item.match.test_definition.id for item in file_context.related_tests_preview[:test_preview_limit]
                 ),
+                provenance=self._impact_provenance(
+                    owner_id=file_context.owner.id,
+                    symbol_path=file_context.file_info.repository_rel_path,
+                    has_references=len(references) > 0,
+                    dependent_ids=dependent_ids,
+                    related_tests=file_context.related_tests_preview,
+                ),
             )
 
         assert target.owner_id is not None
@@ -100,9 +117,67 @@ class ImpactService:
             references_preview=references[:reference_preview_limit],
             related_test_count=len(related_tests),
             related_test_ids_preview=tuple(item.match.test_definition.id for item in related_tests[:test_preview_limit]),
+            provenance=self._impact_provenance(
+                owner_id=target.owner_id,
+                symbol_path=None,
+                has_references=len(references) > 0,
+                dependent_ids=dependent_ids,
+                related_tests=related_tests,
+            ),
         )
 
     def _component_dependents_or_empty(self, component_id: str | None) -> tuple[str, ...]:
         if component_id is None:
             return tuple()
         return self._repository.arch.get_component_dependents(component_id)
+
+    def _impact_provenance(
+        self,
+        owner_id: str,
+        symbol_path: str | None,
+        has_references: bool,
+        dependent_ids: tuple[str, ...],
+        related_tests,
+    ) -> tuple[ProvenanceEntry, ...]:
+        entries: list[ProvenanceEntry] = [
+            ownership_provenance(
+                evidence_summary=f"impact analysis anchored to owner `{owner_id}` via ownership index",
+                evidence_paths=((symbol_path,) if symbol_path is not None else ()),
+            )
+        ]
+        if dependent_ids:
+            entries.append(
+                derived_summary_provenance(
+                    source_kind=SourceKind.MANIFEST,
+                    evidence_summary=f"dependent component impact derived from {len(dependent_ids)} dependency edges",
+                    evidence_paths=(),
+                )
+            )
+        if has_references and symbol_path is not None:
+            entries.append(
+                derived_summary_provenance(
+                    source_kind=SourceKind.LSP,
+                    evidence_summary="reference impact derived from LSP definition/reference results",
+                    evidence_paths=(symbol_path,),
+                    source_tool="basedpyright" if symbol_path.lower().endswith(".py") else "typescript-language-server",
+                )
+            )
+        if related_tests:
+            paths: list[str] = []
+            authoritative = True
+            for related_test in related_tests:
+                authoritative = authoritative and is_authoritative_test_provenance(related_test.provenance)
+                for provenance in related_test.provenance:
+                    for path in provenance.evidence_paths:
+                        if path not in paths:
+                            paths.append(path)
+            entries.append(
+                ProvenanceEntry(
+                    confidence_mode=("authoritative" if authoritative else "derived"),
+                    source_kind=(SourceKind.TEST_TOOL if authoritative else SourceKind.HEURISTIC),
+                    source_tool=None,
+                    evidence_summary="related test impact derived from discovered test metadata",
+                    evidence_paths=tuple(paths[:10]),
+                )
+            )
+        return tuple(entries)

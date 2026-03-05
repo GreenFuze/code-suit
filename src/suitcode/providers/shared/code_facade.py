@@ -37,7 +37,7 @@ class CodeFacadeMixin:
 
     def find_definition(self, repository_rel_path: str, line: int, column: int) -> tuple[CodeLocation, ...]:
         return tuple(
-            self._location_tuple_to_code_location(item)
+            self._to_code_location(item, operation="definition")
             for item in self._find_definition_locations(repository_rel_path, line, column)
         )
 
@@ -49,7 +49,7 @@ class CodeFacadeMixin:
         include_definition: bool = False,
     ) -> tuple[CodeLocation, ...]:
         return tuple(
-            self._location_tuple_to_code_location(item)
+            self._to_code_location(item, operation="references")
             for item in self._find_reference_locations(
                 repository_rel_path,
                 line,
@@ -89,13 +89,11 @@ class CodeFacadeMixin:
     def _to_entity_info(self, symbol: object) -> EntityInfo:
         raise NotImplementedError
 
-    @staticmethod
-    def _location_tuple_to_code_location(location: tuple[str, int, int, int, int]) -> CodeLocation:
-        path, line_start, line_end, column_start, column_end = location
-        return CodeLocation(
-            repository_rel_path=path,
-            line_start=line_start,
-            line_end=line_end,
-            column_start=column_start,
-            column_end=column_end,
-        )
+    @abstractmethod
+    def _to_code_location(
+        self,
+        location: tuple[str, int, int, int, int],
+        *,
+        operation: str,
+    ) -> CodeLocation:
+        raise NotImplementedError

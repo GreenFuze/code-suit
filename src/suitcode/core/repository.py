@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping
 
+from suitcode.core.action_intelligence import ActionIntelligence
+from suitcode.core.action_models import ActionQuery, RepositoryAction
 from suitcode.core.intelligence_models import (
     ComponentContext,
     FileContext,
@@ -10,7 +12,9 @@ from suitcode.core.intelligence_models import (
     ImpactTarget,
     SymbolContext,
 )
+from suitcode.core.change_models import ChangeImpact, ChangeTarget
 from suitcode.core.code_reference_service import CodeReferenceService
+from suitcode.core.change_impact_service import ChangeImpactService
 from suitcode.core.component_context_resolver import ComponentContextResolver
 from suitcode.core.ownership_index import OwnershipIndex
 from suitcode.core.context_service import ContextService
@@ -27,8 +31,10 @@ from suitcode.providers.test_provider_base import TestProviderBase
 
 if TYPE_CHECKING:
     from suitcode.core.architecture.architecture_intelligence import ArchitectureIntelligence
+    from suitcode.core.action_intelligence import ActionIntelligence
     from suitcode.core.code.code_intelligence import CodeIntelligence
     from suitcode.core.quality.quality_intelligence import QualityIntelligence
+    from suitcode.core.tests.models import TestExecutionResult, TestTargetDescription
     from suitcode.core.tests.test_intelligence import TestIntelligence
     from suitcode.core.workspace import Workspace
 
@@ -102,6 +108,7 @@ class Repository:
         self._code_reference_service: CodeReferenceService | None = None
         self._context_service: ContextService | None = None
         self._impact_service: ImpactService | None = None
+        self._change_impact_service: ChangeImpactService | None = None
         self._initialize_providers(support)
 
         from suitcode.core.architecture.architecture_intelligence import ArchitectureIntelligence
@@ -113,6 +120,7 @@ class Repository:
         self._code = CodeIntelligence(self)
         self._tests = TestIntelligence(self)
         self._quality = QualityIntelligence(self)
+        self._actions = ActionIntelligence(self)
 
     def _initialize_providers(self, support: RepositorySupportResult) -> None:
         support_by_id = {item.provider_id: item for item in support.detected_providers}
@@ -210,6 +218,10 @@ class Repository:
     def quality(self) -> "QualityIntelligence":
         return self._quality
 
+    @property
+    def actions(self) -> "ActionIntelligence":
+        return self._actions
+
     def get_file_owner(self, repository_rel_path: str) -> FileOwnerInfo:
         return self._build_ownership_index().owner_for_file(repository_rel_path)
 
@@ -273,6 +285,31 @@ class Repository:
             test_preview_limit=test_preview_limit,
         )
 
+    def analyze_change(
+        self,
+        target: ChangeTarget,
+        reference_preview_limit: int = 50,
+        dependent_preview_limit: int = 50,
+        test_preview_limit: int = 25,
+        runner_preview_limit: int = 25,
+    ) -> ChangeImpact:
+        return self._build_change_impact_service().analyze_change(
+            target,
+            reference_preview_limit=reference_preview_limit,
+            dependent_preview_limit=dependent_preview_limit,
+            test_preview_limit=test_preview_limit,
+            runner_preview_limit=runner_preview_limit,
+        )
+
+    def list_actions(self, query: ActionQuery | None = None) -> tuple[RepositoryAction, ...]:
+        return self.actions.get_actions(query)
+
+    def describe_test_target(self, test_id: str) -> "TestTargetDescription":
+        return self.tests.describe_test_target(test_id)
+
+    def run_test_targets(self, test_ids: tuple[str, ...], timeout_seconds: int = 120) -> tuple["TestExecutionResult", ...]:
+        return self.tests.run_test_targets(test_ids, timeout_seconds=timeout_seconds)
+
     def _build_ownership_index(self) -> OwnershipIndex:
         if self._ownership_index_service is None:
             self._ownership_index_service = OwnershipIndex(self)
@@ -308,3 +345,14 @@ class Repository:
         if self._code_reference_service is None:
             self._code_reference_service = CodeReferenceService(self, self._build_ownership_index())
         return self._code_reference_service
+
+    def _build_change_impact_service(self) -> ChangeImpactService:
+        if self._change_impact_service is None:
+            self._change_impact_service = ChangeImpactService(
+                self,
+                self._build_ownership_index(),
+                self._build_context_service(),
+                self._build_component_context_resolver(),
+                self._build_code_reference_service(),
+            )
+        return self._change_impact_service

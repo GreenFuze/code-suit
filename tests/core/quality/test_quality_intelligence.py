@@ -6,6 +6,7 @@ import pytest
 
 from suitcode.core.quality.quality_intelligence import QualityIntelligence
 from suitcode.providers.provider_roles import ProviderRole
+from suitcode.core.provenance_builders import lsp_delta_provenance, quality_tool_provenance
 from suitcode.providers.quality_models import QualityEntityDelta, QualityFileResult
 from suitcode.providers.quality_provider_base import QualityProviderBase
 
@@ -49,10 +50,30 @@ class _QualityProvider(QualityProviderBase):
             success=True,
             message=None,
             diagnostics=tuple(),
-            entity_delta=QualityEntityDelta(),
+            entity_delta=QualityEntityDelta(
+                provenance=(
+                    lsp_delta_provenance(
+                        source_tool="fake-lsp",
+                        evidence_summary=f"delta for `{repository_rel_path}`",
+                        evidence_paths=(repository_rel_path,),
+                    ),
+                ),
+            ),
             applied_fixes=is_fix,
             content_sha_before="before",
             content_sha_after="after" if is_fix else "before",
+            provenance=(
+                quality_tool_provenance(
+                    source_tool="fake",
+                    evidence_summary=f"fake lint result for `{repository_rel_path}`",
+                    evidence_paths=(repository_rel_path,),
+                ),
+                lsp_delta_provenance(
+                    source_tool="fake-lsp",
+                    evidence_summary=f"quality result includes delta for `{repository_rel_path}`",
+                    evidence_paths=(repository_rel_path,),
+                ),
+            ),
         )
 
     def format_file(self, repository_rel_path: str) -> QualityFileResult:
@@ -64,10 +85,30 @@ class _QualityProvider(QualityProviderBase):
             success=True,
             message=None,
             diagnostics=tuple(),
-            entity_delta=QualityEntityDelta(),
+            entity_delta=QualityEntityDelta(
+                provenance=(
+                    lsp_delta_provenance(
+                        source_tool="fake-lsp",
+                        evidence_summary=f"delta for `{repository_rel_path}`",
+                        evidence_paths=(repository_rel_path,),
+                    ),
+                ),
+            ),
             applied_fixes=True,
             content_sha_before="before",
             content_sha_after="after",
+            provenance=(
+                quality_tool_provenance(
+                    source_tool="fake",
+                    evidence_summary=f"fake format result for `{repository_rel_path}`",
+                    evidence_paths=(repository_rel_path,),
+                ),
+                lsp_delta_provenance(
+                    source_tool="fake-lsp",
+                    evidence_summary=f"quality result includes delta for `{repository_rel_path}`",
+                    evidence_paths=(repository_rel_path,),
+                ),
+            ),
         )
 
 

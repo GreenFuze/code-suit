@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from suitcode.core.models import EntityInfo, make_entity_id, normalize_repository_relative_path
+from suitcode.core.provenance_builders import lsp_node_provenance
 from suitcode.providers.python.symbol_models import PythonWorkspaceSymbol
 
 
@@ -23,4 +24,11 @@ class PythonSymbolTranslator:
             column_start=symbol.column_start,
             column_end=symbol.column_end,
             signature=symbol.signature,
+            provenance=(
+                lsp_node_provenance(
+                    source_tool="basedpyright",
+                    evidence_summary="discovered from Python LSP symbol information",
+                    evidence_paths=(repository_rel_path,),
+                ),
+            ),
         )

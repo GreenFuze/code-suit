@@ -4,7 +4,13 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 from suitcode.core.models import TestDefinition
-from suitcode.core.tests.models import DiscoveredTestDefinition, RelatedTestMatch, RelatedTestTarget
+from suitcode.core.tests.models import (
+    DiscoveredTestDefinition,
+    RelatedTestMatch,
+    RelatedTestTarget,
+    TestExecutionResult,
+    TestTargetDescription,
+)
 from suitcode.providers.provider_base import ProviderBase
 
 if TYPE_CHECKING:
@@ -25,4 +31,12 @@ class TestProviderBase(ProviderBase, ABC):
 
     @abstractmethod
     def get_related_tests(self, target: RelatedTestTarget) -> tuple[RelatedTestMatch, ...]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def describe_test_target(self, test_id: str) -> TestTargetDescription:
+        raise NotImplementedError
+
+    @abstractmethod
+    def run_test_targets(self, test_ids: tuple[str, ...], timeout_seconds: int) -> tuple[TestExecutionResult, ...]:
         raise NotImplementedError
