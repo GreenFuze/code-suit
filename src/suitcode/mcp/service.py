@@ -15,6 +15,7 @@ from suitcode.mcp.models import (
     BuildProjectResultView,
     BuildTargetDescriptionView,
     ChangeImpactView,
+    ComponentDependencyEdgeView,
     ComponentContextView,
     ComponentView,
     DependencyRefView,
@@ -537,6 +538,22 @@ class SuitMcpService:
             workspace_id,
             repository_id,
             component_id,
+            limit=limit,
+            offset=offset,
+        )
+
+    def list_component_dependency_edges(
+        self,
+        workspace_id: str,
+        repository_id: str,
+        component_id: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> ListResult[ComponentDependencyEdgeView]:
+        return self._architecture_service.list_component_dependency_edges(
+            workspace_id,
+            repository_id,
+            component_id=component_id,
             limit=limit,
             offset=offset,
         )

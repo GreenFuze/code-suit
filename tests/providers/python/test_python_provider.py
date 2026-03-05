@@ -3,7 +3,7 @@ from __future__ import annotations
 from suitcode.core.action_models import ActionKind
 from suitcode.core.runner_service import RunnerService
 from suitcode.core.models import Component, EntityInfo, ExternalPackage, FileInfo, PackageManager, Runner, TestDefinition as SuitTestDefinition
-from suitcode.core.intelligence_models import DependencyRef
+from suitcode.core.intelligence_models import ComponentDependencyEdge, DependencyRef
 from suitcode.core.repository import Repository
 from suitcode.core.provenance import SourceKind
 from suitcode.core.provenance_builders import heuristic_provenance
@@ -170,9 +170,13 @@ def test_repository_related_tests_for_python_component_file(python_repository: R
 
 def test_python_provider_returns_declared_component_dependencies_only(python_provider: PythonProvider) -> None:
     dependencies = python_provider.get_component_dependencies("component:python:acme")
+    dependency_edges = python_provider.get_component_dependency_edges("component:python:acme")
     dependents = python_provider.get_component_dependents("component:python:acme")
 
     assert all(isinstance(item, DependencyRef) for item in dependencies)
+    assert all(isinstance(item, ComponentDependencyEdge) for item in dependency_edges)
+    assert all(item.source_component_id == "component:python:acme" for item in dependency_edges)
+    assert {item.target_id for item in dependency_edges} == {item.target_id for item in dependencies}
     assert {item.target_id for item in dependencies} == EXPECTED_EXTERNAL_PACKAGE_IDS
     assert all(item.dependency_scope == "declared" for item in dependencies)
     assert dependents == tuple()

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from suitcode.core.action_models import ActionKind, ActionQuery, RepositoryAction
-from suitcode.core.intelligence_models import DependencyRef
+from suitcode.core.intelligence_models import ComponentDependencyEdge
 from suitcode.core.models import Aggregator, Component, EntityInfo, ExternalPackage, FileInfo, PackageManager, Runner
 from suitcode.core.tests.models import RelatedTestMatch, RelatedTestTarget, TestExecutionResult, TestTargetDescription
 from suitcode.core.provenance_builders import manifest_provenance
@@ -84,6 +84,7 @@ class PythonProvider(
         self._manifest: PyProjectManifest | None = None
         self._analyzer: PythonWorkspaceAnalyzer | None = None
         self._component_id_index: dict[str, PythonPackageComponentAnalysis] | None = None
+        self._dependency_edges_cache: tuple[ComponentDependencyEdge, ...] | None = None
         self._symbol_service: PythonSymbolService | None = None
         self._file_symbol_service: PythonFileSymbolService | None = None
         self._test_discoverer: PythonTestDiscoverer | None = None
@@ -108,33 +109,14 @@ class PythonProvider(
     def get_files(self) -> tuple[FileInfo, ...]:
         return tuple(sorted((self._translator.to_file_info(item) for item in self._get_files()), key=lambda item: item.id))
 
-    def get_component_dependencies(self, component_id: str) -> tuple[DependencyRef, ...]:
-        if component_id not in self._component_analysis_by_id():
-            return tuple()
-        return tuple(
-            sorted(
-                (
-                    DependencyRef(
-                        target_id=self._translator.to_external_package(item).id,
-                        target_kind="external_package",
-                        dependency_scope="declared",
-                        provenance=(
-                            manifest_provenance(
-                                evidence_summary="derived from pyproject.toml project dependency metadata",
-                                evidence_paths=("pyproject.toml",),
-                            ),
-                        ),
-                    )
-                    for item in self._get_external_packages()
-                ),
-                key=lambda item: (item.target_kind, item.target_id, item.dependency_scope),
-            )
-        )
-
-    def get_component_dependents(self, component_id: str) -> tuple[str, ...]:
-        if component_id not in self._component_analysis_by_id():
-            return tuple()
-        return tuple()
+    def get_component_dependency_edges(self, component_id: str | None = None) -> tuple[ComponentDependencyEdge, ...]:
+        edges = self._all_component_dependency_edges()
+        if component_id is None:
+            return edges
+        component_index = self._component_analysis_by_id()
+        if component_id not in component_index:
+            raise ValueError(f"unknown component id: `{component_id}`")
+        return tuple(item for item in edges if item.source_component_id == component_id)
 
     def get_related_tests(self, target: RelatedTestTarget) -> tuple[RelatedTestMatch, ...]:
         discovered_tests = self.get_discovered_tests()
@@ -272,6 +254,39 @@ class PythonProvider(
                 ).items()
             }
         return self._component_id_index
+
+    def _all_component_dependency_edges(self) -> tuple[ComponentDependencyEdge, ...]:
+        if self._dependency_edges_cache is None:
+            external_packages = self._get_external_packages()
+            edges: list[ComponentDependencyEdge] = []
+            for source_component_id in sorted(self._component_analysis_by_id()):
+                for package in external_packages:
+                    edges.append(
+                        ComponentDependencyEdge(
+                            source_component_id=source_component_id,
+                            target_id=self._translator.to_external_package(package).id,
+                            target_kind="external_package",
+                            dependency_scope="declared",
+                            provenance=(
+                                manifest_provenance(
+                                    evidence_summary="derived from pyproject.toml project dependency metadata",
+                                    evidence_paths=("pyproject.toml",),
+                                ),
+                            ),
+                        )
+                    )
+            self._dependency_edges_cache = tuple(
+                sorted(
+                    edges,
+                    key=lambda item: (
+                        item.source_component_id,
+                        item.target_kind,
+                        item.target_id,
+                        item.dependency_scope,
+                    ),
+                )
+            )
+        return self._dependency_edges_cache
 
     def _get_runners(self) -> tuple[PythonRunnerAnalysis, ...]:
         return self._build_analyzer().analyze_runners()

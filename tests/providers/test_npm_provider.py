@@ -11,7 +11,7 @@ from suitcode.core.models import (
     TestDefinition as DefinitionNode,
 )
 from suitcode.core.action_models import ActionKind
-from suitcode.core.intelligence_models import DependencyRef
+from suitcode.core.intelligence_models import ComponentDependencyEdge, DependencyRef
 from suitcode.core.runner_service import RunnerService
 from suitcode.core.provenance import SourceKind
 from suitcode.core.tests.models import (
@@ -356,9 +356,13 @@ def test_repository_related_tests_for_npm_component_file(npm_repository: Reposit
 
 def test_npm_provider_returns_component_dependencies_and_dependents(npm_provider: NPMProvider) -> None:
     dependencies = npm_provider.get_component_dependencies("component:npm:@monorepo/utils")
+    dependency_edges = npm_provider.get_component_dependency_edges("component:npm:@monorepo/utils")
     dependents = npm_provider.get_component_dependents("component:npm:@monorepo/core")
 
     assert all(isinstance(item, DependencyRef) for item in dependencies)
+    assert all(isinstance(item, ComponentDependencyEdge) for item in dependency_edges)
+    assert all(item.source_component_id == "component:npm:@monorepo/utils" for item in dependency_edges)
+    assert {item.target_id for item in dependency_edges} == {item.target_id for item in dependencies}
     assert any(item.target_id == "component:npm:@monorepo/core" and item.dependency_scope == "runtime" for item in dependencies)
     assert "component:npm:@monorepo/utils" in dependents
 

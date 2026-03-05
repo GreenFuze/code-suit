@@ -25,3 +25,16 @@ def test_pagination_policy_returns_truncation_metadata() -> None:
     assert result.total == 3
     assert result.truncated is True
     assert result.next_offset == 2
+
+
+def test_component_dependency_edge_view_model() -> None:
+    from suitcode.mcp.models import ComponentDependencyEdgeView
+
+    view = ComponentDependencyEdgeView(
+        source_component_id="component:a",
+        target_id="component:b",
+        target_kind="component",
+        dependency_scope="runtime",
+        provenance=tuple(),
+    )
+    assert view.source_component_id == "component:a"

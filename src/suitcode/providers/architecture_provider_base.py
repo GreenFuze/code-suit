@@ -11,7 +11,8 @@ from suitcode.core.models import (
     PackageManager,
     Runner,
 )
-from suitcode.core.intelligence_models import DependencyRef
+from suitcode.core.dependency_projection import DependencyProjection
+from suitcode.core.intelligence_models import ComponentDependencyEdge, DependencyRef
 from suitcode.providers.provider_base import ProviderBase
 
 if TYPE_CHECKING:
@@ -47,9 +48,24 @@ class ArchitectureProviderBase(ProviderBase, ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_component_dependencies(self, component_id: str) -> tuple[DependencyRef, ...]:
+    def get_component_dependency_edges(self, component_id: str | None = None) -> tuple[ComponentDependencyEdge, ...]:
         raise NotImplementedError
 
-    @abstractmethod
+    def get_component_dependencies(self, component_id: str) -> tuple[DependencyRef, ...]:
+        self._ensure_component_known(component_id)
+        return DependencyProjection.refs_for_component(
+            self.get_component_dependency_edges(component_id),
+            component_id,
+        )
+
     def get_component_dependents(self, component_id: str) -> tuple[str, ...]:
-        raise NotImplementedError
+        self._ensure_component_known(component_id)
+        return DependencyProjection.dependents_for_component(
+            self.get_component_dependency_edges(),
+            component_id,
+        )
+
+    def _ensure_component_known(self, component_id: str) -> None:
+        known = {item.id for item in self.get_components()}
+        if component_id not in known:
+            raise ValueError(f"unknown component id: `{component_id}`")

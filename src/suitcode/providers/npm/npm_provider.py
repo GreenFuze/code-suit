@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from suitcode.core.intelligence_models import DependencyRef
+from suitcode.core.intelligence_models import ComponentDependencyEdge
 from suitcode.core.action_models import ActionKind, ActionQuery, RepositoryAction
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -99,6 +99,7 @@ class NPMProvider(
         self._workspace: PackageJsonWorkspace | None = None
         self._analyzer: NpmWorkspaceAnalyzer | None = None
         self._component_id_index: dict[str, NpmPackageAnalysis] | None = None
+        self._dependency_edges_cache: tuple[ComponentDependencyEdge, ...] | None = None
         self._symbol_service: NpmSymbolService | None = None
         self._file_symbol_service: NpmFileSymbolService | None = None
         self._quality_service: NpmQualityService | None = None
@@ -122,79 +123,14 @@ class NPMProvider(
     def get_files(self) -> tuple[FileInfo, ...]:
         return tuple(sorted((self._translator.to_file_info(item) for item in self._get_files()), key=lambda item: item.id))
 
-    def get_component_dependencies(self, component_id: str) -> tuple[DependencyRef, ...]:
-        component_index = self._component_analysis_by_id()
-        analysis = component_index.get(component_id)
-        if analysis is None:
-            return tuple()
-
-        local_components = {analysis.package_name: component_id for component_id, analysis in component_index.items()}
-        external_packages = {
-            item.package_name: self._translator.to_external_package(item).id
-            for item in self._get_external_packages()
-        }
-        dependency_refs: list[DependencyRef] = []
-        scoped_dependencies = (
-            ("runtime", analysis.manifest.dependencies.dependencies),
-            ("dev", analysis.manifest.dependencies.dev_dependencies),
-            ("peer", analysis.manifest.dependencies.peer_dependencies),
-            ("optional", analysis.manifest.dependencies.optional_dependencies),
-        )
-        for dependency_scope, dependencies in scoped_dependencies:
-            for dependency_name in sorted(dependencies):
-                if dependency_name in local_components:
-                    dependency_refs.append(
-                        DependencyRef(
-                            target_id=local_components[dependency_name],
-                            target_kind="component",
-                            dependency_scope=dependency_scope,
-                            provenance=(
-                                manifest_provenance(
-                                    evidence_summary="derived from workspace package.json dependency metadata",
-                                    evidence_paths=(analysis.manifest_path,),
-                                ),
-                            ),
-                        )
-                    )
-                    continue
-                try:
-                    target_id = external_packages[dependency_name]
-                except KeyError as exc:
-                    raise ValueError(
-                        f"workspace dependency `{dependency_name}` could not be resolved for component `{component_id}`"
-                    ) from exc
-                dependency_refs.append(
-                    DependencyRef(
-                        target_id=target_id,
-                        target_kind="external_package",
-                        dependency_scope=dependency_scope,
-                        provenance=(
-                            manifest_provenance(
-                                evidence_summary="derived from workspace package.json dependency metadata",
-                                evidence_paths=(analysis.manifest_path,),
-                            ),
-                        ),
-                    )
-                )
-        return tuple(
-            sorted(
-                dependency_refs,
-                key=lambda item: (item.target_kind, item.target_id, item.dependency_scope),
-            )
-        )
-
-    def get_component_dependents(self, component_id: str) -> tuple[str, ...]:
+    def get_component_dependency_edges(self, component_id: str | None = None) -> tuple[ComponentDependencyEdge, ...]:
+        edges = self._all_component_dependency_edges()
+        if component_id is None:
+            return edges
         component_index = self._component_analysis_by_id()
         if component_id not in component_index:
-            return tuple()
-        dependents: list[str] = []
-        for translated_id, analysis in component_index.items():
-            if translated_id == component_id:
-                continue
-            dependency_ids = {item.target_id for item in self.get_component_dependencies(translated_id)}
-            if component_id in dependency_ids:
-                dependents.append(translated_id)
-        return tuple(sorted(dependents))
+            raise ValueError(f"unknown component id: `{component_id}`")
+        return tuple(item for item in edges if item.source_component_id == component_id)
 
     def get_actions(self) -> tuple[RepositoryAction, ...]:
         return tuple(
@@ -400,6 +336,75 @@ class NPMProvider(
                 ).items()
             }
         return self._component_id_index
+
+    def _all_component_dependency_edges(self) -> tuple[ComponentDependencyEdge, ...]:
+        if self._dependency_edges_cache is None:
+            component_index = self._component_analysis_by_id()
+            local_components = {
+                analysis.package_name: translated_component_id
+                for translated_component_id, analysis in component_index.items()
+            }
+            external_packages = {
+                item.package_name: self._translator.to_external_package(item).id
+                for item in self._get_external_packages()
+            }
+            edges: list[ComponentDependencyEdge] = []
+            for source_component_id, analysis in component_index.items():
+                scoped_dependencies = (
+                    ("runtime", analysis.manifest.dependencies.dependencies),
+                    ("dev", analysis.manifest.dependencies.dev_dependencies),
+                    ("peer", analysis.manifest.dependencies.peer_dependencies),
+                    ("optional", analysis.manifest.dependencies.optional_dependencies),
+                )
+                for dependency_scope, dependencies in scoped_dependencies:
+                    for dependency_name in sorted(dependencies):
+                        if dependency_name in local_components:
+                            edges.append(
+                                ComponentDependencyEdge(
+                                    source_component_id=source_component_id,
+                                    target_id=local_components[dependency_name],
+                                    target_kind="component",
+                                    dependency_scope=dependency_scope,
+                                    provenance=(
+                                        manifest_provenance(
+                                            evidence_summary="derived from workspace package.json dependency metadata",
+                                            evidence_paths=(analysis.manifest_path,),
+                                        ),
+                                    ),
+                                )
+                            )
+                            continue
+                        target_id = external_packages.get(dependency_name)
+                        if target_id is None:
+                            raise ValueError(
+                                f"workspace dependency `{dependency_name}` could not be resolved for component `{source_component_id}`"
+                            )
+                        edges.append(
+                            ComponentDependencyEdge(
+                                source_component_id=source_component_id,
+                                target_id=target_id,
+                                target_kind="external_package",
+                                dependency_scope=dependency_scope,
+                                provenance=(
+                                    manifest_provenance(
+                                        evidence_summary="derived from workspace package.json dependency metadata",
+                                        evidence_paths=(analysis.manifest_path,),
+                                    ),
+                                ),
+                            )
+                        )
+            self._dependency_edges_cache = tuple(
+                sorted(
+                    edges,
+                    key=lambda item: (
+                        item.source_component_id,
+                        item.target_kind,
+                        item.target_id,
+                        item.dependency_scope,
+                    ),
+                )
+            )
+        return self._dependency_edges_cache
 
     def _list_file_symbols(
         self,

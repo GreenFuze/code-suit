@@ -46,6 +46,7 @@ TOOL_DESCRIPTIONS = {
     "describe_files": "Use this when you already know exact file paths and want owner, symbol, test, and quality context before opening files manually.",
     "describe_symbol_context": "Use this when you already know an exact symbol ID and want owner, definition, reference, and related-test context.",
     "get_component_dependencies": "Use this to traverse outward from one component into its internal and external dependencies.",
+    "list_component_dependency_edges": "Use this to fetch dependency edges in bulk for one component or the whole repository, with source->target and provenance.",
     "get_component_dependents": "Use this to understand the component blast radius before changing it.",
     "analyze_impact": "Use this to estimate change impact for one exact file, owner, or symbol without manual cross-referencing.",
     "analyze_change": "Use this for one high-level, provenance-backed change analysis of an exact file, symbol, or owner. It tells you what owns the target, what depends on it, which references, tests, runners, and quality gates matter, and why.",

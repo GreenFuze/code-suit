@@ -309,6 +309,14 @@ class DependencyRefView(StrictModel):
     provenance: tuple[ProvenanceView, ...]
 
 
+class ComponentDependencyEdgeView(StrictModel):
+    source_component_id: str
+    target_id: str
+    target_kind: str
+    dependency_scope: str
+    provenance: tuple[ProvenanceView, ...]
+
+
 class ComponentContextView(StrictModel):
     component: ComponentView
     owned_file_count: int

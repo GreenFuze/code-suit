@@ -543,6 +543,13 @@ def test_service_exposes_component_file_and_impact_context(service: SuitMcpServi
         limit=50,
         offset=0,
     )
+    dependency_edges = service.list_component_dependency_edges(
+        workspace_id,
+        repository_id,
+        component_id="component:npm:@monorepo/utils",
+        limit=50,
+        offset=0,
+    )
     dependents = service.get_component_dependents(
         workspace_id,
         repository_id,
@@ -570,6 +577,8 @@ def test_service_exposes_component_file_and_impact_context(service: SuitMcpServi
     assert symbol_context.definitions[0].provenance
     assert impact.references_preview[0].provenance
     assert any(item.target_id == "component:npm:@monorepo/core" for item in dependencies.items)
+    assert all(item.source_component_id == "component:npm:@monorepo/utils" for item in dependency_edges.items)
+    assert {item.target_id for item in dependency_edges.items} == {item.target_id for item in dependencies.items}
     assert "component:npm:@monorepo/utils" in dependents.items
     assert impact.target_kind == "file"
     assert change.target_kind == "file"
@@ -582,6 +591,18 @@ def test_service_exposes_component_file_and_impact_context(service: SuitMcpServi
         assert change.related_runners[0].provenance
     assert change.quality_gates
     assert change.provenance
+
+
+def test_service_list_component_dependency_edges_fails_for_unknown_component(service: SuitMcpService, opened_workspace) -> None:
+    workspace_id = opened_workspace.workspace.workspace_id
+    repository_id = opened_workspace.initial_repository.repository_id
+
+    with pytest.raises(McpNotFoundError):
+        service.list_component_dependency_edges(
+            workspace_id,
+            repository_id,
+            component_id="component:npm:missing",
+        )
 
 
 def test_service_exact_batch_and_preview_validation_fail_fast(service: SuitMcpService, opened_workspace) -> None:

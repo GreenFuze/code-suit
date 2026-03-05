@@ -3,7 +3,7 @@ from __future__ import annotations
 from suitcode.core.action_models import RepositoryAction
 from suitcode.core.code.models import CodeLocation
 from suitcode.core.change_models import ChangeImpact, QualityGateInfo, RunnerImpact, TestImpact
-from suitcode.core.intelligence_models import ComponentContext, DependencyRef, FileContext, ImpactSummary, SymbolContext
+from suitcode.core.intelligence_models import ComponentContext, ComponentDependencyEdge, DependencyRef, FileContext, ImpactSummary, SymbolContext
 from suitcode.core.models import Aggregator, Component, EntityInfo, ExternalPackage, FileInfo, PackageManager, Runner
 from suitcode.core.provenance import ProvenanceEntry, SourceKind
 from suitcode.core.provenance_builders import derived_summary_provenance
@@ -27,6 +27,7 @@ from suitcode.mcp.models import (
     BuildTargetDescriptionView,
     ComponentContextView,
     ComponentView,
+    ComponentDependencyEdgeView,
     DependencyRefView,
     DetectedProviderView,
     ExternalPackageView,
@@ -536,6 +537,15 @@ class IntelligencePresenter:
             target_kind=dependency_ref.target_kind,
             dependency_scope=dependency_ref.dependency_scope,
             provenance=tuple(self.provenance_view(item) for item in dependency_ref.provenance),
+        )
+
+    def component_dependency_edge_view(self, edge: ComponentDependencyEdge) -> ComponentDependencyEdgeView:
+        return ComponentDependencyEdgeView(
+            source_component_id=edge.source_component_id,
+            target_id=edge.target_id,
+            target_kind=edge.target_kind,
+            dependency_scope=edge.dependency_scope,
+            provenance=tuple(self.provenance_view(item) for item in edge.provenance),
         )
 
     def component_context_view(self, context: ComponentContext) -> ComponentContextView:

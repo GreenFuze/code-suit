@@ -292,58 +292,57 @@ Stop duplicating code-role plumbing per ecosystem by separating:
 - code backend mechanism
 
 ### Capability work
-- [ ] Introduce a generic LSP-backed code backend family or internal abstraction.
-- [ ] Move shared code-navigation logic out of ecosystem-specific providers.
-- [ ] Keep ecosystem-specific responsibility limited to:
+- [x] Introduce a generic LSP-backed code backend family or internal abstraction.
+- [x] Move shared code-navigation logic out of ecosystem-specific providers.
+- [x] Keep ecosystem-specific responsibility limited to:
   - server/tool resolution
   - file-type filtering
   - backend-specific initialization quirks
-- [ ] Explicitly prefer LSP before any custom code navigation implementation.
+- [x] Explicitly prefer LSP before any custom code navigation implementation.
 
 ### Refactor / design hardening
-- [ ] Refactor current `python` and `npm` code-role logic onto the shared backend abstraction.
-- [ ] Remove duplicated symbol/definition/reference translation and filtering patterns where possible.
-- [ ] Keep the abstraction narrow enough to avoid overengineering.
+- [x] Refactor current `python` and `npm` code-role logic onto the shared backend abstraction.
+- [x] Remove duplicated symbol/definition/reference translation and filtering patterns where possible.
+- [x] Keep the abstraction narrow enough to avoid overengineering.
 
 ### Tests / acceptance
-- [ ] Preserve behavior for:
+- [x] Preserve behavior for:
   - `find_symbols`
   - `list_symbols_in_file`
   - `find_definition`
   - `find_references`
-- [ ] Keep provider-specific quirks covered.
-- [ ] Preserve fail-fast behavior for missing LSP/tool resolution.
+- [x] Keep provider-specific quirks covered.
+- [x] Preserve fail-fast behavior for missing LSP/tool resolution.
 
 ### Done when
-- [ ] Adding a new LSP-backed language does not require copying the current provider code-role pattern.
+- [x] Adding a new LSP-backed language does not require copying the current provider code-role pattern.
 
-## Phase 8: Build-Graph-Native Architecture Expansion
+## Phase 8: Deterministic Dependency Projections (No Maintained Graph)
 
 ### Goal
-Move architecture deeper into real build truth for ecosystems where manifest truth is not enough.
+Answer graph-style architecture questions deterministically without maintaining a persisted repository graph.
 
 ### Capability work
-- [ ] Start with one concrete build-graph-native ecosystem at a time, for example:
-  - Cargo
-  - CMake
-  - Bazel
-  - MSBuild
-- [ ] Prefer existing standards and tooling:
-  - BSP where it is real and useful
-  - native build graph/query tools where they are the true source of truth
+- [x] Add a shared typed dependency-edge model (`source -> target`, scope, provenance).
+- [x] Add provider bulk-edge extraction for npm and python.
+- [x] Add one MCP bulk-edge tool (`list_component_dependency_edges`) to reduce per-component fanout.
+- [x] Keep existing dependency/dependent tools, but derive them from the same edge projection path.
+- [x] Keep outputs provenance-backed and deterministic.
 
 ### Refactor / design hardening
-- [ ] Keep architecture provider contracts stable.
-- [ ] Avoid mixing manifest-backed and build-graph-backed semantics without provenance distinctions.
-- [ ] Keep build-graph-native providers separate from generic parsing/index approaches.
+- [x] Keep architecture contracts stable while extending them with bulk-edge support.
+- [x] Remove duplicated provider logic by centralizing dependency/dependent projection behavior in shared/base layers.
+- [x] Enforce fail-fast for unknown component IDs and unresolved dependency targets.
+- [x] Keep no-persisted-graph policy explicit; only ad hoc projections and in-memory caches are allowed.
 
 ### Tests / acceptance
-- [ ] Add provider-specific build-graph truth tests.
-- [ ] Ensure provenance identifies build-graph-backed answers explicitly.
-- [ ] Ensure no fallback guessing is presented as equivalent truth.
+- [x] Add provider tests for npm/python bulk edge extraction and consistency with per-component dependencies.
+- [x] Add core tests for dependency-edge provenance validation.
+- [x] Add MCP tests for bulk-edge tool registration, output shape, and fail-fast unknown component behavior.
+- [x] Ensure dependency/dependent results stay consistent with bulk-edge projections.
 
 ### Done when
-- [ ] SuitCode can answer architecture questions from a real build graph in at least one additional ecosystem.
+- [x] SuitCode answers graph-style dependency questions for npm/python without any persisted graph substrate.
 
 ## Phase 9: Intelligence Observability and Token-Savings Analytics
 

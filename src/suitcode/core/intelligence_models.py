@@ -48,6 +48,52 @@ class DependencyRef(StrictModel):
         return self
 
 
+class ComponentDependencyEdge(StrictModel):
+    source_component_id: str
+    target_id: str
+    target_kind: str
+    dependency_scope: str
+    provenance: tuple[ProvenanceEntry, ...]
+
+    @field_validator("source_component_id")
+    @classmethod
+    def _validate_source_component_id(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("source_component_id must not be empty")
+        return value
+
+    @field_validator("target_id")
+    @classmethod
+    def _validate_target_id(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("target_id must not be empty")
+        return value
+
+    @field_validator("target_kind")
+    @classmethod
+    def _validate_target_kind(cls, value: str) -> str:
+        allowed = {"component", "external_package"}
+        if value not in allowed:
+            raise ValueError(f"unsupported target_kind: `{value}`")
+        return value
+
+    @field_validator("dependency_scope")
+    @classmethod
+    def _validate_dependency_scope(cls, value: str) -> str:
+        allowed = {"runtime", "dev", "peer", "optional", "declared", "test"}
+        if value not in allowed:
+            raise ValueError(f"unsupported dependency_scope: `{value}`")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_provenance(self) -> "ComponentDependencyEdge":
+        if not self.provenance:
+            raise ValueError("provenance must not be empty")
+        if any(item.source_kind == SourceKind.LSP for item in self.provenance):
+            raise ValueError("dependency provenance must not use LSP source_kind")
+        return self
+
+
 class ComponentContext(StrictModel):
     component: Component
     owned_file_count: int

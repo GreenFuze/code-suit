@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from suitcode.core.intelligence_models import DependencyRef
+from suitcode.core.intelligence_models import ComponentDependencyEdge, DependencyRef
 from suitcode.core.models import Component, EntityInfo, ExternalPackage, FileInfo, PackageManager, Runner, TestDefinition as RawTestDefinition
 from suitcode.core.models.graph_types import ComponentKind, ProgrammingLanguage
 from suitcode.core.models import TestDefinition as CoreTestDefinition
@@ -95,6 +95,25 @@ def test_dependency_ref_rejects_lsp_provenance() -> None:
     with pytest.raises(ValueError):
         DependencyRef(
             target_id="component:x",
+            target_kind="component",
+            dependency_scope="runtime",
+            provenance=(
+                ProvenanceEntry(
+                    confidence_mode=ConfidenceMode.AUTHORITATIVE,
+                    source_kind=SourceKind.LSP,
+                    source_tool="basedpyright",
+                    evidence_summary="from lsp",
+                    evidence_paths=("src/x.py",),
+                ),
+            ),
+        )
+
+
+def test_component_dependency_edge_rejects_lsp_provenance() -> None:
+    with pytest.raises(ValueError):
+        ComponentDependencyEdge(
+            source_component_id="component:x",
+            target_id="component:y",
             target_kind="component",
             dependency_scope="runtime",
             provenance=(

@@ -27,6 +27,7 @@ from suitcode.mcp.models import (
     QualityFileResultView,
     QualityProvidersView,
     ChangeImpactView,
+    ComponentDependencyEdgeView,
     RelatedTestView,
     RunTestTargetsView,
     RepositorySupportView,
@@ -448,6 +449,22 @@ def register_tools(app: FastMCP, service: SuitMcpService) -> None:
         offset: int = 0,
     ) -> ListResult[DependencyRefView]:
         return service.get_component_dependencies(workspace_id, repository_id, component_id, limit=limit, offset=offset)
+
+    @app.tool(name="list_component_dependency_edges", description=TOOL_DESCRIPTIONS["list_component_dependency_edges"], structured_output=True)
+    def list_component_dependency_edges(
+        workspace_id: str,
+        repository_id: str,
+        component_id: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> ListResult[ComponentDependencyEdgeView]:
+        return service.list_component_dependency_edges(
+            workspace_id,
+            repository_id,
+            component_id=component_id,
+            limit=limit,
+            offset=offset,
+        )
 
     @app.tool(name="get_component_dependents", description=TOOL_DESCRIPTIONS["get_component_dependents"], structured_output=True)
     def get_component_dependents(

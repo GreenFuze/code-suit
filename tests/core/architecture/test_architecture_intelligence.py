@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from suitcode.core.intelligence_models import DependencyRef
+from suitcode.core.intelligence_models import ComponentDependencyEdge
 from suitcode.core.architecture.architecture_intelligence import ArchitectureIntelligence
 from suitcode.core.models import Aggregator, Component, ExternalPackage, FileInfo, PackageManager, Runner
 from suitcode.core.models.graph_types import ComponentKind, NodeKind, ProgrammingLanguage
@@ -127,27 +127,24 @@ class _ArchitectureProvider(ArchitectureProviderBase):
             ),
         )
 
-    def get_component_dependencies(self, component_id: str):
-        if component_id != f"component:{self._suffix}":
-            return tuple()
-        return (
-            DependencyRef(
-                target_id=f"ext:{self._suffix}",
-                target_kind="external_package",
-                dependency_scope="runtime",
-                provenance=(
-                    manifest_provenance(
-                        evidence_summary="derived from fake manifest dependency metadata",
-                        evidence_paths=(f"{self._suffix}/package.json",),
-                    ),
+    def get_component_dependency_edges(self, component_id: str | None = None):
+        edge = ComponentDependencyEdge(
+            source_component_id=f"component:{self._suffix}",
+            target_id=f"ext:{self._suffix}",
+            target_kind="external_package",
+            dependency_scope="runtime",
+            provenance=(
+                manifest_provenance(
+                    evidence_summary="derived from fake manifest dependency metadata",
+                    evidence_paths=(f"{self._suffix}/package.json",),
                 ),
             ),
         )
-
-    def get_component_dependents(self, component_id: str):
+        if component_id is None:
+            return (edge,)
         if component_id != f"component:{self._suffix}":
-            return tuple()
-        return (f"component:{self._suffix}:dependent",)
+            raise ValueError(f"unknown component id: `{component_id}`")
+        return (edge,)
 
 
 def test_architecture_intelligence_concatenates_and_sorts_results() -> None:
@@ -175,4 +172,14 @@ def test_architecture_intelligence_routes_dependency_queries_to_component_owner(
     dependents = intelligence.get_component_dependents("component:a")
 
     assert dependencies[0].target_id == "ext:a"
-    assert dependents == ("component:a:dependent",)
+    assert dependents == tuple()
+
+
+def test_architecture_intelligence_lists_component_dependency_edges() -> None:
+    repo = _FakeRepository((_ArchitectureProvider(repository=None, suffix="a"),))  # type: ignore[arg-type]
+    intelligence = ArchitectureIntelligence(repo)  # type: ignore[arg-type]
+
+    edges = intelligence.get_component_dependency_edges("component:a")
+    assert len(edges) == 1
+    assert edges[0].source_component_id == "component:a"
+    assert edges[0].target_id == "ext:a"

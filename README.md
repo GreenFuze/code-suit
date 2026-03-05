@@ -79,6 +79,8 @@ Provider behavior today:
   - Answers: Which files are semantically owned in the repository model?
 - `get_component_dependencies`
   - Answers: What does this component depend on?
+- `list_component_dependency_edges`
+  - Answers: Show dependency edges in bulk (source component -> target, with scope/provenance).
 - `get_component_dependents`
   - Answers: What depends on this component?
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from suitcode.core.intelligence_models import DependencyRef
+from suitcode.core.dependency_projection import DependencyProjection
+from suitcode.core.intelligence_models import ComponentDependencyEdge, DependencyRef
 from suitcode.core.models import (
     Aggregator,
     Component,
@@ -48,18 +49,58 @@ class ArchitectureIntelligence:
     def get_files(self) -> tuple[FileInfo, ...]:
         return self._collect(lambda provider: provider.get_files())
 
-    def get_component_dependencies(self, component_id: str) -> tuple[DependencyRef, ...]:
+    def get_component_dependency_edges(self, component_id: str | None = None) -> tuple[ComponentDependencyEdge, ...]:
+        if component_id is None:
+            edges = [
+                edge
+                for provider in self.providers
+                for edge in provider.get_component_dependency_edges()
+            ]
+            return tuple(
+                sorted(
+                    edges,
+                    key=lambda item: (
+                        item.source_component_id,
+                        item.target_kind,
+                        item.target_id,
+                        item.dependency_scope,
+                    ),
+                )
+            )
+
         provider = self._provider_for_component_id(component_id)
+        edges = provider.get_component_dependency_edges(component_id)
+        invalid_edges = [item for item in edges if item.source_component_id != component_id]
+        if invalid_edges:
+            raise ValueError(
+                f"provider `{provider.__class__.descriptor().provider_id}` returned dependency edges "
+                f"with mismatched source component for `{component_id}`"
+            )
         return tuple(
             sorted(
-                provider.get_component_dependencies(component_id),
-                key=lambda item: (item.target_kind, item.target_id, item.dependency_scope),
+                edges,
+                key=lambda item: (
+                    item.source_component_id,
+                    item.target_kind,
+                    item.target_id,
+                    item.dependency_scope,
+                ),
             )
         )
 
+    def get_component_dependencies(self, component_id: str) -> tuple[DependencyRef, ...]:
+        self._provider_for_component_id(component_id)
+        return DependencyProjection.refs_for_component(
+            self.get_component_dependency_edges(component_id),
+            component_id,
+        )
+
     def get_component_dependents(self, component_id: str) -> tuple[str, ...]:
-        provider = self._provider_for_component_id(component_id)
-        return tuple(sorted(provider.get_component_dependents(component_id)))
+        self._provider_for_component_id(component_id)
+        return DependencyProjection.dependents_for_component(
+            self.get_component_dependency_edges(),
+            component_id,
+        )
 
     def _collect(self, getter):
         items = [item for provider in self.providers for item in getter(provider)]

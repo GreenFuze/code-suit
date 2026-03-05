@@ -3,6 +3,7 @@ from __future__ import annotations
 from suitcode.mcp.errors import McpNotFoundError
 from suitcode.mcp.models import (
     AggregatorView,
+    ComponentDependencyEdgeView,
     ComponentView,
     DependencyRefView,
     ExternalPackageView,
@@ -73,6 +74,22 @@ class ArchitectureMcpService:
         except ValueError as exc:
             raise McpNotFoundError(str(exc)) from exc
         items = tuple(self._intelligence_presenter.dependency_ref_view(item) for item in dependencies)
+        return self._pagination.paginate(items, limit, offset)
+
+    def list_component_dependency_edges(
+        self,
+        workspace_id: str,
+        repository_id: str,
+        component_id: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> ListResult[ComponentDependencyEdgeView]:
+        repository = self._registry.get_repository(workspace_id, repository_id)
+        try:
+            edges = repository.arch.get_component_dependency_edges(component_id)
+        except ValueError as exc:
+            raise McpNotFoundError(str(exc)) from exc
+        items = tuple(self._intelligence_presenter.component_dependency_edge_view(item) for item in edges)
         return self._pagination.paginate(items, limit, offset)
 
     def get_component_dependents(

@@ -38,6 +38,7 @@ def test_app_registers_expected_tools(app) -> None:
     assert "describe_files" in tool_names
     assert "describe_symbol_context" in tool_names
     assert "get_component_dependencies" in tool_names
+    assert "list_component_dependency_edges" in tool_names
     assert "get_component_dependents" in tool_names
     assert "analyze_impact" in tool_names
     assert "analyze_change" in tool_names
@@ -83,6 +84,9 @@ def test_app_registers_expected_tools(app) -> None:
 
     analyze_impact = next(tool for tool in tools if tool.name == "analyze_impact")
     assert "change impact" in analyze_impact.description
+
+    list_component_dependency_edges = next(tool for tool in tools if tool.name == "list_component_dependency_edges")
+    assert "dependency edges in bulk" in list_component_dependency_edges.description
 
     analyze_change = next(tool for tool in tools if tool.name == "analyze_change")
     assert "high-level" in analyze_change.description
