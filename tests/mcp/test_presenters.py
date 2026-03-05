@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from suitcode.core.change_models import ChangeImpact, QualityGateInfo, RunnerImpact, TestImpact as ChangeTestImpact
+from suitcode.core.build_service import BuildService
+from suitcode.core.runner_service import RunnerService
 from suitcode.core.workspace import Workspace
 from suitcode.core.models import EntityInfo
 from suitcode.core.code.models import CodeLocation
@@ -8,9 +10,10 @@ from suitcode.core.provenance_builders import derived_summary_provenance, lsp_lo
 from suitcode.core.provenance_builders import lsp_delta_provenance, quality_tool_provenance
 from suitcode.core.provenance import SourceKind
 from suitcode.core.tests.models import RelatedTestTarget
-from suitcode.mcp.presenters import ArchitecturePresenter, ChangeImpactPresenter, CodePresenter, ProviderPresenter, QualityPresenter, RepositoryPresenter, TestPresenter as McpTestPresenter, WorkspacePresenter
+from suitcode.mcp.presenters import ArchitecturePresenter, BuildPresenter, ChangeImpactPresenter, CodePresenter, ProviderPresenter, QualityPresenter, RepositoryPresenter, RunnerPresenter, TestPresenter as McpTestPresenter, WorkspacePresenter
 from suitcode.providers.quality_models import QualityDiagnostic, QualityEntityDelta, QualityFileResult
 from suitcode.providers.npm import NPMProvider
+from suitcode.providers.shared.action_execution import ActionExecutionResult, ActionExecutionStatus
 
 
 def test_provider_presenter_maps_descriptor() -> None:
@@ -313,3 +316,98 @@ def test_change_impact_presenter_maps_composed_artifact(npm_repo_root) -> None:
     assert view.related_runners[0].provenance
     assert view.quality_gates[0].provenance
     assert view.provenance
+
+
+def test_runner_presenter_maps_runner_context_and_execution(npm_repo_root) -> None:
+    workspace = Workspace(npm_repo_root)
+    repository = workspace.repositories[0]
+    runner_id = repository.arch.get_runners()[0].id
+    presenter = RunnerPresenter()
+
+    context = repository.describe_runner(runner_id)
+    context_view = presenter.runner_context_view(context)
+    assert context_view.runner.id == runner_id
+    assert context_view.provenance
+
+    class _FakeActionExecutionService:
+        def run(
+            self,
+            *,
+            action_id: str,
+            command_argv: tuple[str, ...],
+            command_cwd: str | None,
+            timeout_seconds: int,
+            run_group: str,
+        ) -> ActionExecutionResult:
+            return ActionExecutionResult(
+                action_id=action_id,
+                status=ActionExecutionStatus.PASSED,
+                success=True,
+                command_argv=command_argv,
+                command_cwd=command_cwd,
+                exit_code=0,
+                duration_ms=timeout_seconds,
+                log_path=".suit/runs/runners/fake.log",
+                output_excerpt="ok",
+                output="ok",
+            )
+
+    repository._runner_service = RunnerService(  # type: ignore[attr-defined]
+        repository,
+        action_execution_service=_FakeActionExecutionService(),
+    )
+    execution = repository.run_runner(runner_id, timeout_seconds=11)
+    execution_view = presenter.runner_execution_result_view(execution)
+
+    assert execution_view.runner_id == runner_id
+    assert execution_view.status == "passed"
+    assert execution_view.provenance
+
+
+def test_build_presenter_maps_build_target_and_results(npm_repo_root) -> None:
+    workspace = Workspace(npm_repo_root)
+    repository = workspace.repositories[0]
+    presenter = BuildPresenter()
+    targets = repository.list_build_targets()
+    assert targets
+    target_view = presenter.build_target_description_view(targets[0])
+    assert target_view.action_id == targets[0].action_id
+    assert target_view.provenance
+
+    class _FakeActionExecutionService:
+        def run(
+            self,
+            *,
+            action_id: str,
+            command_argv: tuple[str, ...],
+            command_cwd: str | None,
+            timeout_seconds: int,
+            run_group: str,
+        ) -> ActionExecutionResult:
+            return ActionExecutionResult(
+                action_id=action_id,
+                status=ActionExecutionStatus.FAILED,
+                success=False,
+                command_argv=command_argv,
+                command_cwd=command_cwd,
+                exit_code=2,
+                duration_ms=timeout_seconds,
+                log_path=".suit/runs/builds/fake.log",
+                output_excerpt="failed",
+                output="failed",
+            )
+
+    repository._build_service = BuildService(  # type: ignore[attr-defined]
+        repository,
+        action_execution_service=_FakeActionExecutionService(),
+    )
+    execution = repository.build_target(targets[0].action_id, timeout_seconds=14)
+    execution_view = presenter.build_execution_result_view(execution)
+    assert execution_view.status == "failed"
+    assert execution_view.provenance
+
+    project = repository.build_project(timeout_seconds=14)
+    project_view = presenter.build_project_result_view(project)
+    assert project_view.total >= 1
+    assert project_view.failed_results
+    assert project_view.provenance

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from suitcode.mcp.action_service import ActionMcpService
 from suitcode.mcp.architecture_service import ArchitectureMcpService
+from suitcode.mcp.build_service import BuildMcpService
 from suitcode.mcp.code_service import CodeMcpService
 from suitcode.mcp.context_service import ContextMcpService
 from suitcode.mcp.errors import McpNotFoundError
@@ -10,6 +11,9 @@ from suitcode.mcp.models import (
     AggregatorView,
     ActionView,
     ArchitectureSnapshotView,
+    BuildExecutionResultView,
+    BuildProjectResultView,
+    BuildTargetDescriptionView,
     ChangeImpactView,
     ComponentContextView,
     ComponentView,
@@ -32,6 +36,8 @@ from suitcode.mcp.models import (
     RepositorySummaryView,
     RepositorySupportView,
     RepositoryView,
+    RunnerContextView,
+    RunnerExecutionResultView,
     RunnerView,
     SymbolContextView,
     SymbolView,
@@ -44,6 +50,7 @@ from suitcode.mcp.pagination import PaginationPolicy
 from suitcode.mcp.presenters import (
     ArchitecturePresenter,
     ActionPresenter,
+    BuildPresenter,
     ChangeImpactPresenter,
     CodePresenter,
     IntelligencePresenter,
@@ -52,10 +59,12 @@ from suitcode.mcp.presenters import (
     QualityPresenter,
     RepositoryPresenter,
     RepositorySummaryPresenter,
+    RunnerPresenter,
     TestPresenter,
     WorkspacePresenter,
 )
 from suitcode.mcp.quality_service import QualityMcpService
+from suitcode.mcp.runner_service import RunnerMcpService
 from suitcode.mcp.state import WorkspaceRegistry
 from suitcode.mcp.test_service import TestMcpService
 from suitcode.mcp.workspace_service import WorkspaceMcpService
@@ -74,8 +83,10 @@ class SuitMcpService:
         self._repository_presenter = RepositoryPresenter()
         self._architecture_presenter = ArchitecturePresenter()
         self._action_presenter = ActionPresenter()
+        self._build_presenter = BuildPresenter()
         self._code_presenter = CodePresenter()
         self._test_presenter = TestPresenter()
+        self._runner_presenter = RunnerPresenter()
         self._quality_presenter = QualityPresenter()
         self._ownership_presenter = OwnershipPresenter()
         self._repository_summary_presenter = RepositorySummaryPresenter()
@@ -105,6 +116,11 @@ class SuitMcpService:
             self._pagination,
             self._code_presenter,
         )
+        self._build_service = BuildMcpService(
+            self._registry,
+            self._pagination,
+            self._build_presenter,
+        )
         self._test_service = TestMcpService(
             self._registry,
             self._pagination,
@@ -113,6 +129,10 @@ class SuitMcpService:
         self._quality_service = QualityMcpService(
             self._registry,
             self._quality_presenter,
+        )
+        self._runner_service = RunnerMcpService(
+            self._registry,
+            self._runner_presenter,
         )
         self._context_service = ContextMcpService(
             self._registry,
@@ -193,6 +213,58 @@ class SuitMcpService:
             action_kinds=action_kinds,
             limit=limit,
             offset=offset,
+        )
+
+    def list_build_targets(
+        self,
+        workspace_id: str,
+        repository_id: str,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> ListResult[BuildTargetDescriptionView]:
+        return self._build_service.list_build_targets(
+            workspace_id,
+            repository_id,
+            limit=limit,
+            offset=offset,
+        )
+
+    def describe_build_target(
+        self,
+        workspace_id: str,
+        repository_id: str,
+        action_id: str,
+    ) -> BuildTargetDescriptionView:
+        return self._build_service.describe_build_target(
+            workspace_id,
+            repository_id,
+            action_id=action_id,
+        )
+
+    def build_target(
+        self,
+        workspace_id: str,
+        repository_id: str,
+        action_id: str,
+        timeout_seconds: int = 300,
+    ) -> BuildExecutionResultView:
+        return self._build_service.build_target(
+            workspace_id,
+            repository_id,
+            action_id=action_id,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def build_project(
+        self,
+        workspace_id: str,
+        repository_id: str,
+        timeout_seconds: int = 300,
+    ) -> BuildProjectResultView:
+        return self._build_service.build_project(
+            workspace_id,
+            repository_id,
+            timeout_seconds=timeout_seconds,
         )
 
     def find_symbols(
@@ -336,6 +408,36 @@ class SuitMcpService:
             workspace_id,
             repository_id,
             test_ids=test_ids,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def describe_runner(
+        self,
+        workspace_id: str,
+        repository_id: str,
+        runner_id: str,
+        file_preview_limit: int = 20,
+        test_preview_limit: int = 10,
+    ) -> RunnerContextView:
+        return self._runner_service.describe_runner(
+            workspace_id,
+            repository_id,
+            runner_id=runner_id,
+            file_preview_limit=file_preview_limit,
+            test_preview_limit=test_preview_limit,
+        )
+
+    def run_runner(
+        self,
+        workspace_id: str,
+        repository_id: str,
+        runner_id: str,
+        timeout_seconds: int = 300,
+    ) -> RunnerExecutionResultView:
+        return self._runner_service.run_runner(
+            workspace_id,
+            repository_id,
+            runner_id=runner_id,
             timeout_seconds=timeout_seconds,
         )
 

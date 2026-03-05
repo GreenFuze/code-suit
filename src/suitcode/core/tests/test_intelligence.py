@@ -8,6 +8,7 @@ from suitcode.core.tests.models import (
     TestExecutionResult,
     TestTargetDescription,
 )
+from suitcode.core.validation import validate_exact_batch, validate_timeout_seconds
 from suitcode.providers.provider_roles import ProviderRole
 from suitcode.providers.test_provider_base import TestProviderBase
 
@@ -76,9 +77,8 @@ class TestIntelligence:
         return description
 
     def run_test_targets(self, test_ids: tuple[str, ...], timeout_seconds: int = 120) -> tuple[TestExecutionResult, ...]:
-        self._validate_batch(test_ids)
-        if timeout_seconds < 1 or timeout_seconds > 3600:
-            raise ValueError("timeout_seconds must be between 1 and 3600")
+        validate_exact_batch(test_ids, "test_ids")
+        validate_timeout_seconds(timeout_seconds)
 
         grouped_ids: dict[TestProviderBase, list[str]] = {}
         for test_id in test_ids:
@@ -114,18 +114,6 @@ class TestIntelligence:
             return self._provider_index_by_test_id[test_id]
         except KeyError as exc:
             raise ValueError(f"unknown test id: `{test_id}`") from exc
-
-    @staticmethod
-    def _validate_batch(test_ids: tuple[str, ...]) -> None:
-        if not test_ids:
-            raise ValueError("test_ids must not be empty")
-        if len(test_ids) > 25:
-            raise ValueError("test_ids must not contain more than 25 items")
-        if any(not item.strip() for item in test_ids):
-            raise ValueError("test_ids must not contain empty values")
-        if len(set(test_ids)) != len(test_ids):
-            raise ValueError("test_ids must not contain duplicates")
-
 
 from typing import TYPE_CHECKING
 

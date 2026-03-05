@@ -3,8 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from suitcode.core.build_service import BuildService
+from suitcode.core.runner_service import RunnerService
 from suitcode.mcp.errors import McpNotFoundError, McpUnsupportedRepositoryError, McpValidationError
 from suitcode.mcp.service import SuitMcpService
+from suitcode.providers.shared.action_execution import ActionExecutionResult, ActionExecutionStatus
 
 
 def test_service_open_workspace_and_list_repositories(service: SuitMcpService, npm_repo_root: Path) -> None:
@@ -85,6 +88,84 @@ def test_service_list_actions_and_filters(service: SuitMcpService, opened_worksp
     )
     assert test_actions.total >= 1
     assert all(item.kind == "test_execution" for item in test_actions.items)
+
+
+def test_service_lists_and_executes_build_targets(service: SuitMcpService, opened_workspace) -> None:
+    workspace_id = opened_workspace.workspace.workspace_id
+    repository_id = opened_workspace.initial_repository.repository_id
+    repository = service._registry.get_repository(workspace_id, repository_id)
+
+    targets = service.list_build_targets(workspace_id, repository_id, limit=200, offset=0)
+    assert targets.total >= 1
+    assert targets.items[0].provenance
+    action_id = targets.items[0].action_id
+
+    described = service.describe_build_target(workspace_id, repository_id, action_id=action_id)
+    assert described.action_id == action_id
+    assert described.provenance
+
+    class _FakeActionExecutionService:
+        def run(
+            self,
+            *,
+            action_id: str,
+            command_argv: tuple[str, ...],
+            command_cwd: str | None,
+            timeout_seconds: int,
+            run_group: str,
+        ) -> ActionExecutionResult:
+            return ActionExecutionResult(
+                action_id=action_id,
+                status=ActionExecutionStatus.PASSED,
+                success=True,
+                command_argv=command_argv,
+                command_cwd=command_cwd,
+                exit_code=0,
+                duration_ms=timeout_seconds,
+                log_path=".suit/runs/builds/fake.log",
+                output_excerpt="ok",
+                output="ok",
+            )
+
+    repository._build_service = BuildService(  # type: ignore[attr-defined]
+        repository,
+        action_execution_service=_FakeActionExecutionService(),
+    )
+
+    target_result = service.build_target(
+        workspace_id,
+        repository_id,
+        action_id=action_id,
+        timeout_seconds=33,
+    )
+    assert target_result.action_id == action_id
+    assert target_result.status == "passed"
+    assert target_result.duration_ms == 33
+    assert target_result.provenance
+
+    project_result = service.build_project(
+        workspace_id,
+        repository_id,
+        timeout_seconds=33,
+    )
+    assert project_result.total == targets.total
+    assert project_result.passed == targets.total
+    assert project_result.failed == 0
+    assert project_result.errors == 0
+    assert project_result.timeouts == 0
+    assert project_result.failed_results == tuple()
+    assert project_result.provenance
+
+
+def test_service_build_methods_fail_fast_for_unknown_action(service: SuitMcpService, opened_workspace) -> None:
+    workspace_id = opened_workspace.workspace.workspace_id
+    repository_id = opened_workspace.initial_repository.repository_id
+
+    with pytest.raises(McpValidationError):
+        service.describe_build_target(workspace_id, repository_id, action_id="action:missing")
+
+    with pytest.raises(McpValidationError):
+        service.build_target(workspace_id, repository_id, action_id="action:missing")
 
 
 def test_service_list_actions_validates_query(service: SuitMcpService, opened_workspace) -> None:
@@ -337,6 +418,70 @@ def test_service_describe_and_run_test_targets(service: SuitMcpService, opened_w
     assert run_result.passed == 1
     assert run_result.results[0].test_id == "test:npm:@monorepo/core"
     assert run_result.results[0].duration_ms == 25
+
+
+def test_service_describe_and_run_runner(service: SuitMcpService, opened_workspace) -> None:
+    workspace_id = opened_workspace.workspace.workspace_id
+    repository_id = opened_workspace.initial_repository.repository_id
+    repository = service._registry.get_repository(workspace_id, repository_id)
+
+    runners = service.list_runners(workspace_id, repository_id, limit=10, offset=0)
+    assert runners.total >= 1
+    runner_id = runners.items[0].id
+
+    context = service.describe_runner(workspace_id, repository_id, runner_id=runner_id)
+    assert context.runner.id == runner_id
+    assert context.action_id
+    assert context.provenance
+
+    class _FakeActionExecutionService:
+        def run(
+            self,
+            *,
+            action_id: str,
+            command_argv: tuple[str, ...],
+            command_cwd: str | None,
+            timeout_seconds: int,
+            run_group: str,
+        ) -> ActionExecutionResult:
+            return ActionExecutionResult(
+                action_id=action_id,
+                status=ActionExecutionStatus.PASSED,
+                success=True,
+                command_argv=command_argv,
+                command_cwd=command_cwd,
+                exit_code=0,
+                duration_ms=timeout_seconds,
+                log_path=".suit/runs/runners/fake.log",
+                output_excerpt="ok",
+                output="ok",
+            )
+
+    repository._runner_service = RunnerService(  # type: ignore[attr-defined]
+        repository,
+        action_execution_service=_FakeActionExecutionService(),
+    )
+    run_result = service.run_runner(
+        workspace_id,
+        repository_id,
+        runner_id=runner_id,
+        timeout_seconds=21,
+    )
+
+    assert run_result.runner_id == runner_id
+    assert run_result.status == "passed"
+    assert run_result.duration_ms == 21
+
+
+def test_service_runner_methods_fail_fast_for_unknown_runner(service: SuitMcpService, opened_workspace) -> None:
+    workspace_id = opened_workspace.workspace.workspace_id
+    repository_id = opened_workspace.initial_repository.repository_id
+
+    with pytest.raises(McpValidationError):
+        service.describe_runner(workspace_id, repository_id, runner_id="runner:missing")
+
+    with pytest.raises(McpValidationError):
+        service.run_runner(workspace_id, repository_id, runner_id="runner:missing")
 
 
 def test_service_exposes_component_file_and_impact_context(service: SuitMcpService, opened_workspace) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from suitcode.core.action_models import ActionKind
+from suitcode.core.runner_service import RunnerService
 from suitcode.core.models import Component, EntityInfo, ExternalPackage, FileInfo, PackageManager, Runner, TestDefinition as SuitTestDefinition
 from suitcode.core.intelligence_models import DependencyRef
 from suitcode.core.repository import Repository
@@ -15,6 +16,7 @@ from suitcode.providers.architecture_provider_base import ArchitectureProviderBa
 from suitcode.providers.action_provider_base import ActionProviderBase
 from suitcode.providers.code_provider_base import CodeProviderBase
 from suitcode.providers.python import PythonProvider
+from suitcode.providers.shared.action_execution import ActionExecutionResult, ActionExecutionStatus
 from suitcode.providers.python.models import (
     PythonOwnedFileAnalysis,
     PythonPackageComponentAnalysis,
@@ -222,4 +224,46 @@ def test_python_provider_describe_and_run_test_targets(python_provider: PythonPr
     assert results[0].test_id == "test:python:pytest:root"
     assert results[0].duration_ms == 30
     assert results[0].warning == description.warning
+
+
+def test_python_repository_describe_and_run_runner(python_repository: Repository) -> None:
+    runner_id = python_repository.arch.get_runners()[0].id
+    context = python_repository.describe_runner(runner_id)
+
+    assert context.runner.id == runner_id
+    assert context.action_id
+    assert context.provenance
+
+    class _FakeActionExecutionService:
+        def run(
+            self,
+            *,
+            action_id: str,
+            command_argv: tuple[str, ...],
+            command_cwd: str | None,
+            timeout_seconds: int,
+            run_group: str,
+        ) -> ActionExecutionResult:
+            return ActionExecutionResult(
+                action_id=action_id,
+                status=ActionExecutionStatus.PASSED,
+                success=True,
+                command_argv=command_argv,
+                command_cwd=command_cwd,
+                exit_code=0,
+                duration_ms=timeout_seconds,
+                log_path=".suit/runs/runners/fake.log",
+                output_excerpt="ok",
+                output="ok",
+            )
+
+    python_repository._runner_service = RunnerService(  # type: ignore[attr-defined]
+        python_repository,
+        action_execution_service=_FakeActionExecutionService(),
+    )
+    result = python_repository.run_runner(runner_id, timeout_seconds=9)
+
+    assert result.runner_id == runner_id
+    assert result.status.value == "passed"
+    assert result.duration_ms == 9
 

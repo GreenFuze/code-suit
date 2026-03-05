@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Mapping
 
 from suitcode.core.action_intelligence import ActionIntelligence
 from suitcode.core.action_models import ActionQuery, RepositoryAction
+from suitcode.core.build_service import BuildService
 from suitcode.core.intelligence_models import (
     ComponentContext,
     FileContext,
@@ -20,6 +21,7 @@ from suitcode.core.ownership_index import OwnershipIndex
 from suitcode.core.context_service import ContextService
 from suitcode.core.impact_service import ImpactService
 from suitcode.core.repository_models import FileOwnerInfo, OwnedNodeInfo
+from suitcode.core.runner_service import RunnerService
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
 from suitcode.providers.code_provider_base import CodeProviderBase
 from suitcode.providers.provider_base import ProviderBase
@@ -37,6 +39,8 @@ if TYPE_CHECKING:
     from suitcode.core.tests.models import TestExecutionResult, TestTargetDescription
     from suitcode.core.tests.test_intelligence import TestIntelligence
     from suitcode.core.workspace import Workspace
+    from suitcode.core.build_models import BuildExecutionResult, BuildProjectResult, BuildTargetDescription
+    from suitcode.core.runner_models import RunnerContext, RunnerExecutionResult
 
 
 class Repository:
@@ -109,6 +113,8 @@ class Repository:
         self._context_service: ContextService | None = None
         self._impact_service: ImpactService | None = None
         self._change_impact_service: ChangeImpactService | None = None
+        self._runner_service: RunnerService | None = None
+        self._build_service: BuildService | None = None
         self._initialize_providers(support)
 
         from suitcode.core.architecture.architecture_intelligence import ArchitectureIntelligence
@@ -310,6 +316,33 @@ class Repository:
     def run_test_targets(self, test_ids: tuple[str, ...], timeout_seconds: int = 120) -> tuple["TestExecutionResult", ...]:
         return self.tests.run_test_targets(test_ids, timeout_seconds=timeout_seconds)
 
+    def describe_runner(
+        self,
+        runner_id: str,
+        file_preview_limit: int = 20,
+        test_preview_limit: int = 10,
+    ) -> "RunnerContext":
+        return self._build_runner_service().describe_runner(
+            runner_id,
+            file_preview_limit=file_preview_limit,
+            test_preview_limit=test_preview_limit,
+        )
+
+    def run_runner(self, runner_id: str, timeout_seconds: int = 300) -> "RunnerExecutionResult":
+        return self._build_runner_service().run_runner(runner_id, timeout_seconds=timeout_seconds)
+
+    def list_build_targets(self) -> tuple["BuildTargetDescription", ...]:
+        return self._build_build_service().list_build_targets()
+
+    def describe_build_target(self, action_id: str) -> "BuildTargetDescription":
+        return self._build_build_service().describe_build_target(action_id)
+
+    def build_target(self, action_id: str, timeout_seconds: int = 300) -> "BuildExecutionResult":
+        return self._build_build_service().build_target(action_id, timeout_seconds=timeout_seconds)
+
+    def build_project(self, timeout_seconds: int = 300) -> "BuildProjectResult":
+        return self._build_build_service().build_project(timeout_seconds=timeout_seconds)
+
     def _build_ownership_index(self) -> OwnershipIndex:
         if self._ownership_index_service is None:
             self._ownership_index_service = OwnershipIndex(self)
@@ -356,3 +389,13 @@ class Repository:
                 self._build_code_reference_service(),
             )
         return self._change_impact_service
+
+    def _build_runner_service(self) -> RunnerService:
+        if self._runner_service is None:
+            self._runner_service = RunnerService(self)
+        return self._runner_service
+
+    def _build_build_service(self) -> BuildService:
+        if self._build_service is None:
+            self._build_service = BuildService(self)
+        return self._build_service

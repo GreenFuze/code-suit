@@ -18,6 +18,10 @@ def test_app_registers_expected_tools(app) -> None:
     assert "open_workspace" in tool_names
     assert "list_components" in tool_names
     assert "list_actions" in tool_names
+    assert "list_build_targets" in tool_names
+    assert "describe_build_target" in tool_names
+    assert "build_target" in tool_names
+    assert "build_project" in tool_names
     assert "find_symbols" in tool_names
     assert "list_symbols_in_file" in tool_names
     assert "get_file_owner" in tool_names
@@ -27,6 +31,8 @@ def test_app_registers_expected_tools(app) -> None:
     assert "get_related_tests" in tool_names
     assert "describe_test_target" in tool_names
     assert "run_test_targets" in tool_names
+    assert "describe_runner" in tool_names
+    assert "run_runner" in tool_names
     assert "repository_summary" in tool_names
     assert "describe_components" in tool_names
     assert "describe_files" in tool_names
@@ -52,9 +58,28 @@ def test_app_registers_expected_tools(app) -> None:
     list_actions = next(tool for tool in tools if tool.name == "list_actions")
     assert "deterministic provider-backed actions" in list_actions.description
 
+    list_build_targets = next(tool for tool in tools if tool.name == "list_build_targets")
+    assert "deterministic build actions" in list_build_targets.description
+
+    describe_build_target = next(tool for tool in tools if tool.name == "describe_build_target")
+    assert "build action ID" in describe_build_target.description
+
+    build_target = next(tool for tool in tools if tool.name == "build_target")
+    assert "bounded timeout" in build_target.description
+
+    build_project = next(tool for tool in tools if tool.name == "build_project")
+    assert "continue after failures" in build_project.description
+
     run_test_targets = next(tool for tool in tools if tool.name == "run_test_targets")
     assert "bounded timeout" in run_test_targets.description
     assert "failure snippets" in run_test_targets.description
+
+    describe_runner = next(tool for tool in tools if tool.name == "describe_runner")
+    assert "runner ID" in describe_runner.description
+    assert "ownership" in describe_runner.description
+
+    run_runner = next(tool for tool in tools if tool.name == "run_runner")
+    assert "deterministic invocation" in run_runner.description
 
     analyze_impact = next(tool for tool in tools if tool.name == "analyze_impact")
     assert "change impact" in analyze_impact.description

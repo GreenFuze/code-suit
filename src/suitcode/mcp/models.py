@@ -104,6 +104,72 @@ class RunnerView(StrictModel):
     provenance: tuple[ProvenanceView, ...]
 
 
+class RunnerContextView(StrictModel):
+    runner: RunnerView
+    action_id: str
+    provider_id: str
+    invocation: ActionInvocationView
+    primary_component: ComponentView | None = None
+    owned_file_count: int
+    owned_files_preview: tuple[FileView, ...]
+    related_test_count: int
+    related_tests_preview: tuple[RelatedTestView, ...]
+    provenance: tuple[ProvenanceView, ...]
+
+
+class RunnerExecutionResultView(StrictModel):
+    runner_id: str
+    action_id: str
+    status: str
+    success: bool
+    command_argv: tuple[str, ...]
+    command_cwd: str | None = None
+    exit_code: int | None = None
+    duration_ms: int
+    log_path: str
+    output_excerpt: str | None = None
+    provenance: tuple[ProvenanceView, ...]
+
+
+class BuildTargetDescriptionView(StrictModel):
+    action_id: str
+    name: str
+    provider_id: str
+    target_id: str
+    target_kind: str
+    owner_ids: tuple[str, ...]
+    invocation: ActionInvocationView
+    dry_run_supported: bool
+    provenance: tuple[ProvenanceView, ...]
+
+
+class BuildExecutionResultView(StrictModel):
+    action_id: str
+    target_id: str
+    target_kind: str
+    status: str
+    success: bool
+    command_argv: tuple[str, ...]
+    command_cwd: str | None = None
+    exit_code: int | None = None
+    duration_ms: int
+    log_path: str
+    output_excerpt: str | None = None
+    provenance: tuple[ProvenanceView, ...]
+
+
+class BuildProjectResultView(StrictModel):
+    timeout_seconds: int
+    total: int
+    passed: int
+    failed: int
+    errors: int
+    timeouts: int
+    succeeded_target_ids: tuple[str, ...]
+    failed_results: tuple[BuildExecutionResultView, ...]
+    provenance: tuple[ProvenanceView, ...]
+
+
 class PackageManagerView(StrictModel):
     id: str
     name: str

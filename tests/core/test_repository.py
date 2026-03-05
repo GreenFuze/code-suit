@@ -3,10 +3,14 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+import pytest
+
+from suitcode.core.build_service import BuildService
 from suitcode.core.repository import Repository
-from suitcode.core.intelligence_models import ImpactTarget
+from suitcode.core.runner_service import RunnerService
 from suitcode.core.workspace import Workspace
 from suitcode.providers.provider_roles import ProviderRole
+from suitcode.providers.shared.action_execution import ActionExecutionResult, ActionExecutionStatus
 
 
 def _make_supported_npm_repo(repo_root: Path) -> Path:
@@ -18,6 +22,15 @@ def _make_supported_npm_repo(repo_root: Path) -> Path:
     )
     (repo_root / "packages" / "app" / "package.json").write_text(
         '{"name":"@repo/app","version":"1.0.0","scripts":{"test":"jest"}}\n',
+        encoding="utf-8",
+    )
+    return repo_root
+
+
+def _make_supported_npm_repo_with_runner(repo_root: Path) -> Path:
+    _make_supported_npm_repo(repo_root)
+    (repo_root / "packages" / "app" / "package.json").write_text(
+        '{"name":"@repo/app","version":"1.0.0","scripts":{"build":"node build.js","test":"jest"}}\n',
         encoding="utf-8",
     )
     return repo_root
@@ -169,3 +182,108 @@ def test_repository_exposes_test_target_description_and_run_methods() -> None:
         result = repository.run_test_targets(("test:npm:@repo/app",), timeout_seconds=15)
         assert result[0].test_id == "test:npm:@repo/app"
         assert result[0].duration_ms == 15
+
+
+def test_repository_exposes_runner_context_and_run_methods() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        repository = Workspace(_make_supported_npm_repo_with_runner(Path(td) / "repo")).repositories[0]
+        runner_id = repository.arch.get_runners()[0].id
+
+        context = repository.describe_runner(runner_id, file_preview_limit=10, test_preview_limit=10)
+        assert context.runner.id == runner_id
+        assert context.action_id.startswith("action:npm:runner:")
+        assert context.provenance
+
+        class _FakeActionExecutionService:
+            def run(
+                self,
+                *,
+                action_id: str,
+                command_argv: tuple[str, ...],
+                command_cwd: str | None,
+                timeout_seconds: int,
+                run_group: str,
+            ) -> ActionExecutionResult:
+                return ActionExecutionResult(
+                    action_id=action_id,
+                    status=ActionExecutionStatus.PASSED,
+                    success=True,
+                    command_argv=command_argv,
+                    command_cwd=command_cwd,
+                    exit_code=0,
+                    duration_ms=timeout_seconds,
+                    log_path=".suit/runs/runners/fake.log",
+                    output_excerpt="ok",
+                    output="ok",
+                )
+
+        repository._runner_service = RunnerService(  # type: ignore[attr-defined]
+            repository,
+            action_execution_service=_FakeActionExecutionService(),
+        )
+        result = repository.run_runner(runner_id, timeout_seconds=12)
+
+        assert result.runner_id == runner_id
+        assert result.status.value == "passed"
+        assert result.duration_ms == 12
+
+
+def test_repository_exposes_build_target_and_project_methods() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        repository = Workspace(_make_supported_npm_repo_with_runner(Path(td) / "repo")).repositories[0]
+        targets = repository.list_build_targets()
+        assert len(targets) == 1
+        target = targets[0]
+        assert target.provenance
+
+        described = repository.describe_build_target(target.action_id)
+        assert described.action_id == target.action_id
+
+        class _FakeActionExecutionService:
+            def run(
+                self,
+                *,
+                action_id: str,
+                command_argv: tuple[str, ...],
+                command_cwd: str | None,
+                timeout_seconds: int,
+                run_group: str,
+            ) -> ActionExecutionResult:
+                return ActionExecutionResult(
+                    action_id=action_id,
+                    status=ActionExecutionStatus.PASSED,
+                    success=True,
+                    command_argv=command_argv,
+                    command_cwd=command_cwd,
+                    exit_code=0,
+                    duration_ms=timeout_seconds,
+                    log_path=".suit/runs/builds/fake.log",
+                    output_excerpt="ok",
+                    output="ok",
+                )
+
+        repository._build_service = BuildService(  # type: ignore[attr-defined]
+            repository,
+            action_execution_service=_FakeActionExecutionService(),
+        )
+        single_result = repository.build_target(target.action_id, timeout_seconds=18)
+        assert single_result.action_id == target.action_id
+        assert single_result.status.value == "passed"
+        assert single_result.duration_ms == 18
+        assert single_result.provenance
+
+        project_result = repository.build_project(timeout_seconds=18)
+        assert project_result.total == 1
+        assert project_result.passed == 1
+        assert project_result.failed == 0
+        assert project_result.failed_results == tuple()
+        assert project_result.succeeded_target_ids == (target.target_id,)
+        assert project_result.provenance
+
+
+def test_repository_build_project_fails_fast_without_build_targets() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        repository = Workspace(_make_supported_npm_repo(Path(td) / "repo")).repositories[0]
+        assert repository.list_build_targets() == tuple()
+        with pytest.raises(ValueError, match="no deterministic build targets"):
+            repository.build_project()

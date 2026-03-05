@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from suitcode.core.change_models import ChangeTarget
 from suitcode.core.intelligence_models import ImpactTarget
+from suitcode.core.validation import (
+    validate_change_preview_limit,
+    validate_exact_batch,
+    validate_preview_limit,
+)
 from suitcode.mcp.errors import McpNotFoundError, McpValidationError
 from suitcode.mcp.models import ChangeImpactView, ComponentContextView, FileContextView, ImpactSummaryView, RepositorySummaryView, SymbolContextView
 from suitcode.mcp.presenters import ChangeImpactPresenter, IntelligencePresenter, RepositorySummaryPresenter
@@ -27,8 +32,7 @@ class ContextMcpService:
         repository_id: str,
         preview_limit: int = 10,
     ) -> RepositorySummaryView:
-        if preview_limit < 1 or preview_limit > 25:
-            raise McpValidationError("preview_limit must be between 1 and 25")
+        validate_preview_limit(preview_limit, "preview_limit", max_value=25, error_cls=McpValidationError)
         repository = self._registry.get_repository(workspace_id, repository_id)
         return self._repository_summary_presenter.summary_view(repository, preview_limit)
 
@@ -42,11 +46,11 @@ class ContextMcpService:
         dependent_preview_limit: int = 20,
         test_preview_limit: int = 10,
     ) -> tuple[ComponentContextView, ...]:
-        self._validate_exact_batch(component_ids, "component_ids")
-        self._validate_preview_limit(file_preview_limit, "file_preview_limit")
-        self._validate_preview_limit(dependency_preview_limit, "dependency_preview_limit")
-        self._validate_preview_limit(dependent_preview_limit, "dependent_preview_limit")
-        self._validate_preview_limit(test_preview_limit, "test_preview_limit")
+        validate_exact_batch(component_ids, "component_ids", error_cls=McpValidationError)
+        validate_preview_limit(file_preview_limit, "file_preview_limit", error_cls=McpValidationError)
+        validate_preview_limit(dependency_preview_limit, "dependency_preview_limit", error_cls=McpValidationError)
+        validate_preview_limit(dependent_preview_limit, "dependent_preview_limit", error_cls=McpValidationError)
+        validate_preview_limit(test_preview_limit, "test_preview_limit", error_cls=McpValidationError)
         repository = self._registry.get_repository(workspace_id, repository_id)
         try:
             contexts = repository.describe_components(
@@ -68,9 +72,9 @@ class ContextMcpService:
         symbol_preview_limit: int = 20,
         test_preview_limit: int = 10,
     ) -> tuple[FileContextView, ...]:
-        self._validate_exact_batch(repository_rel_paths, "repository_rel_paths")
-        self._validate_preview_limit(symbol_preview_limit, "symbol_preview_limit")
-        self._validate_preview_limit(test_preview_limit, "test_preview_limit")
+        validate_exact_batch(repository_rel_paths, "repository_rel_paths", error_cls=McpValidationError)
+        validate_preview_limit(symbol_preview_limit, "symbol_preview_limit", error_cls=McpValidationError)
+        validate_preview_limit(test_preview_limit, "test_preview_limit", error_cls=McpValidationError)
         repository = self._registry.get_repository(workspace_id, repository_id)
         try:
             contexts = repository.describe_files(
@@ -90,8 +94,8 @@ class ContextMcpService:
         reference_preview_limit: int = 20,
         test_preview_limit: int = 10,
     ) -> SymbolContextView:
-        self._validate_preview_limit(reference_preview_limit, "reference_preview_limit")
-        self._validate_preview_limit(test_preview_limit, "test_preview_limit")
+        validate_preview_limit(reference_preview_limit, "reference_preview_limit", error_cls=McpValidationError)
+        validate_preview_limit(test_preview_limit, "test_preview_limit", error_cls=McpValidationError)
         repository = self._registry.get_repository(workspace_id, repository_id)
         try:
             context = repository.describe_symbol_context(
@@ -114,9 +118,9 @@ class ContextMcpService:
         dependent_preview_limit: int = 20,
         test_preview_limit: int = 20,
     ) -> ImpactSummaryView:
-        self._validate_preview_limit(reference_preview_limit, "reference_preview_limit")
-        self._validate_preview_limit(dependent_preview_limit, "dependent_preview_limit")
-        self._validate_preview_limit(test_preview_limit, "test_preview_limit")
+        validate_preview_limit(reference_preview_limit, "reference_preview_limit", error_cls=McpValidationError)
+        validate_preview_limit(dependent_preview_limit, "dependent_preview_limit", error_cls=McpValidationError)
+        validate_preview_limit(test_preview_limit, "test_preview_limit", error_cls=McpValidationError)
         repository = self._registry.get_repository(workspace_id, repository_id)
         try:
             target = ImpactTarget(
@@ -146,10 +150,10 @@ class ContextMcpService:
         test_preview_limit: int = 25,
         runner_preview_limit: int = 25,
     ) -> ChangeImpactView:
-        self._validate_change_preview_limit(reference_preview_limit, "reference_preview_limit")
-        self._validate_change_preview_limit(dependent_preview_limit, "dependent_preview_limit")
-        self._validate_change_preview_limit(test_preview_limit, "test_preview_limit")
-        self._validate_change_preview_limit(runner_preview_limit, "runner_preview_limit")
+        validate_change_preview_limit(reference_preview_limit, "reference_preview_limit", error_cls=McpValidationError)
+        validate_change_preview_limit(dependent_preview_limit, "dependent_preview_limit", error_cls=McpValidationError)
+        validate_change_preview_limit(test_preview_limit, "test_preview_limit", error_cls=McpValidationError)
+        validate_change_preview_limit(runner_preview_limit, "runner_preview_limit", error_cls=McpValidationError)
         repository = self._registry.get_repository(workspace_id, repository_id)
         try:
             target = ChangeTarget(
@@ -167,24 +171,3 @@ class ContextMcpService:
         except ValueError as exc:
             raise McpValidationError(str(exc)) from exc
         return self._change_impact_presenter.change_impact_view(impact)
-
-    @staticmethod
-    def _validate_exact_batch(items: tuple[str, ...], field_name: str) -> None:
-        if not items:
-            raise McpValidationError(f"{field_name} must not be empty")
-        if len(items) > 25:
-            raise McpValidationError(f"{field_name} must not contain more than 25 items")
-        if any(not item.strip() for item in items):
-            raise McpValidationError(f"{field_name} must not contain empty values")
-        if len(set(items)) != len(items):
-            raise McpValidationError(f"{field_name} must not contain duplicates")
-
-    @staticmethod
-    def _validate_preview_limit(value: int, field_name: str) -> None:
-        if value < 1 or value > 50:
-            raise McpValidationError(f"{field_name} must be between 1 and 50")
-
-    @staticmethod
-    def _validate_change_preview_limit(value: int, field_name: str) -> None:
-        if value < 1 or value > 100:
-            raise McpValidationError(f"{field_name} must be between 1 and 100")

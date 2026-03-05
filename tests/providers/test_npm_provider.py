@@ -12,6 +12,7 @@ from suitcode.core.models import (
 )
 from suitcode.core.action_models import ActionKind
 from suitcode.core.intelligence_models import DependencyRef
+from suitcode.core.runner_service import RunnerService
 from suitcode.core.provenance import SourceKind
 from suitcode.core.tests.models import (
     RelatedTestTarget,
@@ -25,6 +26,7 @@ from suitcode.providers.action_provider_base import ActionProviderBase
 from suitcode.providers.code_provider_base import CodeProviderBase
 from suitcode.providers.npm import NPMProvider
 from suitcode.providers.npm.quality_models import NpmQualityEntityDelta, NpmQualityOperationResult
+from suitcode.providers.shared.action_execution import ActionExecutionResult, ActionExecutionStatus
 from suitcode.providers.test_provider_base import TestProviderBase
 from suitcode.providers.quality_models import QualityFileResult
 from suitcode.providers.quality_provider_base import QualityProviderBase
@@ -407,3 +409,45 @@ def test_npm_provider_describe_and_run_test_targets(npm_provider: NPMProvider) -
     assert results[0].test_id == "test:npm:@monorepo/core"
     assert results[0].duration_ms == 45
     assert results[0].warning == description.warning
+
+
+def test_npm_repository_describe_and_run_runner(npm_repository: Repository) -> None:
+    runner_id = npm_repository.arch.get_runners()[0].id
+    context = npm_repository.describe_runner(runner_id)
+
+    assert context.runner.id == runner_id
+    assert context.action_id
+    assert context.provenance
+
+    class _FakeActionExecutionService:
+        def run(
+            self,
+            *,
+            action_id: str,
+            command_argv: tuple[str, ...],
+            command_cwd: str | None,
+            timeout_seconds: int,
+            run_group: str,
+        ) -> ActionExecutionResult:
+            return ActionExecutionResult(
+                action_id=action_id,
+                status=ActionExecutionStatus.PASSED,
+                success=True,
+                command_argv=command_argv,
+                command_cwd=command_cwd,
+                exit_code=0,
+                duration_ms=timeout_seconds,
+                log_path=".suit/runs/runners/fake.log",
+                output_excerpt="ok",
+                output="ok",
+            )
+
+    npm_repository._runner_service = RunnerService(  # type: ignore[attr-defined]
+        npm_repository,
+        action_execution_service=_FakeActionExecutionService(),
+    )
+    result = npm_repository.run_runner(runner_id, timeout_seconds=16)
+
+    assert result.runner_id == runner_id
+    assert result.status.value == "passed"
+    assert result.duration_ms == 16

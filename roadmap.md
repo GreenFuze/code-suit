@@ -219,33 +219,33 @@ Turn related tests into a deterministic executable answer:
 Make runners first-class operational intelligence and executable surfaces rather than just listed nodes.
 
 ### Capability work
-- [ ] Add runner context, likely `describe_runner`.
-- [ ] Answer:
+- [x] Add runner context, likely `describe_runner`.
+- [x] Answer:
   - what this runner is
   - what component owns it
   - what files back it
   - what tests relate to it
   - how it is invoked
-- [ ] Add runner action tooling, likely `run_runner`.
-- [ ] Ensure actions expose exact invocations for:
+- [x] Add runner action tooling, likely `run_runner`.
+- [x] Ensure actions expose exact invocations for:
   - npm scripts / workspace runners
   - python entry-point runners
 
 ### Refactor / design hardening
-- [ ] Centralize runner ownership and entrypoint resolution logic.
-- [ ] Avoid duplicate runner-context assembly between providers.
-- [ ] Keep architecture metadata and executable invocation semantics separated cleanly.
-- [ ] Ensure provider-native runner execution is modeled, not improvised per call site.
+- [x] Centralize runner ownership and entrypoint resolution logic.
+- [x] Avoid duplicate runner-context assembly between providers.
+- [x] Keep architecture metadata and executable invocation semantics separated cleanly.
+- [x] Ensure provider-native runner execution is modeled, not improvised per call site.
 
 ### Tests / acceptance
-- [ ] Add npm runner context and execution tests.
-- [ ] Add python runner context and execution tests.
-- [ ] Add fail-fast coverage for unknown runner IDs.
-- [ ] Verify no duplicated runner-resolution logic across providers.
+- [x] Add npm runner context and execution tests.
+- [x] Add python runner context and execution tests.
+- [x] Add fail-fast coverage for unknown runner IDs.
+- [x] Verify no duplicated runner-resolution logic across providers.
 
 ### Done when
-- [ ] Runner questions no longer require combining multiple separate tools manually.
-- [ ] The agent can invoke known runner targets deterministically.
+- [x] Runner questions no longer require combining multiple separate tools manually.
+- [x] The agent can invoke known runner targets deterministically.
 
 ## Phase 6: Build and Project Actions
 
@@ -253,13 +253,13 @@ Make runners first-class operational intelligence and executable surfaces rather
 Expose real build/project actions so the agent does not have to guess how to build or validate the project.
 
 ### Capability work
-- [ ] Add project/build action discovery, likely `list_project_actions` and/or provider-specific action discovery under a generic action model.
-- [ ] Add build action tooling, likely `build_project` and `build_target`.
-- [ ] Prefer existing build/system tools, for example:
+- [x] Add project/build action discovery, likely `list_project_actions` and/or provider-specific action discovery under a generic action model.
+- [x] Add build action tooling, likely `build_project` and `build_target`.
+- [x] Prefer existing build/system tools, for example:
   - npm workspace build scripts where authoritative
   - python project build tools only where there is a real deterministic build surface
   - future BSP/build-graph integrations where available
-- [ ] Return structured action results:
+- [x] Return structured action results:
   - status
   - command used
   - working directory
@@ -267,22 +267,22 @@ Expose real build/project actions so the agent does not have to guess how to bui
   - provenance
 
 ### Refactor / design hardening
-- [ ] Keep build actions provider-backed.
-- [ ] Do not implement guessed best-effort build commands.
-- [ ] Separate:
+- [x] Keep build actions provider-backed.
+- [x] Do not implement guessed best-effort build commands.
+- [x] Separate:
   - action discovery
   - action execution
   - action result interpretation
 
 ### Tests / acceptance
-- [ ] Add deterministic build-action discovery tests.
-- [ ] Add provider-specific build action tests.
-- [ ] Add fail-fast tests for unsupported repositories or targets.
-- [ ] Verify no generic shell-wrapper behavior.
+- [x] Add deterministic build-action discovery tests.
+- [x] Add provider-specific build action tests.
+- [x] Add fail-fast tests for unsupported repositories or targets.
+- [x] Verify no generic shell-wrapper behavior.
 
 ### Done when
-- [ ] The agent can ask how to build this project or target and get a deterministic answer.
-- [ ] The agent can invoke that build through SuitCode when supported.
+- [x] The agent can ask how to build this project or target and get a deterministic answer.
+- [x] The agent can invoke that build through SuitCode when supported.
 
 ## Phase 7: Generic LSP Backend Family
 
@@ -345,6 +345,48 @@ Move architecture deeper into real build truth for ecosystems where manifest tru
 ### Done when
 - [ ] SuitCode can answer architecture questions from a real build graph in at least one additional ecosystem.
 
+## Phase 9: Intelligence Observability and Token-Savings Analytics
+
+### Goal
+Measure how much SuitCode helps agents, with a specific focus on token savings, tool adoption, and inefficient tool usage patterns.
+
+### Capability work
+- [ ] Add analytics event capture for all MCP tool calls.
+- [ ] Persist analytics locally under repository `.suit/analytics/`.
+- [ ] Track per-call metadata:
+  - tool name
+  - workspace/repository scope
+  - full arguments
+  - output excerpt metadata
+  - status and error class
+  - duration
+  - payload size
+- [ ] Add token estimation and a first-class KPI for estimated token savings.
+- [ ] Mark savings estimates with confidence levels (`high`, `medium`, `low`) based on evidence quality.
+- [ ] Detect and report underused or unused tools.
+- [ ] Detect and report inefficient tool call patterns, including:
+  - repeated duplicate calls
+  - pagination thrash
+  - broad exploratory calls where exact tools should have been used
+
+### Refactor / design hardening
+- [ ] Add one instrumentation layer around MCP tool registration, instead of per-tool logging code.
+- [ ] Keep analytics logic in dedicated modules/services, not spread across MCP endpoints.
+- [ ] Keep analytics schemas typed and versioned.
+- [ ] Reuse shared validation/helpers so analytics additions do not duplicate existing logic.
+
+### Tests / acceptance
+- [ ] Add unit tests for analytics models and event validation.
+- [ ] Add unit tests for token estimation and savings aggregation.
+- [ ] Add unit tests for inefficient-call detectors.
+- [ ] Add MCP integration tests proving all registered tools emit analytics events.
+- [ ] Add fail-fast tests for invalid analytics config/storage/schema.
+
+### Done when
+- [ ] SuitCode can produce deterministic usage summaries per tool.
+- [ ] SuitCode can produce estimated token-savings reports.
+- [ ] SuitCode can report unused tools and top inefficient call patterns.
+
 ## Deferred / Not Now
 
 - [ ] Graph DB / persisted graph as a product direction
@@ -354,6 +396,7 @@ Move architecture deeper into real build truth for ecosystems where manifest tru
 - [ ] richer provenance fields like command hashes or repo revision binding unless a real use case demands them
 - [ ] full build-truth claims for ecosystems that are still coarse today
 - [ ] generic shell-execution MCP tools
+- [ ] external LLM/client token log correlation for high-fidelity savings validation
 
 ## README Direction
 

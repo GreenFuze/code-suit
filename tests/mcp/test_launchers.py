@@ -10,8 +10,8 @@ def test_run_mcp_bat_contains_expected_defaults() -> None:
     content = Path("run_mcp.bat").read_text(encoding="utf-8")
 
     assert "suitcode.mcp.server" in content
-    assert "--transport http" in content
-    assert "--host 127.0.0.1" in content
+    assert "--transport" not in content
+    assert "--host" not in content
     assert "--port 8000" not in content
     assert "%*" in content
     assert ".venv\\Scripts\\python.exe" in content
@@ -21,8 +21,8 @@ def test_run_mcp_sh_contains_expected_defaults() -> None:
     content = Path("run_mcp.sh").read_text(encoding="utf-8")
 
     assert "suitcode.mcp.server" in content
-    assert "--transport http" in content
-    assert "--host 127.0.0.1" in content
+    assert "--transport" not in content
+    assert "--host" not in content
     assert "--port 8000" not in content
     assert '"$@"' in content
     assert ".venv/bin/python" in content

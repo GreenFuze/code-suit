@@ -5,7 +5,7 @@ from pathlib import Path
 from suitcode.core.models import TestDefinition as CoreTestDefinition, TestFramework as CoreTestFramework
 from suitcode.core.provenance_builders import heuristic_provenance, test_tool_provenance as make_test_tool_provenance
 from suitcode.core.tests.models import TestExecutionStatus as ExecutionStatus, TestTargetDescription as TargetDescription
-from suitcode.providers.shared.test_execution.process import ProcessExecutionResult
+from suitcode.providers.shared.action_execution import ActionExecutionService, ProcessExecutionResult
 from suitcode.providers.shared.test_execution.service import TestExecutionService as ExecutionService
 from suitcode.providers.shared.test_execution.snippets import FailureSnippetExtractor
 
@@ -91,10 +91,15 @@ def test_test_execution_service_writes_logs_and_marks_failed_status(tmp_path: Pa
                 duration_ms=12,
             )
 
-    service = ExecutionService(
+    action_execution_service = ActionExecutionService(
         repository_root=repository_root,
         suit_dir=suit_dir,
         process_executor=_FakeProcessExecutor(),  # type: ignore[arg-type]
+    )
+    service = ExecutionService(
+        repository_root=repository_root,
+        suit_dir=suit_dir,
+        action_execution_service=action_execution_service,
     )
     result = service.run_target(_description(is_authoritative=False), timeout_seconds=30)
 
@@ -122,10 +127,15 @@ def test_test_execution_service_timeout_sets_timeout_status(tmp_path: Path) -> N
                 duration_ms=1000,
             )
 
-    service = ExecutionService(
+    action_execution_service = ActionExecutionService(
         repository_root=repository_root,
         suit_dir=suit_dir,
         process_executor=_TimeoutProcessExecutor(),  # type: ignore[arg-type]
+    )
+    service = ExecutionService(
+        repository_root=repository_root,
+        suit_dir=suit_dir,
+        action_execution_service=action_execution_service,
     )
     result = service.run_target(_description(), timeout_seconds=1)
 

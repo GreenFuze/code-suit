@@ -7,6 +7,9 @@ from suitcode.mcp.models import (
     AddRepositoryResult,
     AggregatorView,
     ActionView,
+    BuildExecutionResultView,
+    BuildProjectResultView,
+    BuildTargetDescriptionView,
     CloseWorkspaceResult,
     ComponentView,
     ComponentContextView,
@@ -29,6 +32,8 @@ from suitcode.mcp.models import (
     RepositorySupportView,
     RepositorySummaryView,
     RepositoryView,
+    RunnerContextView,
+    RunnerExecutionResultView,
     RunnerView,
     SymbolContextView,
     SymbolView,
@@ -129,6 +134,58 @@ def register_tools(app: FastMCP, service: SuitMcpService) -> None:
             action_kinds=action_kinds,
             limit=limit,
             offset=offset,
+        )
+
+    @app.tool(name="list_build_targets", description=TOOL_DESCRIPTIONS["list_build_targets"], structured_output=True)
+    def list_build_targets(
+        workspace_id: str,
+        repository_id: str,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> ListResult[BuildTargetDescriptionView]:
+        return service.list_build_targets(
+            workspace_id,
+            repository_id,
+            limit=limit,
+            offset=offset,
+        )
+
+    @app.tool(name="describe_build_target", description=TOOL_DESCRIPTIONS["describe_build_target"], structured_output=True)
+    def describe_build_target(
+        workspace_id: str,
+        repository_id: str,
+        action_id: str,
+    ) -> BuildTargetDescriptionView:
+        return service.describe_build_target(
+            workspace_id,
+            repository_id,
+            action_id=action_id,
+        )
+
+    @app.tool(name="build_target", description=TOOL_DESCRIPTIONS["build_target"], structured_output=True)
+    def build_target(
+        workspace_id: str,
+        repository_id: str,
+        action_id: str,
+        timeout_seconds: int = 300,
+    ) -> BuildExecutionResultView:
+        return service.build_target(
+            workspace_id,
+            repository_id,
+            action_id=action_id,
+            timeout_seconds=timeout_seconds,
+        )
+
+    @app.tool(name="build_project", description=TOOL_DESCRIPTIONS["build_project"], structured_output=True)
+    def build_project(
+        workspace_id: str,
+        repository_id: str,
+        timeout_seconds: int = 300,
+    ) -> BuildProjectResultView:
+        return service.build_project(
+            workspace_id,
+            repository_id,
+            timeout_seconds=timeout_seconds,
         )
 
     @app.tool(name="find_symbols", description=TOOL_DESCRIPTIONS["find_symbols"], structured_output=True)
@@ -266,6 +323,36 @@ def register_tools(app: FastMCP, service: SuitMcpService) -> None:
             workspace_id,
             repository_id,
             test_ids=test_ids,
+            timeout_seconds=timeout_seconds,
+        )
+
+    @app.tool(name="describe_runner", description=TOOL_DESCRIPTIONS["describe_runner"], structured_output=True)
+    def describe_runner(
+        workspace_id: str,
+        repository_id: str,
+        runner_id: str,
+        file_preview_limit: int = 20,
+        test_preview_limit: int = 10,
+    ) -> RunnerContextView:
+        return service.describe_runner(
+            workspace_id,
+            repository_id,
+            runner_id=runner_id,
+            file_preview_limit=file_preview_limit,
+            test_preview_limit=test_preview_limit,
+        )
+
+    @app.tool(name="run_runner", description=TOOL_DESCRIPTIONS["run_runner"], structured_output=True)
+    def run_runner(
+        workspace_id: str,
+        repository_id: str,
+        runner_id: str,
+        timeout_seconds: int = 300,
+    ) -> RunnerExecutionResultView:
+        return service.run_runner(
+            workspace_id,
+            repository_id,
+            runner_id=runner_id,
             timeout_seconds=timeout_seconds,
         )
 
