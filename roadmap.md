@@ -350,9 +350,9 @@ Answer graph-style architecture questions deterministically without maintaining 
 Measure how much SuitCode helps agents, with a specific focus on token savings, tool adoption, and inefficient tool usage patterns.
 
 ### Capability work
-- [ ] Add analytics event capture for all MCP tool calls.
-- [ ] Persist analytics locally under repository `.suit/analytics/`.
-- [ ] Track per-call metadata:
+- [x] Add analytics event capture for all MCP tool calls.
+- [x] Persist analytics locally under repository `.suit/analytics/`.
+- [x] Track per-call metadata:
   - tool name
   - workspace/repository scope
   - full arguments
@@ -360,31 +360,59 @@ Measure how much SuitCode helps agents, with a specific focus on token savings, 
   - status and error class
   - duration
   - payload size
-- [ ] Add token estimation and a first-class KPI for estimated token savings.
-- [ ] Mark savings estimates with confidence levels (`high`, `medium`, `low`) based on evidence quality.
-- [ ] Detect and report underused or unused tools.
-- [ ] Detect and report inefficient tool call patterns, including:
+- [x] Add token estimation and a first-class KPI for estimated token savings.
+- [x] Mark savings estimates with confidence levels (`high`, `medium`, `low`) based on evidence quality.
+- [x] Detect and report underused or unused tools.
+- [x] Detect and report inefficient tool call patterns, including:
   - repeated duplicate calls
   - pagination thrash
   - broad exploratory calls where exact tools should have been used
+- [x] Add side script analytics analyzer for usage/savings/inefficiency reporting.
+- [x] Add benchmark harness scaffold and benchmark report output contract.
 
 ### Refactor / design hardening
-- [ ] Add one instrumentation layer around MCP tool registration, instead of per-tool logging code.
-- [ ] Keep analytics logic in dedicated modules/services, not spread across MCP endpoints.
-- [ ] Keep analytics schemas typed and versioned.
-- [ ] Reuse shared validation/helpers so analytics additions do not duplicate existing logic.
+- [x] Add one instrumentation layer around MCP tool registration, instead of per-tool logging code.
+- [x] Keep analytics logic in dedicated modules/services, not spread across MCP endpoints.
+- [x] Keep analytics schemas typed and versioned.
+- [x] Reuse shared validation/helpers so analytics additions do not duplicate existing logic.
 
 ### Tests / acceptance
-- [ ] Add unit tests for analytics models and event validation.
-- [ ] Add unit tests for token estimation and savings aggregation.
-- [ ] Add unit tests for inefficient-call detectors.
-- [ ] Add MCP integration tests proving all registered tools emit analytics events.
-- [ ] Add fail-fast tests for invalid analytics config/storage/schema.
+- [x] Add unit tests for analytics models and event validation.
+- [x] Add unit tests for token estimation and savings aggregation.
+- [x] Add unit tests for inefficient-call detectors.
+- [x] Add MCP integration tests proving all registered tools emit analytics events.
+- [x] Add fail-fast tests for invalid analytics config/storage/schema.
 
 ### Done when
-- [ ] SuitCode can produce deterministic usage summaries per tool.
-- [ ] SuitCode can produce estimated token-savings reports.
-- [ ] SuitCode can report unused tools and top inefficient call patterns.
+- [x] SuitCode can produce deterministic usage summaries per tool.
+- [x] SuitCode can produce estimated token-savings reports.
+- [x] SuitCode can report unused tools and top inefficient call patterns.
+
+## Phase 10: Refactor Hardening (Low-Risk Dedup)
+
+### Goal
+Reduce duplication and keep object boundaries clean without changing public MCP contracts.
+
+### Capability work
+- [x] Keep behavior stable while deduplicating repeated provider internals.
+- [x] Keep fail-fast behavior and deterministic action semantics unchanged.
+
+### Refactor / design hardening
+- [x] Extract shared deterministic test-target runtime flow for providers.
+- [x] Extract shared quality file pipeline for path normalization, hash snapshots, and entity snapshots.
+- [x] Extract shared LSP symbol-service base used by npm/python symbol services.
+- [x] Extract MCP tool instrumentation into a dedicated module.
+
+### Tests / acceptance
+- [x] Add focused unit tests for shared test-target runtime behavior.
+- [x] Add focused unit tests for shared quality file pipeline behavior.
+- [x] Add focused tests for MCP instrumentation helper behavior.
+- [x] Run full suite and keep all tests passing after refactor.
+
+### Done when
+- [x] Duplication in the targeted hotspots is reduced.
+- [x] Public contracts remain stable.
+- [x] Refactor keeps fail-fast and deterministic guarantees intact.
 
 ## Deferred / Not Now
 
@@ -399,14 +427,14 @@ Measure how much SuitCode helps agents, with a specific focus on token savings, 
 
 ## README Direction
 
-- [ ] README communicates what SuitCode does today.
-- [ ] README names the near-term direction:
+- [x] README communicates what SuitCode does today.
+- [x] README names the near-term direction:
   - toolchain-backed truth
   - universal provenance
   - composed change analysis
   - deterministic execution surfaces
-- [ ] README does not include an installation section yet.
-- [ ] README makes clear that SuitCode is:
+- [x] README does not include an installation section yet.
+- [x] README makes clear that SuitCode is:
   - not a generic indexer
   - not a graph DB product
   - not a vector-search system

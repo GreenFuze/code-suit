@@ -1,0 +1,44 @@
+[
+  {
+    "task_id": "python-orientation",
+    "repository_path": ".",
+    "workflow": "orientation",
+    "preview_limit": 8
+  },
+  {
+    "task_id": "python-change-impact",
+    "repository_path": ".",
+    "workflow": "change_impact",
+    "repository_rel_path": "src/suitcode/mcp/service.py"
+  },
+  {
+    "task_id": "python-test-execute",
+    "repository_path": ".",
+    "workflow": "test_execute",
+    "timeout_seconds": 180
+  },
+  {
+    "task_id": "python-build-execute",
+    "repository_path": ".",
+    "workflow": "build_execute",
+    "timeout_seconds": 300
+  },
+  {
+    "task_id": "npm-orientation",
+    "repository_path": "tests/test_repos/npm",
+    "workflow": "orientation",
+    "preview_limit": 8
+  },
+  {
+    "task_id": "npm-test-execute",
+    "repository_path": "tests/test_repos/npm",
+    "workflow": "test_execute",
+    "timeout_seconds": 180
+  },
+  {
+    "task_id": "npm-build-execute",
+    "repository_path": "tests/test_repos/npm",
+    "workflow": "build_execute",
+    "timeout_seconds": 300
+  }
+]

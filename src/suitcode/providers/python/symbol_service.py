@@ -6,14 +6,14 @@ from typing import TYPE_CHECKING
 from suitcode.providers.python.lsp_resolution import BasedPyrightResolver
 from suitcode.providers.python.symbol_models import PythonWorkspaceSymbol
 from suitcode.providers.shared.lsp import LspClient
-from suitcode.providers.shared.lsp_code import LspCodeBackend, LspRepositorySymbol, LspSessionManager
+from suitcode.providers.shared.lsp_code import LspRepositorySymbol, LspSessionManager, LspSymbolServiceBase
 from suitcode.providers.shared.pyproject import PyProjectWorkspaceLoader
 
 if TYPE_CHECKING:
     from suitcode.core.repository import Repository
 
 
-class _PythonSymbolServiceBase:
+class _PythonSymbolServiceBase(LspSymbolServiceBase[PythonWorkspaceSymbol]):
     _PYTHON_EXTENSIONS = frozenset({".py"})
     _SYMBOL_KIND_BY_CODE = {
         1: "file",
@@ -47,14 +47,14 @@ class _PythonSymbolServiceBase:
     ) -> None:
         self._repository = repository
         self._manifest_loader = manifest_loader or PyProjectWorkspaceLoader()
-        self._resolver = resolver or BasedPyrightResolver()
-        self._backend = LspCodeBackend(
-            repository_root=repository.root,
+        super().__init__(
+            repository=repository,
             ensure_ready=self._ensure_manifest,
-            resolver=self._resolver,
+            resolver=resolver or BasedPyrightResolver(),
             supported_extensions=self._PYTHON_EXTENSIONS,
             symbol_kind_by_code=self._SYMBOL_KIND_BY_CODE,
             ignored_directories=self._IGNORED_DIRECTORIES,
+            symbol_factory=self._to_python_symbol,
             client_factory=client_factory,
             session_manager=session_manager,
         )
@@ -78,45 +78,9 @@ class _PythonSymbolServiceBase:
 
 
 class PythonSymbolService(_PythonSymbolServiceBase):
-    def get_symbols(self, query: str, is_case_sensitive: bool = False) -> tuple[PythonWorkspaceSymbol, ...]:
-        return tuple(
-            self._to_python_symbol(item)
-            for item in self._backend.get_symbols(query, is_case_sensitive=is_case_sensitive)
-        )
+    pass
 
 
 class PythonFileSymbolService(_PythonSymbolServiceBase):
-    def list_file_symbols(
-        self,
-        repository_rel_path: str,
-        query: str | None = None,
-        is_case_sensitive: bool = False,
-    ) -> tuple[PythonWorkspaceSymbol, ...]:
-        return tuple(
-            self._to_python_symbol(item)
-            for item in self._backend.list_file_symbols(
-                repository_rel_path,
-                query=query,
-                is_case_sensitive=is_case_sensitive,
-            )
-        )
-
     def get_file_symbols(self, repository_rel_path: str) -> tuple[PythonWorkspaceSymbol, ...]:
         return self.list_file_symbols(repository_rel_path)
-
-    def find_definition(self, repository_rel_path: str, line: int, column: int) -> tuple[tuple[str, int, int, int, int], ...]:
-        return self._backend.find_definition(repository_rel_path, line, column)
-
-    def find_references(
-        self,
-        repository_rel_path: str,
-        line: int,
-        column: int,
-        include_definition: bool = False,
-    ) -> tuple[tuple[str, int, int, int, int], ...]:
-        return self._backend.find_references(
-            repository_rel_path,
-            line,
-            column,
-            include_definition=include_definition,
-        )

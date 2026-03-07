@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from suitcode.analytics.models import AnalyticsSummary, BenchmarkReport, InefficiencyFinding, ToolUsageStats
 from suitcode.core.action_models import RepositoryAction
 from suitcode.core.code.models import CodeLocation
 from suitcode.core.change_models import ChangeImpact, QualityGateInfo, RunnerImpact, TestImpact
@@ -19,9 +20,12 @@ from suitcode.providers.quality_models import QualityDiagnostic, QualityEntityDe
 from suitcode.mcp.models import (
     AddRepositoryResult,
     AggregatorView,
+    AnalyticsSummaryView,
     ActionInvocationView,
     ActionView,
     ArchitectureSnapshotView,
+    BenchmarkReportView,
+    BenchmarkTaskResultView,
     BuildExecutionResultView,
     BuildProjectResultView,
     BuildTargetDescriptionView,
@@ -35,6 +39,7 @@ from suitcode.mcp.models import (
     FileView,
     FileOwnerView,
     ImpactSummaryView,
+    InefficientToolCallView,
     ChangeImpactView,
     OpenWorkspaceResult,
     LocationView,
@@ -67,6 +72,7 @@ from suitcode.mcp.models import (
     WorkspaceSnapshotView,
     WorkspaceView,
     TestTargetDescriptionView,
+    ToolUsageAnalyticsView,
 )
 
 
@@ -758,4 +764,30 @@ class RepositorySummaryPresenter:
             test_ids_preview=tuple(sorted(item.test_definition.id for item in tests)[:preview_limit]),
             preview_limit=preview_limit,
             provenance=tuple(self._intelligence_presenter.provenance_view(item) for item in provenance_entries),
+        )
+
+
+class AnalyticsPresenter:
+    def summary_view(self, summary: AnalyticsSummary) -> AnalyticsSummaryView:
+        return AnalyticsSummaryView(**summary.model_dump())
+
+    def tool_usage_view(self, stats: ToolUsageStats) -> ToolUsageAnalyticsView:
+        return ToolUsageAnalyticsView(**stats.model_dump())
+
+    def inefficiency_view(self, finding: InefficiencyFinding) -> InefficientToolCallView:
+        return InefficientToolCallView(**finding.model_dump())
+
+    def benchmark_report_view(self, report: BenchmarkReport) -> BenchmarkReportView:
+        return BenchmarkReportView(
+            schema_version=report.schema_version,
+            report_id=report.report_id,
+            generated_at_utc=report.generated_at_utc,
+            adapter_name=report.adapter_name,
+            task_total=report.task_total,
+            task_passed=report.task_passed,
+            task_failed=report.task_failed,
+            task_error=report.task_error,
+            avg_tool_calls=report.avg_tool_calls,
+            avg_duration_ms=report.avg_duration_ms,
+            tasks=tuple(BenchmarkTaskResultView(**item.model_dump()) for item in report.tasks),
         )

@@ -101,7 +101,8 @@ class ImpactService:
                 ),
             )
 
-        assert target.owner_id is not None
+        if target.owner_id is None:
+            raise ValueError("impact target must include `symbol_id`, `repository_rel_path`, or `owner_id`")
         owner = self._ownership_index.owner_info(target.owner_id)
         primary_component_id = self._component_context_resolver.primary_component_id_for_owner(target.owner_id)
         dependent_ids = self._component_dependents_or_empty(primary_component_id)

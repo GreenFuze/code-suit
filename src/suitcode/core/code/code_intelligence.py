@@ -105,10 +105,11 @@ class CodeIntelligence:
     def _resolve_lookup_target(self, target: SymbolLookupTarget) -> tuple[str, int, int]:
         if target.symbol_id is not None:
             return self._resolve_symbol_target(target.symbol_id)
-        assert target.repository_rel_path is not None
-        assert target.line is not None
-        assert target.column is not None
-        return target.repository_rel_path, target.line, target.column
+        if target.repository_rel_path is None or target.line is None or target.column is None:
+            raise ValueError(
+                "lookup target must include `symbol_id` or (`repository_rel_path`, `line`, `column`)"
+            )
+        return normalize_repository_relative_path(target.repository_rel_path), target.line, target.column
 
     def _resolve_symbol_target(self, symbol_id: str) -> tuple[str, int, int]:
         if not symbol_id.startswith("entity:"):

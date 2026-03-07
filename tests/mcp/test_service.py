@@ -7,6 +7,7 @@ from suitcode.core.build_service import BuildService
 from suitcode.core.runner_service import RunnerService
 from suitcode.mcp.errors import McpNotFoundError, McpUnsupportedRepositoryError, McpValidationError
 from suitcode.mcp.service import SuitMcpService
+from suitcode.mcp.state import WorkspaceRegistry
 from suitcode.providers.shared.action_execution import ActionExecutionResult, ActionExecutionStatus
 
 
@@ -638,3 +639,66 @@ def test_service_exact_batch_and_preview_validation_fail_fast(service: SuitMcpSe
             repository_rel_path="packages/core/src/index.ts",
             runner_preview_limit=0,
         )
+
+
+def test_service_analytics_views_return_structured_data(service: SuitMcpService, opened_workspace) -> None:
+    workspace_id = opened_workspace.workspace.workspace_id
+    repository_id = opened_workspace.initial_repository.repository_id
+    repository_root = service._registry.get_repository(workspace_id, repository_id).root
+
+    service.analytics_recorder.record_success(
+        tool_name="list_supported_providers",
+        arguments={},
+        repository_root=None,
+        result={"items": [{"provider_id": "python"}]},
+        duration_ms=7,
+    )
+    service.analytics_recorder.record_success(
+        tool_name="list_components",
+        arguments={"workspace_id": workspace_id, "repository_id": repository_id, "limit": 10, "offset": 0},
+        repository_root=repository_root,
+        result={"items": [{"id": "component:npm:@monorepo/core"}]},
+        duration_ms=9,
+    )
+
+    summary_repo_local = service.get_analytics_summary(
+        workspace_id=workspace_id,
+        repository_id=repository_id,
+    )
+    summary_with_global = service.get_analytics_summary(
+        workspace_id=workspace_id,
+        repository_id=repository_id,
+        include_global=True,
+    )
+    session_id = service.analytics_recorder._session_id  # type: ignore[attr-defined]
+    usage = service.get_tool_usage_analytics(
+        workspace_id=workspace_id,
+        repository_id=repository_id,
+        include_global=True,
+        session_id=session_id,
+        limit=50,
+        offset=0,
+    )
+    ineff = service.get_inefficient_tool_calls(
+        workspace_id=workspace_id,
+        repository_id=repository_id,
+        include_global=True,
+        session_id=session_id,
+        limit=50,
+        offset=0,
+    )
+
+    assert summary_repo_local.total_calls >= 1
+    assert summary_with_global.total_calls >= summary_repo_local.total_calls
+    assert summary_repo_local.estimated_tokens >= 1
+    assert usage.total >= 1
+    assert isinstance(ineff.items, tuple)
+    if ineff.items:
+        assert ineff.items[0].session_id == session_id
+
+
+def test_service_benchmark_report_fails_when_missing(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("SUITCODE_ANALYTICS_GLOBAL_ROOT", str(tmp_path / "analytics"))
+    service = SuitMcpService(registry=WorkspaceRegistry())
+    with pytest.raises(McpNotFoundError):
+        service.get_mcp_benchmark_report()

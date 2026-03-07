@@ -58,7 +58,8 @@ class ChangeImpactService:
                 test_preview_limit=test_preview_limit,
                 runner_preview_limit=runner_preview_limit,
             )
-        assert target.owner_id is not None
+        if target.owner_id is None:
+            raise ValueError("change target must include `symbol_id`, `repository_rel_path`, or `owner_id`")
         return self._analyze_owner_target(
             target.owner_id,
             reference_preview_limit=reference_preview_limit,
@@ -274,7 +275,8 @@ class ChangeImpactService:
         if repository_rel_path is not None:
             related_tests = self._repository.tests.get_related_tests(RelatedTestTarget(repository_rel_path=repository_rel_path))
         else:
-            assert owner_id is not None
+            if owner_id is None:
+                raise ValueError("related test target must include `repository_rel_path` or `owner_id`")
             related_tests = self._repository.tests.get_related_tests(RelatedTestTarget(owner_id=owner_id))
         impacts: list[TestImpact] = []
         for related_test in related_tests[:test_preview_limit]:

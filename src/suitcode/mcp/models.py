@@ -514,3 +514,60 @@ class RepositorySummaryView(StrictModel):
     test_ids_preview: tuple[str, ...]
     preview_limit: int
     provenance: tuple[ProvenanceView, ...]
+
+
+class AnalyticsSummaryView(StrictModel):
+    total_calls: int
+    success_calls: int
+    error_calls: int
+    p50_duration_ms: int
+    p95_duration_ms: int
+    total_payload_bytes: int
+    estimated_tokens: int
+    estimated_tokens_saved: int
+    confidence_mix: dict[str, int]
+    top_tools: tuple[str, ...]
+
+
+class ToolUsageAnalyticsView(StrictModel):
+    tool_name: str
+    total_calls: int
+    success_calls: int
+    error_calls: int
+    p50_duration_ms: int
+    p95_duration_ms: int
+    total_payload_bytes: int
+    estimated_tokens: int
+    estimated_tokens_saved: int
+    confidence_mix: dict[str, int]
+
+
+class InefficientToolCallView(StrictModel):
+    kind: str
+    tool_name: str | None = None
+    session_id: str | None = None
+    count: int
+    description: str
+    sample_event_ids: tuple[str, ...] = ()
+
+
+class BenchmarkTaskResultView(StrictModel):
+    task_id: str
+    status: str
+    tool_calls: int
+    duration_ms: int
+    notes: str | None = None
+
+
+class BenchmarkReportView(StrictModel):
+    schema_version: str
+    report_id: str
+    generated_at_utc: str
+    adapter_name: str
+    task_total: int
+    task_passed: int
+    task_failed: int
+    task_error: int
+    avg_tool_calls: float
+    avg_duration_ms: float
+    tasks: tuple[BenchmarkTaskResultView, ...]

@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+from suitcode.analytics.aggregation import AnalyticsAggregator
+from suitcode.analytics.recorder import ToolCallRecorder
+from suitcode.analytics.settings import AnalyticsSettings
+from suitcode.analytics.storage import JsonlAnalyticsStore
+from suitcode.mcp.analytics_service import AnalyticsMcpService
 from suitcode.mcp.action_service import ActionMcpService
 from suitcode.mcp.architecture_service import ArchitectureMcpService
 from suitcode.mcp.build_service import BuildMcpService
@@ -15,6 +22,9 @@ from suitcode.mcp.models import (
     BuildProjectResultView,
     BuildTargetDescriptionView,
     ChangeImpactView,
+    CloseWorkspaceResult,
+    AnalyticsSummaryView,
+    BenchmarkReportView,
     ComponentDependencyEdgeView,
     ComponentContextView,
     ComponentView,
@@ -24,12 +34,14 @@ from suitcode.mcp.models import (
     FileOwnerView,
     FileView,
     ImpactSummaryView,
+    InefficientToolCallView,
     ListResult,
     LocationView,
     OpenWorkspaceResult,
     PackageManagerView,
     ProviderDescriptorView,
     QualityFileResultView,
+    QualityProvidersView,
     QualitySnapshotView,
     RelatedTestView,
     RunTestTargetsView,
@@ -42,6 +54,7 @@ from suitcode.mcp.models import (
     RunnerView,
     SymbolContextView,
     SymbolView,
+    ToolUsageAnalyticsView,
     TestsSnapshotView,
     TestDefinitionView,
     TestTargetDescriptionView,
@@ -49,6 +62,7 @@ from suitcode.mcp.models import (
 )
 from suitcode.mcp.pagination import PaginationPolicy
 from suitcode.mcp.presenters import (
+    AnalyticsPresenter,
     ArchitecturePresenter,
     ActionPresenter,
     BuildPresenter,
@@ -68,6 +82,7 @@ from suitcode.mcp.quality_service import QualityMcpService
 from suitcode.mcp.runner_service import RunnerMcpService
 from suitcode.mcp.state import WorkspaceRegistry
 from suitcode.mcp.test_service import TestMcpService
+from suitcode.mcp.tool_catalog import TOOL_CATALOG
 from suitcode.mcp.workspace_service import WorkspaceMcpService
 
 
@@ -93,6 +108,20 @@ class SuitMcpService:
         self._repository_summary_presenter = RepositorySummaryPresenter()
         self._intelligence_presenter = IntelligencePresenter()
         self._change_impact_presenter = ChangeImpactPresenter()
+        self._analytics_presenter = AnalyticsPresenter()
+        self._analytics_settings = AnalyticsSettings.from_env()
+        self._analytics_store = JsonlAnalyticsStore(self._analytics_settings)
+        self._analytics_recorder = ToolCallRecorder(self._analytics_store)
+        self._analytics_aggregator = AnalyticsAggregator(
+            self._analytics_store,
+            tool_catalog=tuple(sorted(item.name for item in TOOL_CATALOG)),
+            excluded_tools=(
+                "get_analytics_summary",
+                "get_tool_usage_analytics",
+                "get_inefficient_tool_calls",
+                "get_mcp_benchmark_report",
+            ),
+        )
 
         self._workspace_service = WorkspaceMcpService(
             self._registry,
@@ -141,6 +170,12 @@ class SuitMcpService:
             self._repository_summary_presenter,
             self._change_impact_presenter,
         )
+        self._analytics_service = AnalyticsMcpService(
+            self._registry,
+            self._pagination,
+            self._analytics_aggregator,
+            self._analytics_presenter,
+        )
 
     def list_supported_providers(self, limit: int | None = None, offset: int = 0) -> ListResult[ProviderDescriptorView]:
         return self._workspace_service.list_supported_providers(limit=limit, offset=offset)
@@ -154,11 +189,18 @@ class SuitMcpService:
     def list_workspaces(self, limit: int | None = None, offset: int = 0) -> ListResult[WorkspaceView]:
         return self._workspace_service.list_workspaces(limit=limit, offset=offset)
 
+    def list_open_workspaces(self, limit: int | None = None, offset: int = 0) -> ListResult[WorkspaceView]:
+        return self.list_workspaces(limit=limit, offset=offset)
+
     def get_workspace(self, workspace_id: str) -> WorkspaceView:
         return self._workspace_service.get_workspace(workspace_id)
 
     def close_workspace(self, workspace_id: str) -> None:
         self._workspace_service.close_workspace(workspace_id)
+
+    def close_workspace_result(self, workspace_id: str) -> CloseWorkspaceResult:
+        self.close_workspace(workspace_id)
+        return CloseWorkspaceResult(workspace_id=workspace_id, closed=True)
 
     def list_workspace_repositories(self, workspace_id: str, limit: int | None = None, offset: int = 0) -> ListResult[RepositoryView]:
         return self._workspace_service.list_workspace_repositories(workspace_id, limit=limit, offset=offset)
@@ -445,6 +487,9 @@ class SuitMcpService:
     def list_quality_providers(self, workspace_id: str, repository_id: str) -> tuple[str, ...]:
         return self._quality_service.list_quality_providers(workspace_id, repository_id)
 
+    def list_quality_providers_view(self, workspace_id: str, repository_id: str) -> QualityProvidersView:
+        return QualityProvidersView(provider_ids=self.list_quality_providers(workspace_id, repository_id))
+
     def lint_file(self, workspace_id: str, repository_id: str, repository_rel_path: str, provider_id: str, is_fix: bool) -> QualityFileResultView:
         return self._quality_service.lint_file(workspace_id, repository_id, repository_rel_path, provider_id, is_fix)
 
@@ -574,6 +619,59 @@ class SuitMcpService:
             offset=offset,
         )
 
+    def get_analytics_summary(
+        self,
+        workspace_id: str | None = None,
+        repository_id: str | None = None,
+        include_global: bool | None = None,
+        session_id: str | None = None,
+    ) -> AnalyticsSummaryView:
+        return self._analytics_service.get_analytics_summary(
+            workspace_id=workspace_id,
+            repository_id=repository_id,
+            include_global=include_global,
+            session_id=session_id,
+        )
+
+    def get_tool_usage_analytics(
+        self,
+        workspace_id: str | None = None,
+        repository_id: str | None = None,
+        include_global: bool | None = None,
+        session_id: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> ListResult[ToolUsageAnalyticsView]:
+        return self._analytics_service.get_tool_usage_analytics(
+            workspace_id=workspace_id,
+            repository_id=repository_id,
+            include_global=include_global,
+            session_id=session_id,
+            limit=limit,
+            offset=offset,
+        )
+
+    def get_inefficient_tool_calls(
+        self,
+        workspace_id: str | None = None,
+        repository_id: str | None = None,
+        include_global: bool | None = None,
+        session_id: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> ListResult[InefficientToolCallView]:
+        return self._analytics_service.get_inefficient_tool_calls(
+            workspace_id=workspace_id,
+            repository_id=repository_id,
+            include_global=include_global,
+            session_id=session_id,
+            limit=limit,
+            offset=offset,
+        )
+
+    def get_mcp_benchmark_report(self) -> BenchmarkReportView:
+        return self._analytics_service.get_mcp_benchmark_report()
+
     def analyze_impact(
         self,
         workspace_id: str,
@@ -619,3 +717,26 @@ class SuitMcpService:
             test_preview_limit=test_preview_limit,
             runner_preview_limit=runner_preview_limit,
         )
+
+    @property
+    def analytics_recorder(self) -> ToolCallRecorder:
+        return self._analytics_recorder
+
+    def resolve_analytics_repository_root(self, arguments: dict[str, object]) -> Path | None:
+        workspace_id = arguments.get("workspace_id")
+        repository_id = arguments.get("repository_id")
+        if isinstance(workspace_id, str) and isinstance(repository_id, str):
+            try:
+                return self._registry.get_repository(workspace_id, repository_id).root
+            except Exception:  # noqa: BLE001
+                return None
+
+        repository_path = arguments.get("repository_path")
+        if isinstance(repository_path, str):
+            try:
+                from suitcode.core.repository import Repository
+
+                return Repository.root_candidate(Path(repository_path))
+            except Exception:  # noqa: BLE001
+                return None
+        return None

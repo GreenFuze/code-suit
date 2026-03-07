@@ -12,9 +12,10 @@ def register_prompts(app: FastMCP) -> None:
     )
     def understand_repository_with_suitcode() -> str:
         return (
-            "Open or reuse a SuitCode workspace first. Then use list_workspace_repositories, "
-            "list_components, list_tests, find_symbols, and list_files before generic repository exploration. "
-            "Use built-in file exploration only after SuitCode identifies exact repositories, files, or symbols."
+            "Use deterministic SuitCode flow: inspect_repository_support, open_workspace, and repository_summary first. "
+            "Then prefer exact context tools (describe_components, describe_files, describe_symbol_context) and "
+            "impact tools (analyze_change or analyze_impact) before broad list/find exploration. "
+            "Use generic file exploration only after SuitCode narrows to exact files, symbols, tests, or actions."
         )
 
     @app.prompt(
@@ -23,8 +24,9 @@ def register_prompts(app: FastMCP) -> None:
     )
     def refactor_using_suitcode_tools() -> str:
         return (
-            "Open or reuse the workspace, inspect repositories, use component/test/symbol tools to locate the change, "
-            "then edit precise files. Prefer SuitCode semantic tools over broad filesystem exploration."
+            "Start with repository_summary, then use describe_* and analyze_change to build exact change scope. "
+            "Use get_related_tests + describe_test_target and list_build_targets + describe_build_target for deterministic "
+            "execution steps. Avoid repeated broad list/find pagination when deterministic context tools can answer directly."
         )
 
     @app.prompt(
@@ -33,6 +35,6 @@ def register_prompts(app: FastMCP) -> None:
     )
     def apply_quality_fix_with_suitcode() -> str:
         return (
-            "List quality providers for the repository, choose one provider_id explicitly, run lint_file or format_file, "
-            "and inspect diagnostics plus entity_delta before making further changes."
+            "List quality providers, choose provider_id explicitly, run lint_file or format_file, and inspect diagnostics "
+            "plus entity_delta. After quality changes, use analyze_change and targeted test/build actions to verify impact."
         )

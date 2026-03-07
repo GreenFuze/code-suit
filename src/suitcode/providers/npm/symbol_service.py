@@ -5,14 +5,14 @@ from typing import TYPE_CHECKING
 
 from suitcode.providers.npm.symbol_models import NpmWorkspaceSymbol
 from suitcode.providers.shared.lsp import LspClient, TypeScriptLanguageServerResolver
-from suitcode.providers.shared.lsp_code import LspCodeBackend, LspRepositorySymbol, LspSessionManager
+from suitcode.providers.shared.lsp_code import LspRepositorySymbol, LspSessionManager, LspSymbolServiceBase
 from suitcode.providers.shared.package_json import PackageJsonWorkspaceLoader
 
 if TYPE_CHECKING:
     from suitcode.core.repository import Repository
 
 
-class _NpmSymbolServiceBase:
+class _NpmSymbolServiceBase(LspSymbolServiceBase[NpmWorkspaceSymbol]):
     _JS_TS_EXTENSIONS = frozenset({".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"})
     _SYMBOL_KIND_BY_CODE = {
         1: "file",
@@ -54,14 +54,14 @@ class _NpmSymbolServiceBase:
     ) -> None:
         self._repository = repository
         self._workspace_loader = workspace_loader or PackageJsonWorkspaceLoader()
-        self._resolver = resolver or TypeScriptLanguageServerResolver()
-        self._backend = LspCodeBackend(
-            repository_root=repository.root,
+        super().__init__(
+            repository=repository,
             ensure_ready=self._ensure_workspace,
-            resolver=self._resolver,
+            resolver=resolver or TypeScriptLanguageServerResolver(),
             supported_extensions=self._JS_TS_EXTENSIONS,
             symbol_kind_by_code=self._SYMBOL_KIND_BY_CODE,
             ignored_directories=self._IGNORED_DIRECTORIES,
+            symbol_factory=self._to_npm_symbol,
             client_factory=client_factory,
             session_manager=session_manager,
         )
@@ -85,45 +85,9 @@ class _NpmSymbolServiceBase:
 
 
 class NpmSymbolService(_NpmSymbolServiceBase):
-    def get_symbols(self, query: str, is_case_sensitive: bool = False) -> tuple[NpmWorkspaceSymbol, ...]:
-        return tuple(
-            self._to_npm_symbol(item)
-            for item in self._backend.get_symbols(query, is_case_sensitive=is_case_sensitive)
-        )
+    pass
 
 
 class NpmFileSymbolService(_NpmSymbolServiceBase):
-    def list_file_symbols(
-        self,
-        repository_rel_path: str,
-        query: str | None = None,
-        is_case_sensitive: bool = False,
-    ) -> tuple[NpmWorkspaceSymbol, ...]:
-        return tuple(
-            self._to_npm_symbol(item)
-            for item in self._backend.list_file_symbols(
-                repository_rel_path,
-                query=query,
-                is_case_sensitive=is_case_sensitive,
-            )
-        )
-
     def get_file_entities(self, repository_rel_path: str) -> tuple[NpmWorkspaceSymbol, ...]:
         return self.list_file_symbols(repository_rel_path)
-
-    def find_definition(self, repository_rel_path: str, line: int, column: int) -> tuple[tuple[str, int, int, int, int], ...]:
-        return self._backend.find_definition(repository_rel_path, line, column)
-
-    def find_references(
-        self,
-        repository_rel_path: str,
-        line: int,
-        column: int,
-        include_definition: bool = False,
-    ) -> tuple[tuple[str, int, int, int, int], ...]:
-        return self._backend.find_references(
-            repository_rel_path,
-            line,
-            column,
-            include_definition=include_definition,
-        )

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from suitcode.core.intelligence_models import ComponentDependencyEdge
-from suitcode.core.action_models import ActionKind, ActionQuery, RepositoryAction
+from suitcode.core.action_models import RepositoryAction
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -13,9 +13,8 @@ from suitcode.core.models import (
     FileInfo,
     PackageManager,
     Runner,
-    TestDefinition,
 )
-from suitcode.core.tests.models import RelatedTestMatch, RelatedTestTarget, TestExecutionResult, TestTargetDescription
+from suitcode.core.tests.models import RelatedTestMatch, RelatedTestTarget
 from suitcode.core.provenance_builders import manifest_provenance
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
 from suitcode.providers.action_provider_base import ActionProviderBase
@@ -45,19 +44,23 @@ from suitcode.providers.npm.workspace_analyzer import NpmWorkspaceAnalyzer
 from suitcode.providers.provider_roles import ProviderRole
 from suitcode.providers.shared.code_facade import CodeFacadeMixin
 from suitcode.providers.shared.component_index import ComponentIndexBuilder
+from suitcode.providers.shared.provider_translation_mixin import ProviderTranslationMixin
 from suitcode.providers.shared.actions import ProviderActionSpec, ProviderActionTranslator
 from suitcode.providers.shared.package_json import PackageJsonWorkspaceLoader
 from suitcode.providers.shared.package_json.models import PackageJsonWorkspace
 from suitcode.providers.shared.test_facade import TestFacadeMixin
 from suitcode.providers.shared.test_execution import TestExecutionService
+from suitcode.providers.shared.test_target_runtime import DeterministicTestTargetMixin
 
 if TYPE_CHECKING:
     from suitcode.core.repository import Repository
 
 
 class NPMProvider(
+    ProviderTranslationMixin,
     CodeFacadeMixin,
     TestFacadeMixin,
+    DeterministicTestTargetMixin,
     ArchitectureProviderBase,
     CodeProviderBase,
     TestProviderBase,
@@ -106,31 +109,37 @@ class NPMProvider(
         self._test_execution_service: TestExecutionService | None = None
 
     def get_components(self) -> tuple[Component, ...]:
-        return tuple(sorted((self._translator.to_component(item) for item in self._get_components()), key=lambda item: item.id))
+        return self._translate_sorted(self._get_components(), self._translator.to_component, key=lambda item: item.id)
 
     def get_aggregators(self) -> tuple[Aggregator, ...]:
-        return tuple(sorted((self._translator.to_aggregator(item) for item in self._get_aggregators()), key=lambda item: item.id))
+        return self._translate_sorted(self._get_aggregators(), self._translator.to_aggregator, key=lambda item: item.id)
 
     def get_runners(self) -> tuple[Runner, ...]:
-        return tuple(sorted((self._translator.to_runner(item) for item in self._get_runners()), key=lambda item: item.id))
+        return self._translate_sorted(self._get_runners(), self._translator.to_runner, key=lambda item: item.id)
 
     def get_package_managers(self) -> tuple[PackageManager, ...]:
-        return tuple(sorted((self._translator.to_package_manager(item) for item in self._get_package_managers()), key=lambda item: item.id))
+        return self._translate_sorted(
+            self._get_package_managers(),
+            self._translator.to_package_manager,
+            key=lambda item: item.id,
+        )
 
     def get_external_packages(self) -> tuple[ExternalPackage, ...]:
-        return tuple(sorted((self._translator.to_external_package(item) for item in self._get_external_packages()), key=lambda item: item.id))
+        return self._translate_sorted(
+            self._get_external_packages(),
+            self._translator.to_external_package,
+            key=lambda item: item.id,
+        )
 
     def get_files(self) -> tuple[FileInfo, ...]:
-        return tuple(sorted((self._translator.to_file_info(item) for item in self._get_files()), key=lambda item: item.id))
+        return self._translate_sorted(self._get_files(), self._translator.to_file_info, key=lambda item: item.id)
 
     def get_component_dependency_edges(self, component_id: str | None = None) -> tuple[ComponentDependencyEdge, ...]:
-        edges = self._all_component_dependency_edges()
-        if component_id is None:
-            return edges
-        component_index = self._component_analysis_by_id()
-        if component_id not in component_index:
-            raise ValueError(f"unknown component id: `{component_id}`")
-        return tuple(item for item in edges if item.source_component_id == component_id)
+        return self._filter_dependency_edges(
+            component_id,
+            self._all_component_dependency_edges(),
+            self._component_analysis_by_id(),
+        )
 
     def get_actions(self) -> tuple[RepositoryAction, ...]:
         return tuple(
@@ -162,7 +171,8 @@ class NPMProvider(
                 raise ValueError(f"component owner id could not be resolved to a package: `{owner.id}`")
             return self._tests_for_package_root(package_root, matched_owner_id=owner.id)
 
-        assert target.repository_rel_path is not None
+        if target.repository_rel_path is None:
+            raise ValueError("related test target must include `repository_rel_path` when `owner_id` is not provided")
         owner_info = self.repository.get_file_owner(target.repository_rel_path)
         if owner_info.owner.kind == "test_definition":
             matches = [
@@ -191,33 +201,6 @@ class NPMProvider(
 
     def format_file(self, repository_rel_path: str) -> QualityFileResult:
         return self._quality_translator.to_quality_file_result(self._format_file(repository_rel_path))
-
-    def describe_test_target(self, test_id: str) -> TestTargetDescription:
-        discovered = self._discovered_test_by_id(test_id)
-        action = self._test_action_for_id(test_id)
-        warning = None
-        if not discovered.is_authoritative:
-            warning = (
-                "Test target scope is heuristic; command is deterministic but may include tests beyond exact ownership."
-            )
-        return TestTargetDescription(
-            test_definition=discovered.test_definition,
-            command_argv=action.invocation.argv,
-            command_cwd=action.invocation.cwd,
-            is_authoritative=discovered.is_authoritative,
-            warning=warning,
-            provenance=(*discovered.provenance, *action.provenance),
-        )
-
-    def run_test_targets(self, test_ids: tuple[str, ...], timeout_seconds: int) -> tuple[TestExecutionResult, ...]:
-        self._validate_test_id_batch(test_ids)
-        if timeout_seconds < 1 or timeout_seconds > 3600:
-            raise ValueError("timeout_seconds must be between 1 and 3600")
-        execution_service = self._build_test_execution_service()
-        return tuple(
-            execution_service.run_target(self.describe_test_target(test_id), timeout_seconds=timeout_seconds)
-            for test_id in test_ids
-        )
 
     def _load_workspace(self) -> PackageJsonWorkspace:
         if self._workspace is None:
@@ -451,32 +434,3 @@ class NPMProvider(
 
     def _to_discovered_test_definition(self, test_analysis: object):
         return self._translator.to_discovered_test_definition(test_analysis)
-
-    def _discovered_test_by_id(self, test_id: str):
-        for discovered in self.get_discovered_tests():
-            if discovered.test_definition.id == test_id:
-                return discovered
-        raise ValueError(f"unknown npm test id: `{test_id}`")
-
-    def _test_action_for_id(self, test_id: str):
-        actions = tuple(
-            action
-            for action in self.repository.list_actions(ActionQuery(test_id=test_id))
-            if action.provider_id == self.PROVIDER_ID and action.kind == ActionKind.TEST_EXECUTION
-        )
-        if not actions:
-            raise ValueError(f"missing npm test action for test id `{test_id}`")
-        if len(actions) != 1:
-            raise ValueError(f"ambiguous npm test actions for test id `{test_id}`")
-        return actions[0]
-
-    @staticmethod
-    def _validate_test_id_batch(test_ids: tuple[str, ...]) -> None:
-        if not test_ids:
-            raise ValueError("test_ids must not be empty")
-        if len(test_ids) > 25:
-            raise ValueError("test_ids must not contain more than 25 items")
-        if any(not test_id.strip() for test_id in test_ids):
-            raise ValueError("test_ids must not contain empty values")
-        if len(set(test_ids)) != len(test_ids):
-            raise ValueError("test_ids must not contain duplicates")

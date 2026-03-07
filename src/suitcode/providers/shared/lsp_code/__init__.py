@@ -5,6 +5,7 @@ from suitcode.providers.shared.lsp_code.session import (
     LspSessionManager,
     PerCallLspSessionManager,
 )
+from suitcode.providers.shared.lsp_code.symbol_service_base import LspSymbolServiceBase
 from suitcode.providers.shared.lsp_code.translation import LspEntityTranslatorBase, LspLocationTranslatorBase
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "LspRepositorySymbol",
     "LspResolver",
     "LspSessionManager",
+    "LspSymbolServiceBase",
     "PerCallLspSessionManager",
 ]

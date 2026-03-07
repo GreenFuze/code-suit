@@ -23,6 +23,7 @@ def test_prompt_guides_tool_first_usage(app) -> None:
     prompt = asyncio.run(_get_prompt(app, "understand_repository_with_suitcode"))
     prompt_text = str(prompt.messages)
 
-    assert "open or reuse" in prompt_text.lower()
-    assert "list_components" in prompt_text
-    assert "generic repository exploration" in prompt_text
+    assert "open_workspace" in prompt_text
+    assert "repository_summary" in prompt_text
+    assert "analyze_change" in prompt_text
+    assert "broad list/find exploration" in prompt_text

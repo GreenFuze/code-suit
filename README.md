@@ -13,6 +13,16 @@ For supported repositories, SuitCode provides:
 - Quality intelligence: lint/format with structured diagnostics and symbol/entity deltas.
 - Composed intelligence: repository summary, component/file/symbol context, impact analysis, change analysis.
 - Deterministic execution surfaces: test actions, runner actions, build actions.
+- Intelligence observability: MCP tool usage analytics, estimated token-savings analytics, inefficiency detection.
+
+## High-Value Questions SuitCode Answers
+
+- What are the real components/targets and their dependencies?
+  - Use `list_components`, `get_component_dependencies`, `list_component_dependency_edges`, `get_component_dependents`.
+- What tests cover this component/file and how do I run only those tests?
+  - Use `get_related_tests`, `describe_test_target`, `run_test_targets`.
+- What breaks if I change this file/symbol/owner?
+  - Use `analyze_impact` and `analyze_change`.
 
 ## Supported Providers and Roles
 
@@ -150,6 +160,19 @@ Provider behavior today:
 - `analyze_change`
   - Answers: For exact file/symbol/owner, what owns it, what depends on it, what refs/tests/runners/quality gates matter, and why?
 
+### Analytics intelligence
+- `get_analytics_summary`
+  - Answers: How much is SuitCode being used, how often does it fail, and what is the estimated token savings?
+  - Supports: optional repository scope, `session_id`, and `include_global`.
+- `get_tool_usage_analytics`
+  - Answers: Which tools are used most, with what latency/error profile and estimated savings impact?
+  - Supports: optional repository scope, `session_id`, and `include_global`.
+- `get_inefficient_tool_calls`
+  - Answers: Are there duplicate calls, workspace churn, pagination thrash, broad exploration patterns, or unused high-value tools?
+  - Supports: optional repository scope, `session_id`, and `include_global`.
+- `get_mcp_benchmark_report`
+  - Answers: What is the latest benchmark report for SuitCode MCP performance?
+
 ## Deterministic Execution Surfaces
 
 SuitCode already executes provider-backed deterministic actions:
@@ -185,7 +208,9 @@ Recommended flow:
 1. `inspect_repository_support`
 2. `open_workspace`
 3. `repository_summary`
-4. Use exact semantic tools (`describe_*`, `analyze_*`, `find_*`, `get_*`, `run_*`, `build_*`) before manual file exploration.
+4. Prefer exact context and impact tools: `describe_components`, `describe_files`, `describe_symbol_context`, `analyze_change`, `analyze_impact`
+5. Use broad exploration tools (`list_*`, `find_*`) only when exact context is still missing
+6. Use deterministic execution tools (`describe_test_target`, `run_test_targets`, `describe_build_target`, `build_target`, `build_project`) instead of guessing commands
 
 ## Running the MCP Server (stdio-first)
 
@@ -201,6 +226,29 @@ Python module entrypoint:
 Optional HTTP mode:
 - `python -m suitcode.mcp.server --transport http --host 127.0.0.1 --port 8000`
 
+Local analytics scripts:
+- `python scripts/analyze_analytics.py`
+- `python scripts/run_mcp_benchmark.py`
+
+Analytics script options:
+- `python scripts/analyze_analytics.py --repository-root "<repo>"`
+- `python scripts/analyze_analytics.py --repository-root "<repo>" --session-id "<session_id>"`
+- `python scripts/analyze_analytics.py --repository-root "<repo>" --no-include-global`
+- `python scripts/analyze_analytics.py --json`
+
+Benchmark script options:
+- `python scripts/run_mcp_benchmark.py`
+- `python scripts/run_mcp_benchmark.py --tasks-file benchmarks/tasks/sample_tasks.json`
+- `python scripts/run_mcp_benchmark.py --fail-on-task-error`
+
+Benchmark task workflows currently supported:
+- `orientation`
+- `change_impact`
+- `test_execute`
+- `build_execute`
+
+The default sample benchmark covers both the current Python repository and the npm fixture repository under `tests/test_repos/npm`.
+
 ## MCP Resources
 
 - `suitcode://supported-providers`
@@ -215,8 +263,11 @@ Optional HTTP mode:
 ## MCP Prompts
 
 - `understand_repository_with_suitcode`
+  - Guides the agent to start with `inspect_repository_support`, `open_workspace`, and `repository_summary`, then move to exact context and impact tools before broad exploration.
 - `refactor_using_suitcode_tools`
+  - Guides the agent to use `describe_*`, `analyze_change`, and deterministic test/build descriptions before editing or exploring broadly.
 - `apply_quality_fix_with_suitcode`
+  - Guides the agent to run quality tools first, inspect `entity_delta`, then verify impact with `analyze_change` and deterministic test/build actions.
 
 ## Current Limits and Non-goals
 
