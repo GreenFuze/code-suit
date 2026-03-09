@@ -8,7 +8,16 @@ from suitcode.core.validation import (
     validate_preview_limit,
 )
 from suitcode.mcp.errors import McpNotFoundError, McpValidationError
-from suitcode.mcp.models import ChangeImpactView, ComponentContextView, FileContextView, ImpactSummaryView, RepositorySummaryView, SymbolContextView
+from suitcode.mcp.models import (
+    ChangeImpactView,
+    ComponentContextView,
+    FileContextView,
+    ImpactSummaryView,
+    MinimumVerifiedChangeSetView,
+    RepositorySummaryView,
+    SymbolContextView,
+    TruthCoverageSummaryView,
+)
 from suitcode.mcp.presenters import ChangeImpactPresenter, IntelligencePresenter, RepositorySummaryPresenter
 from suitcode.mcp.state import WorkspaceRegistry
 
@@ -171,3 +180,31 @@ class ContextMcpService:
         except ValueError as exc:
             raise McpValidationError(str(exc)) from exc
         return self._change_impact_presenter.change_impact_view(impact)
+
+    def get_minimum_verified_change_set(
+        self,
+        workspace_id: str,
+        repository_id: str,
+        symbol_id: str | None = None,
+        repository_rel_path: str | None = None,
+        owner_id: str | None = None,
+    ) -> MinimumVerifiedChangeSetView:
+        repository = self._registry.get_repository(workspace_id, repository_id)
+        try:
+            target = ChangeTarget(
+                symbol_id=symbol_id,
+                repository_rel_path=repository_rel_path,
+                owner_id=owner_id,
+            )
+            change_set = repository.get_minimum_verified_change_set(target)
+        except ValueError as exc:
+            raise McpValidationError(str(exc)) from exc
+        return self._change_impact_presenter.minimum_verified_change_set_view(change_set)
+
+    def get_truth_coverage(
+        self,
+        workspace_id: str,
+        repository_id: str,
+    ) -> TruthCoverageSummaryView:
+        repository = self._registry.get_repository(workspace_id, repository_id)
+        return self._intelligence_presenter.truth_coverage_summary_view(repository.get_truth_coverage())

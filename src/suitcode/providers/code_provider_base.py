@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from suitcode.core.code.models import CodeLocation
 from suitcode.core.models import EntityInfo
 from suitcode.providers.provider_base import ProviderBase
+from suitcode.providers.runtime_capability_models import CodeRuntimeCapabilities
 
 if TYPE_CHECKING:
     from suitcode.core.repository import Repository
@@ -40,4 +41,8 @@ class CodeProviderBase(ProviderBase, ABC):
         column: int,
         include_definition: bool = False,
     ) -> tuple[CodeLocation, ...]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_code_runtime_capabilities(self) -> CodeRuntimeCapabilities:
         raise NotImplementedError

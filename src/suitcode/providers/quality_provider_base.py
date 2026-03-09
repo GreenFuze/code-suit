@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from suitcode.providers.provider_base import ProviderBase
 from suitcode.providers.quality_models import QualityFileResult
+from suitcode.providers.runtime_capability_models import QualityRuntimeCapabilities
 
 if TYPE_CHECKING:
     from suitcode.core.repository import Repository
@@ -20,4 +21,11 @@ class QualityProviderBase(ProviderBase, ABC):
 
     @abstractmethod
     def format_file(self, repository_rel_path: str) -> QualityFileResult:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_quality_runtime_capabilities(
+        self,
+        repository_rel_paths: tuple[str, ...] | None = None,
+    ) -> QualityRuntimeCapabilities:
         raise NotImplementedError

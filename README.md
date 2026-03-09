@@ -11,9 +11,11 @@ For supported repositories, SuitCode provides:
 - Code intelligence: symbols, symbols-in-file, definitions, references.
 - Test intelligence: discovered tests, related tests, exact test target execution.
 - Quality intelligence: lint/format with structured diagnostics and symbol/entity deltas.
-- Composed intelligence: repository summary, component/file/symbol context, impact analysis, change analysis.
+- Composed intelligence: repository summary, component/file/symbol context, impact analysis, change analysis, minimum verified change set.
+- Trust intelligence: repository-wide and change-local truth coverage across architecture, code, tests, quality, and actions.
 - Deterministic execution surfaces: test actions, runner actions, build actions.
-- Intelligence observability: MCP tool usage analytics, estimated token-savings analytics, inefficiency detection.
+- Intelligence observability: MCP tool usage analytics, native Codex session usage analytics, transcript-estimated token accounting, estimated token-savings analytics, inefficiency detection.
+- Codex-native evaluation: harness-driven `codex exec` task runs with structured scoring, deterministic baseline comparison, and stored evaluation reports.
 
 ## High-Value Questions SuitCode Answers
 
@@ -23,6 +25,10 @@ For supported repositories, SuitCode provides:
   - Use `get_related_tests`, `describe_test_target`, `run_test_targets`.
 - What breaks if I change this file/symbol/owner?
   - Use `analyze_impact` and `analyze_change`.
+- What is the minimum exact validation set for this change?
+  - Use `get_minimum_verified_change_set`.
+- How trustworthy is SuitCode's understanding of this repository or change?
+  - Use `get_truth_coverage` and inspect the `truth_coverage` attached to `repository_summary` and `analyze_change`.
 
 ## Supported Providers and Roles
 
@@ -122,7 +128,7 @@ Provider behavior today:
 - `list_files_by_owner`
   - Answers: Which files belong to this owner?
 - `repository_summary`
-  - Answers: Give me a compact first-pass repository overview.
+  - Answers: Give me a compact first-pass repository overview, including trust coverage for architecture/code/tests/quality/actions.
 - `describe_components`
   - Answers: For exact components, what files/deps/dependents/tests/runners matter?
 - `describe_files`
@@ -158,7 +164,11 @@ Provider behavior today:
 - `analyze_impact`
   - Answers: What likely breaks if I change this file/symbol/owner?
 - `analyze_change`
-  - Answers: For exact file/symbol/owner, what owns it, what depends on it, what refs/tests/runners/quality gates matter, and why?
+  - Answers: For exact file/symbol/owner, what owns it, what depends on it, what refs/tests/runners/quality gates matter, why, and how strong the returned evidence is.
+- `get_minimum_verified_change_set`
+  - Answers: What is the smallest exact set of tests, build targets, runner actions, and quality operations I should validate for this change?
+- `get_truth_coverage`
+  - Answers: How much of this repository's architecture, code, tests, quality, and actions are authoritative, derived, heuristic, or unavailable?
 
 ### Analytics intelligence
 - `get_analytics_summary`
@@ -171,7 +181,7 @@ Provider behavior today:
   - Answers: Are there duplicate calls, workspace churn, pagination thrash, broad exploration patterns, or unused high-value tools?
   - Supports: optional repository scope, `session_id`, and `include_global`.
 - `get_mcp_benchmark_report`
-  - Answers: What is the latest benchmark report for SuitCode MCP performance?
+  - Answers: What is the latest benchmark report for SuitCode MCP performance, including trust-coverage summary when available?
 
 ## Deterministic Execution Surfaces
 
@@ -194,6 +204,12 @@ SuitCode outputs include explicit provenance with fields like:
 
 This makes authoritative tool output and heuristic fallback explicitly distinguishable.
 
+SuitCode also exposes truth coverage:
+- repository-wide via `get_truth_coverage`
+- additive on `repository_summary`
+- additive on `analyze_change`
+- additive on benchmark reports when the benchmark run is tied to a resolved repository
+
 ## Fail-Fast Behavior
 
 SuitCode is intentionally fail-fast:
@@ -208,9 +224,10 @@ Recommended flow:
 1. `inspect_repository_support`
 2. `open_workspace`
 3. `repository_summary`
-4. Prefer exact context and impact tools: `describe_components`, `describe_files`, `describe_symbol_context`, `analyze_change`, `analyze_impact`
-5. Use broad exploration tools (`list_*`, `find_*`) only when exact context is still missing
-6. Use deterministic execution tools (`describe_test_target`, `run_test_targets`, `describe_build_target`, `build_target`, `build_project`) instead of guessing commands
+4. `get_truth_coverage` when you need to judge whether SuitCode is operating at full trust or partial visibility
+5. Prefer exact context and impact tools: `describe_components`, `describe_files`, `describe_symbol_context`, `analyze_change`, `analyze_impact`, `get_minimum_verified_change_set`
+6. Use broad exploration tools (`list_*`, `find_*`) only when exact context is still missing
+7. Use deterministic execution tools (`describe_test_target`, `run_test_targets`, `describe_build_target`, `build_target`, `build_project`) instead of guessing commands
 
 ## Running the MCP Server (stdio-first)
 
@@ -228,7 +245,12 @@ Optional HTTP mode:
 
 Local analytics scripts:
 - `python scripts/analyze_analytics.py`
+- `python scripts/analyze_codex_usage.py`
 - `python scripts/run_mcp_benchmark.py`
+- `python scripts/run_codex_eval.py`
+- `python scripts/analyze_codex_eval.py`
+- `python scripts/run_codex_comparison.py`
+- `python scripts/analyze_codex_comparison.py`
 
 Analytics script options:
 - `python scripts/analyze_analytics.py --repository-root "<repo>"`
@@ -236,10 +258,64 @@ Analytics script options:
 - `python scripts/analyze_analytics.py --repository-root "<repo>" --no-include-global`
 - `python scripts/analyze_analytics.py --json`
 
+Native Codex usage script options:
+- `python scripts/analyze_codex_usage.py --repository-root "<repo>"`
+- `python scripts/analyze_codex_usage.py --repository-root "<repo>" --include-correlation`
+- `python scripts/analyze_codex_usage.py --repository-root "<repo>" --include-tokens`
+- `python scripts/analyze_codex_usage.py --repository-root "<repo>" --include-tokens --show-segments --segment-limit 20`
+- `python scripts/analyze_codex_usage.py --json`
+
+Codex evaluation script options:
+- `python scripts/run_codex_eval.py --tasks-file benchmarks/codex/tasks/suitcode_smoke.json`
+- `python scripts/run_codex_eval.py --tasks-file benchmarks/codex/tasks/suitcode_readonly.json`
+- `python scripts/run_codex_eval.py --tasks-file benchmarks/codex/tasks/suitcode_execution.json`
+- `python scripts/run_codex_eval.py --tasks-file benchmarks/codex/tasks/suitcode_project_readonly.json --task-id <task_id>`
+- `python scripts/run_codex_eval.py --tasks-file benchmarks/codex/tasks/suitcode_native.json --task-id <task_id>`
+- `python scripts/run_codex_eval.py --tasks-file benchmarks/codex/tasks/suitcode_smoke.json --timeout-seconds 180`
+- `python scripts/analyze_codex_eval.py --latest`
+- `python scripts/analyze_codex_eval.py --report-id <report_id>`
+- `python scripts/run_codex_comparison.py --skip-stress`
+- `python scripts/run_codex_comparison.py`
+- `python scripts/analyze_codex_comparison.py --latest`
+- `python scripts/analyze_codex_comparison.py --report-id <report_id>`
+
 Benchmark script options:
 - `python scripts/run_mcp_benchmark.py`
 - `python scripts/run_mcp_benchmark.py --tasks-file benchmarks/tasks/sample_tasks.json`
 - `python scripts/run_mcp_benchmark.py --fail-on-task-error`
+
+Token-accounting note:
+- `scripts/analyze_codex_usage.py --include-tokens` reports `transcript_estimated` token metrics from visible Codex rollout content.
+- These are evaluation metrics for relative comparison, not billing-accurate vendor token totals.
+
+Codex smoke-eval note:
+- `benchmarks/codex/tasks/suitcode_smoke.json` is the fast harness sanity check.
+- It targets both supported ecosystems through truth-coverage smoke tasks:
+  - `tests/test_repos/python`
+  - `tests/test_repos/npm`
+- Current reports include per-required-tool traces so timeout or tool-call failures are visible without opening rollout JSONL manually.
+
+Codex read-only evaluation note:
+- `benchmarks/codex/tasks/suitcode_readonly.json` is the stable read-only acceptance suite.
+- It targets both supported ecosystems through the fixture repositories:
+  - `tests/test_repos/python`
+  - `tests/test_repos/npm`
+- It covers:
+  - `orientation`
+  - `change_analysis`
+  - `minimum_verified_change_set`
+  - `truth_coverage`
+
+Codex live-project stress note:
+- `benchmarks/codex/tasks/suitcode_project_readonly.json` keeps the live SuitCode repository as the Python target.
+- This suite is useful for stress/performance tracking, but it is not the stability gate for Codex evaluation.
+
+Codex comparison note:
+- `scripts/run_codex_comparison.py` builds the shareable Codex report bundle:
+  - stable read-only A/B: SuitCode enabled vs SuitCode disabled
+  - stable execution: SuitCode-only
+  - optional live-project stress section
+- If Codex itself is blocked by vendor quota, the comparison now fails fast instead of generating a misleading report that treats quota exhaustion as product failure.
 
 Benchmark task workflows currently supported:
 - `orientation`
@@ -281,3 +357,4 @@ Not a current goal:
 - graph DB product direction
 - vector-search-first identity
 - generic shell execution MCP tools
+

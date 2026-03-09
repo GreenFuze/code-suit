@@ -12,6 +12,7 @@ from suitcode.core.tests.models import (
     TestTargetDescription,
 )
 from suitcode.providers.provider_base import ProviderBase
+from suitcode.providers.runtime_capability_models import TestRuntimeCapabilities
 
 if TYPE_CHECKING:
     from suitcode.core.repository import Repository
@@ -39,4 +40,8 @@ class TestProviderBase(ProviderBase, ABC):
 
     @abstractmethod
     def run_test_targets(self, test_ids: tuple[str, ...], timeout_seconds: int) -> tuple[TestExecutionResult, ...]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_test_runtime_capabilities(self) -> TestRuntimeCapabilities:
         raise NotImplementedError

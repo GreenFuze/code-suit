@@ -70,7 +70,27 @@ def test_repository_detects_registered_providers_and_intelligence() -> None:
         assert repository.actions.repository is repository
 
 
-def test_repository_root_candidate_prefers_vcs_root() -> None:
+def test_repository_root_candidate_prefers_nearest_supported_root_over_vcs_root() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        repo_root = Path(td) / "repo"
+        nested_repo = repo_root / "nested"
+        (repo_root / ".git").mkdir(parents=True)
+        nested_repo.mkdir(parents=True)
+        (nested_repo / "package.json").write_text(
+            '{"name":"nested","private":true,"workspaces":["packages/*"]}\n',
+            encoding="utf-8",
+        )
+        package_dir = nested_repo / "packages" / "app"
+        package_dir.mkdir(parents=True)
+        (package_dir / "package.json").write_text(
+            '{"name":"@nested/app","version":"1.0.0","scripts":{"test":"jest"}}\n',
+            encoding="utf-8",
+        )
+
+        assert Repository.root_candidate(nested_repo) == nested_repo
+
+
+def test_repository_root_candidate_falls_back_to_vcs_root_when_no_supported_nested_root_exists() -> None:
     with tempfile.TemporaryDirectory() as td:
         repo_root = Path(td) / "repo"
         nested = repo_root / "src" / "pkg"

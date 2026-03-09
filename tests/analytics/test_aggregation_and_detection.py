@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from suitcode.analytics.aggregation import AnalyticsAggregator
-from suitcode.analytics.models import AnalyticsEvent, AnalyticsStatus
+from suitcode.analytics.models import AnalyticsEvent, AnalyticsStatus, BenchmarkReport
 from suitcode.analytics.settings import AnalyticsSettings
 from suitcode.analytics.storage import JsonlAnalyticsStore
 
@@ -125,3 +125,39 @@ def test_inefficiency_detector_finds_duplicate_pagination_and_workspace_churn(tm
     churn = next(item for item in findings if item.kind == "workspace_churn")
     assert churn.tool_name == "open_workspace"
     assert churn.session_id == "session:a"
+
+
+def test_aggregator_reads_latest_benchmark_report_from_run_directory(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    store = JsonlAnalyticsStore(settings)
+    benchmark_root = store.global_root() / "benchmarks" / "benchmark-test"
+    benchmark_root.mkdir(parents=True)
+    report = BenchmarkReport(
+        report_id="benchmark-test",
+        generated_at_utc="2026-03-07T12:00:00.000Z",
+        adapter_name="suitcode-mcp-deterministic",
+        task_total=1,
+        task_passed=1,
+        task_failed=0,
+        task_error=0,
+        avg_tool_calls=1.0,
+        avg_duration_ms=5.0,
+        high_value_tool_usage_rate=1.0,
+        high_value_tool_early_rate=1.0,
+        deterministic_action_success_rate=0.0,
+        authoritative_provenance_rate=1.0,
+        derived_provenance_rate=0.0,
+        heuristic_provenance_rate=0.0,
+        tasks=tuple(),
+    )
+    (benchmark_root / "report.json").write_text(report.model_dump_json(indent=2), encoding="utf-8")
+
+    aggregator = AnalyticsAggregator(
+        store,
+        tool_catalog=("list_components",),
+        excluded_tools=tuple(),
+    )
+
+    loaded = aggregator.benchmark_report()
+    assert loaded is not None
+    assert loaded.report_id == "benchmark-test"

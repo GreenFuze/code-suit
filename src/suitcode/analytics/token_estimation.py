@@ -1,24 +1,11 @@
 from __future__ import annotations
 
+from suitcode.analytics.high_value_tools import HIGH_VALUE_TOOL_SET
 from suitcode.analytics.models import AnalyticsEvent, AnalyticsStatus, SavingsConfidence, TokenEstimate
 
 
 class TokenEstimator:
-    _HIGH_VALUE_TOOLS = frozenset(
-        {
-            "analyze_change",
-            "analyze_impact",
-            "describe_components",
-            "describe_files",
-            "describe_symbol_context",
-            "describe_test_target",
-            "describe_runner",
-            "run_test_targets",
-            "run_runner",
-            "build_target",
-            "build_project",
-        }
-    )
+    _HIGH_VALUE_TOOLS = HIGH_VALUE_TOOL_SET
     _MEDIUM_VALUE_TOOLS = frozenset(
         {
             "list_components",
@@ -71,4 +58,3 @@ class TokenEstimator:
         if tool_name in self._MEDIUM_VALUE_TOOLS:
             return 2.0, SavingsConfidence.MEDIUM
         return 1.2, SavingsConfidence.LOW
-

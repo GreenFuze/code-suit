@@ -139,10 +139,12 @@ class AnalyticsAggregator:
         benchmark_dir = self._store.global_root() / "benchmarks"
         if not benchmark_dir.exists():
             return None
-        report_files = sorted(item for item in benchmark_dir.glob("report-*.json") if item.is_file())
+        report_files = tuple(item for item in benchmark_dir.glob("*/report.json") if item.is_file())
+        if not report_files:
+            report_files = tuple(item for item in benchmark_dir.glob("report-*.json") if item.is_file())
         if not report_files:
             return None
-        latest = report_files[-1]
+        latest = max(report_files, key=lambda item: item.stat().st_mtime_ns)
         return BenchmarkReport.model_validate_json(latest.read_text(encoding="utf-8"))
 
 

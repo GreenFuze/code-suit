@@ -5,6 +5,7 @@ from suitcode.core.models import EntityInfo
 from suitcode.core.models.ids import normalize_repository_relative_path
 from suitcode.providers.code_provider_base import CodeProviderBase
 from suitcode.providers.provider_roles import ProviderRole
+from suitcode.providers.runtime_capability_models import CodeRuntimeCapabilities
 
 
 class CodeIntelligence:
@@ -68,6 +69,9 @@ class CodeIntelligence:
                 key=lambda item: (item.repository_rel_path, item.line_start, item.column_start, item.symbol_id or ""),
             )
         )
+
+    def get_runtime_capabilities(self) -> tuple[CodeRuntimeCapabilities, ...]:
+        return tuple(provider.get_code_runtime_capabilities() for provider in self.providers)
 
     def find_definition_by_symbol_id(self, symbol_id: str) -> tuple[CodeLocation, ...]:
         return self.find_definition(SymbolLookupTarget(symbol_id=symbol_id))

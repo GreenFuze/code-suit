@@ -8,11 +8,14 @@ from suitcode.core.intelligence_models import ComponentDependencyEdge
 from suitcode.core.models import Aggregator, Component, EntityInfo, ExternalPackage, FileInfo, PackageManager, Runner
 from suitcode.core.tests.models import RelatedTestMatch, RelatedTestTarget
 from suitcode.core.provenance_builders import manifest_provenance
+from suitcode.core.provenance import SourceKind
+from suitcode.core.provenance_builders import derived_summary_provenance
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
 from suitcode.providers.action_provider_base import ActionProviderBase
 from suitcode.providers.code_provider_base import CodeProviderBase
 from suitcode.providers.provider_roles import ProviderRole
 from suitcode.providers.python.action_service import PythonActionService
+from suitcode.providers.python.lsp_resolution import BasedPyrightResolver
 from suitcode.providers.python.models import (
     PythonExternalPackageAnalysis,
     PythonOwnedFileAnalysis,
@@ -28,11 +31,20 @@ from suitcode.providers.python.symbol_service import PythonFileSymbolService, Py
 from suitcode.providers.python.symbol_translation import PythonSymbolTranslator
 from suitcode.providers.python.test_discovery import PythonTestDiscoverer
 from suitcode.providers.python.test_models import PythonTestAnalysis
+from suitcode.providers.python.tool_resolution import PythonQualityToolResolver
 from suitcode.providers.python.test_translation import PythonTestTranslator
 from suitcode.providers.python.translation import PythonModelTranslator
 from suitcode.providers.python.workspace_analyzer import PythonWorkspaceAnalyzer
 from suitcode.providers.quality_models import QualityFileResult
 from suitcode.providers.quality_provider_base import QualityProviderBase
+from suitcode.providers.runtime_capability_models import (
+    ActionRuntimeCapabilities,
+    CodeRuntimeCapabilities,
+    QualityRuntimeCapabilities,
+    RuntimeCapability,
+    RuntimeCapabilityAvailability,
+    TestRuntimeCapabilities,
+)
 from suitcode.providers.shared.actions import ProviderActionSpec, ProviderActionTranslator
 from suitcode.providers.shared.code_facade import CodeFacadeMixin
 from suitcode.providers.shared.component_index import ComponentIndexBuilder
@@ -177,6 +189,168 @@ class PythonProvider(
                 (self._action_translator.to_repository_action(item) for item in self._get_actions()),
                 key=lambda item: item.id,
             )
+        )
+
+    def get_code_runtime_capabilities(self) -> CodeRuntimeCapabilities:
+        resolver = BasedPyrightResolver()
+        if any(candidate.exists() for candidate in resolver._local_candidates(self.repository.root)):
+            capability = self._runtime_capability(
+                capability_id="python.code.lsp",
+                availability=RuntimeCapabilityAvailability.AVAILABLE,
+                source_kind=SourceKind.LSP,
+                source_tool="basedpyright",
+                summary="repository-local basedpyright language-server executable is available for python code intelligence",
+            )
+        else:
+            capability = self._runtime_capability(
+                capability_id="python.code.lsp",
+                availability=RuntimeCapabilityAvailability.DEGRADED,
+                source_kind=SourceKind.LSP,
+                source_tool="basedpyright",
+                summary="repository-local basedpyright language-server executable is unavailable for python code intelligence",
+                reason="basedpyright-langserver was not found in the repository-local virtualenv",
+            )
+        return CodeRuntimeCapabilities(
+            symbol_search=capability,
+            symbols_in_file=capability,
+            definitions=capability,
+            references=capability,
+        )
+
+    def get_test_runtime_capabilities(self) -> TestRuntimeCapabilities:
+        discoverer = self._build_test_discoverer()
+        has_pytest_signal = discoverer._has_pytest_signal()
+        has_unittest_signal = discoverer._unittest_root() is not None
+        if has_pytest_signal:
+            if any(candidate.exists() for candidate in discoverer._tool_resolver._local_pytest_candidates()):
+                discovery = self._runtime_capability(
+                    capability_id="python.tests.discovery",
+                    availability=RuntimeCapabilityAvailability.AVAILABLE,
+                    source_kind=SourceKind.TEST_TOOL,
+                    source_tool="pytest",
+                    summary="repository-local pytest is available for deterministic python test discovery",
+                )
+                execution = self._runtime_capability(
+                    capability_id="python.tests.execution",
+                    availability=RuntimeCapabilityAvailability.AVAILABLE,
+                    source_kind=SourceKind.TEST_TOOL,
+                    source_tool="pytest",
+                    summary="repository-local pytest is available for deterministic python test execution",
+                )
+                return TestRuntimeCapabilities(discovery=discovery, execution=execution)
+            else:
+                reason = "pytest signal detected but repository-local pytest executable is unavailable; discovery falls back to heuristics"
+                discovery = self._runtime_capability(
+                    capability_id="python.tests.discovery",
+                    availability=RuntimeCapabilityAvailability.DEGRADED,
+                    source_kind=SourceKind.HEURISTIC,
+                    source_tool="pytest",
+                    summary="python test discovery falls back to pytest configuration heuristics",
+                    reason=reason,
+                )
+                execution = self._runtime_capability(
+                    capability_id="python.tests.execution",
+                    availability=RuntimeCapabilityAvailability.DEGRADED,
+                    source_kind=SourceKind.TEST_TOOL,
+                    source_tool="pytest",
+                    summary="pytest-backed deterministic python test execution is unavailable",
+                    reason="repository-local pytest executable is unavailable",
+                )
+                return TestRuntimeCapabilities(discovery=discovery, execution=execution)
+        if has_unittest_signal:
+            return TestRuntimeCapabilities(
+                discovery=self._runtime_capability(
+                    capability_id="python.tests.discovery",
+                    availability=RuntimeCapabilityAvailability.AVAILABLE,
+                    source_kind=SourceKind.HEURISTIC,
+                    source_tool="unittest",
+                    summary="python unittest discovery is available through repository heuristics",
+                ),
+                execution=self._runtime_capability(
+                    capability_id="python.tests.execution",
+                    availability=RuntimeCapabilityAvailability.AVAILABLE,
+                    source_kind=SourceKind.HEURISTIC,
+                    source_tool="unittest",
+                    summary="deterministic python unittest execution is available",
+                ),
+            )
+        unavailable = self._runtime_capability(
+            capability_id="python.tests.discovery",
+            availability=RuntimeCapabilityAvailability.UNAVAILABLE,
+            source_kind=SourceKind.HEURISTIC,
+            source_tool="pytest",
+            summary="python repository exposes no pytest or unittest test signals",
+            reason="repository exposes no pytest or unittest test signals",
+        )
+        return TestRuntimeCapabilities(discovery=unavailable, execution=unavailable.model_copy(update={"capability_id": "python.tests.execution"}))
+
+    def get_quality_runtime_capabilities(
+        self,
+        repository_rel_paths: tuple[str, ...] | None = None,
+    ) -> QualityRuntimeCapabilities:
+        relevant_paths = tuple(path for path in (repository_rel_paths or self._python_quality_paths()) if path.endswith(".py"))
+        if not relevant_paths:
+            unavailable = self._runtime_capability(
+                capability_id="python.quality.lint",
+                availability=RuntimeCapabilityAvailability.UNAVAILABLE,
+                source_kind=SourceKind.QUALITY_TOOL,
+                source_tool="ruff",
+                summary="python quality provider has no supported python files",
+                reason="python quality provider has no supported python files",
+            )
+            return QualityRuntimeCapabilities(
+                lint=unavailable,
+                format=unavailable.model_copy(update={"capability_id": "python.quality.format"}),
+            )
+        resolver = PythonQualityToolResolver(self.repository)
+        if any(candidate.exists() for candidate in resolver._local_candidates(self.repository.root)):
+            available = self._runtime_capability(
+                capability_id="python.quality.lint",
+                availability=RuntimeCapabilityAvailability.AVAILABLE,
+                source_kind=SourceKind.QUALITY_TOOL,
+                source_tool="ruff",
+                summary="repository-local ruff is available for python quality operations",
+            )
+            return QualityRuntimeCapabilities(
+                lint=available,
+                format=available.model_copy(update={"capability_id": "python.quality.format"}),
+            )
+        else:
+            degraded = self._runtime_capability(
+                capability_id="python.quality.lint",
+                availability=RuntimeCapabilityAvailability.DEGRADED,
+                source_kind=SourceKind.QUALITY_TOOL,
+                source_tool="ruff",
+                summary="repository-local ruff is unavailable for python quality operations",
+                reason="ruff was not found in the repository-local virtualenv",
+            )
+            return QualityRuntimeCapabilities(
+                lint=degraded,
+                format=degraded.model_copy(update={"capability_id": "python.quality.format"}),
+            )
+
+    def get_action_runtime_capabilities(self) -> ActionRuntimeCapabilities:
+        test_capabilities = self.get_test_runtime_capabilities()
+        runners = self._get_runners()
+        has_build_system = self._load_manifest().build_system is not None
+        return ActionRuntimeCapabilities(
+            tests=test_capabilities.execution.model_copy(update={"capability_id": "python.actions.tests"}),
+            builds=self._runtime_capability(
+                capability_id="python.actions.builds",
+                availability=RuntimeCapabilityAvailability.AVAILABLE if has_build_system else RuntimeCapabilityAvailability.UNAVAILABLE,
+                source_kind=SourceKind.MANIFEST,
+                source_tool="python-build",
+                summary="python build action capability derived from pyproject build-system metadata",
+                reason=None if has_build_system else "pyproject.toml does not declare a build-system section",
+            ),
+            runners=self._runtime_capability(
+                capability_id="python.actions.runners",
+                availability=RuntimeCapabilityAvailability.AVAILABLE if runners else RuntimeCapabilityAvailability.UNAVAILABLE,
+                source_kind=SourceKind.MANIFEST,
+                source_tool="python",
+                summary="python runner action capability derived from entry-point metadata",
+                reason=None if runners else "repository exposes no python entry-point runners",
+            ),
         )
 
     def lint_file(self, repository_rel_path: str, is_fix: bool) -> QualityFileResult:
@@ -338,4 +512,39 @@ class PythonProvider(
             runners=self._get_runners(),
             tests=self._get_tests_internal(),
             has_build_system=self._load_manifest().build_system is not None,
+        )
+
+    def _python_quality_paths(self) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                file_info.repository_rel_path
+                for file_info in self.get_files()
+                if Path(file_info.repository_rel_path).suffix.lower() == ".py"
+            )
+        )
+
+    @staticmethod
+    def _runtime_capability(
+        *,
+        capability_id: str,
+        availability: RuntimeCapabilityAvailability,
+        source_kind: SourceKind,
+        source_tool: str | None,
+        summary: str,
+        reason: str | None = None,
+    ) -> RuntimeCapability:
+        return RuntimeCapability(
+            capability_id=capability_id,
+            availability=availability,
+            source_kind=source_kind,
+            source_tool=source_tool,
+            reason=reason,
+            provenance=(
+                derived_summary_provenance(
+                    source_kind=source_kind,
+                    source_tool=source_tool,
+                    evidence_summary=summary if reason is None else f"{summary}: {reason}",
+                    evidence_paths=tuple(),
+                ),
+            ),
         )

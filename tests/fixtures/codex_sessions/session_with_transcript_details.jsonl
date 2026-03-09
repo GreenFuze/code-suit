@@ -1,0 +1,8 @@
+{"timestamp":"2026-03-08T12:00:00.000Z","type":"session_meta","payload":{"id":"codex-session-3","timestamp":"2026-03-08T12:00:00.000Z","cwd":"__REPO_ROOT__","cli_version":"0.105.0","model_provider":"openai"}}
+{"timestamp":"2026-03-08T12:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"check this repo"},{"type":"input_text","text":"find the right MCP tool"}]}}
+{"timestamp":"2026-03-08T12:00:02.000Z","type":"response_item","payload":{"type":"function_call","name":"shell_command","arguments":"{\"command\":\"rg TODO\"}","call_id":"call-shell"}}
+{"timestamp":"2026-03-08T12:00:02.300Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-shell","output":"TODO hit"}}
+{"timestamp":"2026-03-08T12:00:03.000Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"Need a deterministic repository summary first."}]}}
+{"timestamp":"2026-03-08T12:00:04.000Z","type":"response_item","payload":{"type":"function_call","name":"mcp__suitcode__repository_summary","arguments":"{\"workspace_id\":\"workspace:demo\",\"repository_id\":\"repo:demo\"}","call_id":"call-summary"}}
+{"timestamp":"2026-03-08T12:00:04.500Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-summary","output":"{\"components\":3}"}}
+{"timestamp":"2026-03-08T12:00:05.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Repository summary found."}]}}

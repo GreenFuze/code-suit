@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import importlib.util
 from pathlib import Path
 import re
+import shutil
+import sys
 
 from suitcode.core.validation import validate_timeout_seconds
 from suitcode.providers.shared.action_execution.models import ActionExecutionResult, ActionExecutionStatus
@@ -43,7 +46,7 @@ class ActionExecutionService:
         working_directory = self._resolve_working_directory(command_cwd)
         try:
             execution = self._process_executor.run(
-                argv=command_argv,
+                argv=self._resolve_command_argv(command_argv),
                 cwd=working_directory,
                 timeout_seconds=timeout_seconds,
             )
@@ -77,6 +80,21 @@ class ActionExecutionService:
         if not working_directory.exists() or not working_directory.is_dir():
             raise ValueError(f"command cwd does not exist: `{command_cwd}`")
         return working_directory
+
+    @staticmethod
+    def _resolve_command_argv(command_argv: tuple[str, ...]) -> tuple[str, ...]:
+        executable = command_argv[0]
+        if not executable.strip():
+            raise ValueError("command argv must not contain an empty executable")
+        resolved = shutil.which(executable)
+        if resolved is not None:
+            return (resolved, *command_argv[1:])
+        normalized = executable.lower()
+        if normalized in {"python", "python3", "python.exe", "python3.exe"}:
+            return (sys.executable, *command_argv[1:])
+        if normalized == "pytest" and importlib.util.find_spec("pytest") is not None:
+            return (sys.executable, "-m", "pytest", *command_argv[1:])
+        return command_argv
 
     def _write_run_log(self, action_id: str, output: str, run_group: str) -> str:
         runs_dir = (self._suit_dir / "runs" / run_group).resolve()

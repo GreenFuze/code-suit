@@ -14,7 +14,13 @@ from suitcode.core.tests.models import (
 )
 from suitcode.core.tests.test_intelligence import TestIntelligence as RuntimeTestIntelligence
 from suitcode.providers.provider_roles import ProviderRole
+from suitcode.providers.runtime_capability_models import (
+    RuntimeCapability,
+    RuntimeCapabilityAvailability,
+    TestRuntimeCapabilities as RuntimeTestCapabilities,
+)
 from suitcode.providers.test_provider_base import TestProviderBase
+from suitcode.core.provenance import SourceKind
 
 
 class _FakeRepository:
@@ -40,6 +46,7 @@ class _TestProvider(TestProviderBase):
     def __init__(self, repository, suffix: str) -> None:
         super().__init__(repository)
         self._suffix = suffix
+        self.discovered_calls = 0
 
     def get_tests(self):
         return (
@@ -57,6 +64,7 @@ class _TestProvider(TestProviderBase):
         )
 
     def get_discovered_tests(self):
+        self.discovered_calls += 1
         return (
             DiscoveredTestDefinition(
                 test_definition=self.get_tests()[0],
@@ -111,6 +119,33 @@ class _TestProvider(TestProviderBase):
             for test_id in test_ids
         )
 
+    def get_test_runtime_capabilities(self) -> RuntimeTestCapabilities:
+        discovery = RuntimeCapability(
+            capability_id=f"fake.test.discovery.{self._suffix}",
+            availability=RuntimeCapabilityAvailability.AVAILABLE,
+            source_kind=SourceKind.HEURISTIC,
+            source_tool="fake-test",
+            provenance=(
+                heuristic_provenance(
+                    evidence_summary="fake test discovery capability is available",
+                    evidence_paths=("tests/test_fake.py",),
+                ),
+            ),
+        )
+        execution = RuntimeCapability(
+            capability_id=f"fake.test.execution.{self._suffix}",
+            availability=RuntimeCapabilityAvailability.AVAILABLE,
+            source_kind=SourceKind.HEURISTIC,
+            source_tool="fake-test",
+            provenance=(
+                heuristic_provenance(
+                    evidence_summary="fake test execution capability is available",
+                    evidence_paths=("tests/test_fake.py",),
+                ),
+            ),
+        )
+        return RuntimeTestCapabilities(discovery=discovery, execution=execution)
+
 
 def test_test_intelligence_concatenates_and_sorts_definitions() -> None:
     repo = _FakeRepository(
@@ -138,3 +173,15 @@ def test_test_intelligence_describe_and_run_targets_route_by_test_id() -> None:
 
     assert description.test_definition.id == "test:a"
     assert tuple(item.test_id for item in results) == ("test:b", "test:a")
+
+
+def test_test_intelligence_caches_discovered_tests() -> None:
+    provider = _TestProvider(repository=None, suffix="a")  # type: ignore[arg-type]
+    repo = _FakeRepository((provider,))
+    intelligence = RuntimeTestIntelligence(repo)  # type: ignore[arg-type]
+
+    first = intelligence.get_discovered_tests()
+    second = intelligence.get_discovered_tests()
+
+    assert first == second
+    assert provider.discovered_calls == 1

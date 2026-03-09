@@ -12,6 +12,7 @@ dependencies = [
     "mcp>=1,<2",
     "packaging>=24",
     "pydantic>=2.0",
+    "tiktoken>=0.8",
 ]
 
 [project.scripts]

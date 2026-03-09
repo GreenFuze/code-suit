@@ -32,6 +32,17 @@ def is_authoritative_provenance(
     return any(entry.confidence_mode == ConfidenceMode.AUTHORITATIVE for entry in _as_tuple(entries))
 
 
+def preferred_confidence_mode(
+    entries: tuple[ProvenanceEntry, ...] | Iterable[ProvenanceEntry],
+) -> ConfidenceMode:
+    ordered_entries = _as_tuple(entries)
+    if any(entry.confidence_mode == ConfidenceMode.AUTHORITATIVE for entry in ordered_entries):
+        return ConfidenceMode.AUTHORITATIVE
+    if any(entry.confidence_mode == ConfidenceMode.DERIVED for entry in ordered_entries):
+        return ConfidenceMode.DERIVED
+    return ConfidenceMode.HEURISTIC
+
+
 def preferred_source_kind(
     entries: tuple[ProvenanceEntry, ...] | Iterable[ProvenanceEntry],
 ) -> SourceKind:

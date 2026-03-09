@@ -248,7 +248,8 @@ class RelatedTestView(StrictModel):
     id: str
     name: str
     framework: str
-    test_files: tuple[str, ...]
+    test_file_count: int
+    test_files_preview: tuple[str, ...]
     relation_reason: str
     matched_owner_id: str | None = None
     matched_path: str | None = None
@@ -386,6 +387,23 @@ class TestImpactView(StrictModel):
     provenance: tuple[ProvenanceView, ...]
 
 
+class ChangeEvidenceEdgeView(StrictModel):
+    source_node_kind: str
+    source_node_id: str
+    target_node_kind: str
+    target_node_id: str
+    edge_kind: str
+    reason: str
+    provenance: tuple[ProvenanceView, ...]
+
+
+class ChangeEvidencePreviewView(StrictModel):
+    total_edges: int
+    counts_by_kind: dict[str, int]
+    edges_preview: tuple[ChangeEvidenceEdgeView, ...]
+    truncated: bool
+
+
 class ChangeImpactView(StrictModel):
     target_kind: str
     owner: OwnerView
@@ -398,6 +416,105 @@ class ChangeImpactView(StrictModel):
     related_tests: tuple[TestImpactView, ...]
     related_runners: tuple[RunnerImpactView, ...]
     quality_gates: tuple[QualityGateView, ...]
+    evidence: ChangeEvidencePreviewView
+    truth_coverage: TruthCoverageSummaryView
+    provenance: tuple[ProvenanceView, ...]
+
+
+class MinimumVerifiedEvidenceEdgeView(StrictModel):
+    source_node_kind: str
+    source_node_id: str
+    target_node_kind: str
+    target_node_id: str
+    edge_kind: str
+    reason: str
+    provenance: tuple[ProvenanceView, ...]
+
+
+class MinimumVerifiedCommandSummaryView(StrictModel):
+    argv_preview: tuple[str, ...]
+    total_arg_count: int
+    truncated: bool
+    cwd: str | None = None
+
+
+class MinimumVerifiedTestTargetView(StrictModel):
+    test_id: str
+    name: str
+    framework: str
+    test_file_count: int
+    test_files_preview: tuple[str, ...]
+    command: MinimumVerifiedCommandSummaryView
+    is_authoritative: bool
+    warning: str | None = None
+    inclusion_reason: str
+    inclusion_confidence_mode: str
+    proof_edges: tuple[MinimumVerifiedEvidenceEdgeView, ...]
+    provenance: tuple[ProvenanceView, ...]
+
+
+class MinimumVerifiedBuildTargetView(StrictModel):
+    action_id: str
+    name: str
+    provider_id: str
+    target_id: str
+    target_kind: str
+    owner_ids: tuple[str, ...]
+    invocation: MinimumVerifiedCommandSummaryView
+    dry_run_supported: bool
+    inclusion_reason: str
+    inclusion_confidence_mode: str
+    proof_edges: tuple[MinimumVerifiedEvidenceEdgeView, ...]
+    provenance: tuple[ProvenanceView, ...]
+
+
+class MinimumVerifiedRunnerActionView(StrictModel):
+    action_id: str
+    name: str
+    provider_id: str
+    target_id: str
+    target_kind: str
+    invocation: MinimumVerifiedCommandSummaryView
+    inclusion_reason: str
+    inclusion_confidence_mode: str
+    proof_edges: tuple[MinimumVerifiedEvidenceEdgeView, ...]
+    provenance: tuple[ProvenanceView, ...]
+
+
+class MinimumVerifiedQualityOperationView(StrictModel):
+    id: str
+    provider_id: str
+    operation: str
+    scope: str
+    repository_rel_paths: tuple[str, ...]
+    mcp_tool_name: str
+    is_fix: bool | None = None
+    is_mutating: bool
+    inclusion_reason: str
+    inclusion_confidence_mode: str
+    proof_edges: tuple[MinimumVerifiedEvidenceEdgeView, ...]
+    provenance: tuple[ProvenanceView, ...]
+
+
+class ExcludedMinimumVerifiedItemView(StrictModel):
+    item_kind: str
+    item_id: str
+    reason_code: str
+    reason: str
+    replaced_by_ids: tuple[str, ...]
+    provenance: tuple[ProvenanceView, ...]
+
+
+class MinimumVerifiedChangeSetView(StrictModel):
+    target_kind: str
+    owner: OwnerView
+    primary_component: ComponentView | None = None
+    tests: tuple[MinimumVerifiedTestTargetView, ...]
+    build_targets: tuple[MinimumVerifiedBuildTargetView, ...]
+    runner_actions: tuple[MinimumVerifiedRunnerActionView, ...]
+    quality_validation_operations: tuple[MinimumVerifiedQualityOperationView, ...]
+    quality_hygiene_operations: tuple[MinimumVerifiedQualityOperationView, ...]
+    excluded_items: tuple[ExcludedMinimumVerifiedItemView, ...]
     provenance: tuple[ProvenanceView, ...]
 
 
@@ -496,6 +613,33 @@ class QualitySnapshotView(StrictModel):
     provider_ids: tuple[str, ...]
 
 
+class TruthCoverageByDomainView(StrictModel):
+    domain: str
+    total_entities: int
+    authoritative_count: int
+    derived_count: int
+    heuristic_count: int
+    unavailable_count: int
+    availability: str
+    degraded_reason: str | None = None
+    source_kind_mix: dict[str, int]
+    source_tool_mix: dict[str, int]
+    execution_available: bool | None = None
+    action_capabilities: dict[str, bool]
+
+
+class TruthCoverageSummaryView(StrictModel):
+    scope_kind: str
+    scope_id: str
+    domains: tuple[TruthCoverageByDomainView, ...]
+    overall_authoritative_count: int
+    overall_derived_count: int
+    overall_heuristic_count: int
+    overall_unavailable_count: int
+    overall_availability: str
+    provenance: tuple[ProvenanceView, ...]
+
+
 class RepositorySummaryView(StrictModel):
     workspace_id: str
     repository_id: str
@@ -513,6 +657,7 @@ class RepositorySummaryView(StrictModel):
     package_manager_ids_preview: tuple[str, ...]
     test_ids_preview: tuple[str, ...]
     preview_limit: int
+    truth_coverage: TruthCoverageSummaryView | None = None
     provenance: tuple[ProvenanceView, ...]
 
 
@@ -551,11 +696,31 @@ class InefficientToolCallView(StrictModel):
     sample_event_ids: tuple[str, ...] = ()
 
 
+class BenchmarkArtifactReferenceView(StrictModel):
+    kind: str
+    location: str
+    description: str | None = None
+
+
 class BenchmarkTaskResultView(StrictModel):
     task_id: str
     status: str
     tool_calls: int
+    turn_count: int
     duration_ms: int
+    session_id: str
+    workspace_id: str | None = None
+    repository_id: str | None = None
+    repository_root: str
+    first_high_value_tool: str | None = None
+    first_high_value_tool_call_index: int | None = None
+    used_high_value_tool_early: bool
+    deterministic_action_kind: str | None = None
+    deterministic_action_target_id: str | None = None
+    deterministic_action_status: str
+    provenance_confidence_mix: dict[str, int]
+    provenance_source_kind_mix: dict[str, int]
+    artifact_references: tuple[BenchmarkArtifactReferenceView, ...]
     notes: str | None = None
 
 
@@ -570,4 +735,11 @@ class BenchmarkReportView(StrictModel):
     task_error: int
     avg_tool_calls: float
     avg_duration_ms: float
+    high_value_tool_usage_rate: float
+    high_value_tool_early_rate: float
+    deterministic_action_success_rate: float
+    authoritative_provenance_rate: float
+    derived_provenance_rate: float
+    heuristic_provenance_rate: float
+    truth_coverage: TruthCoverageSummaryView | None = None
     tasks: tuple[BenchmarkTaskResultView, ...]

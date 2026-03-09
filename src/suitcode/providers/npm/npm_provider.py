@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import shutil
 from suitcode.core.intelligence_models import ComponentDependencyEdge
 from suitcode.core.action_models import RepositoryAction
 from pathlib import Path
@@ -15,6 +17,8 @@ from suitcode.core.models import (
     Runner,
 )
 from suitcode.core.tests.models import RelatedTestMatch, RelatedTestTarget
+from suitcode.core.provenance import SourceKind
+from suitcode.core.provenance_builders import derived_summary_provenance
 from suitcode.core.provenance_builders import manifest_provenance
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
 from suitcode.providers.action_provider_base import ActionProviderBase
@@ -51,6 +55,16 @@ from suitcode.providers.shared.package_json.models import PackageJsonWorkspace
 from suitcode.providers.shared.test_facade import TestFacadeMixin
 from suitcode.providers.shared.test_execution import TestExecutionService
 from suitcode.providers.shared.test_target_runtime import DeterministicTestTargetMixin
+from suitcode.providers.runtime_capability_models import (
+    ActionRuntimeCapabilities,
+    CodeRuntimeCapabilities,
+    QualityRuntimeCapabilities,
+    RuntimeCapability,
+    RuntimeCapabilityAvailability,
+    TestRuntimeCapabilities,
+)
+from suitcode.providers.npm.tool_resolution import NpmQualityToolResolver
+from suitcode.providers.shared.lsp import TypeScriptLanguageServerResolver
 
 if TYPE_CHECKING:
     from suitcode.core.repository import Repository
@@ -147,6 +161,142 @@ class NPMProvider(
                 (self._action_translator.to_repository_action(item) for item in self._get_actions()),
                 key=lambda item: item.id,
             )
+        )
+
+    def get_code_runtime_capabilities(self) -> CodeRuntimeCapabilities:
+        resolver = TypeScriptLanguageServerResolver()
+        local_server_available = any(candidate.exists() for candidate in resolver._local_language_server_candidates(self.repository.root))
+        local_tsserver_available = any(candidate.exists() for candidate in resolver._local_tsserver_candidates(self.repository.root))
+        if local_server_available and local_tsserver_available:
+            capability = self._runtime_capability(
+                capability_id="npm.code.lsp",
+                availability=RuntimeCapabilityAvailability.AVAILABLE,
+                source_kind=SourceKind.LSP,
+                source_tool="typescript-language-server",
+                summary="repository-local TypeScript language-server tooling is available for npm code intelligence",
+            )
+        else:
+            capability = self._runtime_capability(
+                capability_id="npm.code.lsp",
+                availability=RuntimeCapabilityAvailability.DEGRADED,
+                source_kind=SourceKind.LSP,
+                source_tool="typescript-language-server",
+                summary="repository-local TypeScript language-server tooling is unavailable for npm code intelligence",
+                reason="typescript-language-server and/or tsserver was not found in repository-local node_modules",
+            )
+        return CodeRuntimeCapabilities(
+            symbol_search=capability,
+            symbols_in_file=capability,
+            definitions=capability,
+            references=capability,
+        )
+
+    def get_test_runtime_capabilities(self) -> TestRuntimeCapabilities:
+        discovered_tests = self._get_tests()
+        if not discovered_tests:
+            unavailable = self._runtime_capability(
+                capability_id="npm.tests.discovery",
+                availability=RuntimeCapabilityAvailability.UNAVAILABLE,
+                source_kind=SourceKind.HEURISTIC,
+                source_tool="jest",
+                summary="repository exposes no npm test definitions",
+                reason="repository exposes no npm test definitions",
+            )
+            return TestRuntimeCapabilities(
+                discovery=unavailable,
+                execution=unavailable.model_copy(update={"capability_id": "npm.tests.execution"}),
+            )
+        discovery = self._runtime_capability(
+            capability_id="npm.tests.discovery",
+            availability=RuntimeCapabilityAvailability.AVAILABLE,
+            source_kind=SourceKind.MANIFEST,
+            source_tool="jest",
+            summary="npm test definitions are discoverable from package metadata",
+        )
+        if self._npm_command_available():
+            execution = self._runtime_capability(
+                capability_id="npm.tests.execution",
+                availability=RuntimeCapabilityAvailability.AVAILABLE,
+                source_kind=SourceKind.MANIFEST,
+                source_tool="npm",
+                summary="npm command is available for deterministic npm test execution",
+            )
+        else:
+            execution = self._runtime_capability(
+                capability_id="npm.tests.execution",
+                availability=RuntimeCapabilityAvailability.DEGRADED,
+                source_kind=SourceKind.MANIFEST,
+                source_tool="npm",
+                summary="npm command is unavailable for deterministic npm test execution",
+                reason=f"npm executable was not found for repository `{self.repository.root}`",
+            )
+        return TestRuntimeCapabilities(discovery=discovery, execution=execution)
+
+    def get_quality_runtime_capabilities(
+        self,
+        repository_rel_paths: tuple[str, ...] | None = None,
+    ) -> QualityRuntimeCapabilities:
+        relevant_paths = tuple(
+            path
+            for path in (repository_rel_paths or self._quality_paths())
+            if Path(path).suffix.lower() in {".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"}
+        )
+        if not relevant_paths:
+            unavailable = self._runtime_capability(
+                capability_id="npm.quality.lint",
+                availability=RuntimeCapabilityAvailability.UNAVAILABLE,
+                source_kind=SourceKind.QUALITY_TOOL,
+                source_tool="eslint",
+                summary="npm quality provider has no supported JS/TS files",
+                reason="npm quality provider has no supported JS/TS files",
+            )
+            return QualityRuntimeCapabilities(
+                lint=unavailable,
+                format=unavailable.model_copy(
+                    update={
+                        "capability_id": "npm.quality.format",
+                        "source_tool": "prettier",
+                    }
+                ),
+            )
+        resolver = NpmQualityToolResolver(self.repository)
+        first_path = (self.repository.root / relevant_paths[0]).resolve()
+        lint_capability = self._quality_capability(
+            capability_id="npm.quality.lint",
+            source_tool="eslint",
+            summary="eslint is resolvable for npm quality operations",
+            resolve=lambda: resolver.resolve_linter(first_path),
+        )
+        format_capability = self._quality_capability(
+            capability_id="npm.quality.format",
+            source_tool="prettier",
+            summary="prettier is resolvable for npm quality operations",
+            resolve=lambda: resolver.resolve_formatter(first_path),
+        )
+        return QualityRuntimeCapabilities(lint=lint_capability, format=format_capability)
+
+    def get_action_runtime_capabilities(self) -> ActionRuntimeCapabilities:
+        runners = self._get_runners()
+        tests = self._get_tests()
+        has_build_runner = any(runner.script_name == "build" for runner in runners)
+        return ActionRuntimeCapabilities(
+            tests=self.get_test_runtime_capabilities().execution.model_copy(update={"capability_id": "npm.actions.tests"}),
+            builds=self._runtime_capability(
+                capability_id="npm.actions.builds",
+                availability=RuntimeCapabilityAvailability.AVAILABLE if has_build_runner else RuntimeCapabilityAvailability.UNAVAILABLE,
+                source_kind=SourceKind.MANIFEST,
+                source_tool="npm",
+                summary="npm build action capability derived from package build scripts",
+                reason=None if has_build_runner else "repository exposes no npm build scripts",
+            ),
+            runners=self._runtime_capability(
+                capability_id="npm.actions.runners",
+                availability=RuntimeCapabilityAvailability.AVAILABLE if runners else RuntimeCapabilityAvailability.UNAVAILABLE,
+                source_kind=SourceKind.MANIFEST,
+                source_tool="npm",
+                summary="npm runner action capability derived from package scripts",
+                reason=None if runners else "repository exposes no npm runner scripts",
+            ),
         )
 
     def get_related_tests(self, target: RelatedTestTarget) -> tuple[RelatedTestMatch, ...]:
@@ -434,3 +584,64 @@ class NPMProvider(
 
     def _to_discovered_test_definition(self, test_analysis: object):
         return self._translator.to_discovered_test_definition(test_analysis)
+
+    def _quality_paths(self) -> tuple[str, ...]:
+        return tuple(sorted(file_info.repository_rel_path for file_info in self.get_files()))
+
+    @staticmethod
+    def _runtime_capability(
+        *,
+        capability_id: str,
+        availability: RuntimeCapabilityAvailability,
+        source_kind: SourceKind,
+        source_tool: str | None,
+        summary: str,
+        reason: str | None = None,
+    ) -> RuntimeCapability:
+        return RuntimeCapability(
+            capability_id=capability_id,
+            availability=availability,
+            source_kind=source_kind,
+            source_tool=source_tool,
+            reason=reason,
+            provenance=(
+                derived_summary_provenance(
+                    source_kind=source_kind,
+                    source_tool=source_tool,
+                    evidence_summary=summary if reason is None else f"{summary}: {reason}",
+                    evidence_paths=tuple(),
+                ),
+            ),
+        )
+
+    def _quality_capability(
+        self,
+        *,
+        capability_id: str,
+        source_tool: str,
+        summary: str,
+        resolve,
+    ) -> RuntimeCapability:
+        try:
+            resolve()
+            return self._runtime_capability(
+                capability_id=capability_id,
+                availability=RuntimeCapabilityAvailability.AVAILABLE,
+                source_kind=SourceKind.QUALITY_TOOL,
+                source_tool=source_tool,
+                summary=summary,
+            )
+        except ValueError as exc:
+            return self._runtime_capability(
+                capability_id=capability_id,
+                availability=RuntimeCapabilityAvailability.DEGRADED,
+                source_kind=SourceKind.QUALITY_TOOL,
+                source_tool=source_tool,
+                summary=f"{source_tool} is unavailable for npm quality operations",
+                reason=str(exc),
+            )
+
+    @staticmethod
+    def _npm_command_available() -> bool:
+        candidates = ("npm.cmd", "npm.exe", "npm") if os.name == "nt" else ("npm",)
+        return any(shutil.which(candidate) is not None for candidate in candidates)

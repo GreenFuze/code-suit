@@ -9,6 +9,8 @@ from suitcode.providers.provider_roles import ProviderRole
 from suitcode.core.provenance_builders import lsp_delta_provenance, quality_tool_provenance
 from suitcode.providers.quality_models import QualityEntityDelta, QualityFileResult
 from suitcode.providers.quality_provider_base import QualityProviderBase
+from suitcode.providers.runtime_capability_models import QualityRuntimeCapabilities, RuntimeCapability, RuntimeCapabilityAvailability
+from suitcode.core.provenance import SourceKind
 
 
 class _FakeRepository:
@@ -110,6 +112,38 @@ class _QualityProvider(QualityProviderBase):
                 ),
             ),
         )
+
+    def get_quality_runtime_capabilities(
+        self,
+        repository_rel_paths: tuple[str, ...] | None = None,
+    ) -> QualityRuntimeCapabilities:
+        lint = RuntimeCapability(
+            capability_id="fake.quality.lint",
+            availability=RuntimeCapabilityAvailability.AVAILABLE,
+            source_kind=SourceKind.QUALITY_TOOL,
+            source_tool="fake",
+            provenance=(
+                quality_tool_provenance(
+                    source_tool="fake",
+                    evidence_summary="fake lint capability is available",
+                    evidence_paths=("file.ts",),
+                ),
+            ),
+        )
+        format_capability = RuntimeCapability(
+            capability_id="fake.quality.format",
+            availability=RuntimeCapabilityAvailability.AVAILABLE,
+            source_kind=SourceKind.QUALITY_TOOL,
+            source_tool="fake",
+            provenance=(
+                quality_tool_provenance(
+                    source_tool="fake",
+                    evidence_summary="fake format capability is available",
+                    evidence_paths=("file.ts",),
+                ),
+            ),
+        )
+        return QualityRuntimeCapabilities(lint=lint, format=format_capability)
 
 
 def test_quality_intelligence_dispatches_to_selected_provider() -> None:

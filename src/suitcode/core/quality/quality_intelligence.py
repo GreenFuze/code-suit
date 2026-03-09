@@ -3,6 +3,7 @@ from __future__ import annotations
 from suitcode.providers.provider_roles import ProviderRole
 from suitcode.providers.quality_models import QualityFileResult
 from suitcode.providers.quality_provider_base import QualityProviderBase
+from suitcode.providers.runtime_capability_models import QualityRuntimeCapabilities
 
 
 class QualityIntelligence:
@@ -32,6 +33,12 @@ class QualityIntelligence:
     def format_file(self, repository_rel_path: str, provider_id: str) -> QualityFileResult:
         provider = self._get_quality_provider(provider_id)
         return provider.format_file(repository_rel_path)
+
+    def get_runtime_capabilities(
+        self,
+        repository_rel_paths: tuple[str, ...] | None = None,
+    ) -> tuple[QualityRuntimeCapabilities, ...]:
+        return tuple(provider.get_quality_runtime_capabilities(repository_rel_paths) for provider in self.providers)
 
     def _get_quality_provider(self, provider_id: str) -> QualityProviderBase:
         provider = self._repository.get_provider(provider_id)

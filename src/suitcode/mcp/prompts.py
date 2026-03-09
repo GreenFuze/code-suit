@@ -13,8 +13,9 @@ def register_prompts(app: FastMCP) -> None:
     def understand_repository_with_suitcode() -> str:
         return (
             "Use deterministic SuitCode flow: inspect_repository_support, open_workspace, and repository_summary first. "
+            "Use get_truth_coverage when you need to judge whether SuitCode is operating at full trust or partial visibility. "
             "Then prefer exact context tools (describe_components, describe_files, describe_symbol_context) and "
-            "impact tools (analyze_change or analyze_impact) before broad list/find exploration. "
+            "impact tools (analyze_change, analyze_impact, or get_minimum_verified_change_set when you need the exact validation frontier) before broad list/find exploration. "
             "Use generic file exploration only after SuitCode narrows to exact files, symbols, tests, or actions."
         )
 
@@ -25,6 +26,7 @@ def register_prompts(app: FastMCP) -> None:
     def refactor_using_suitcode_tools() -> str:
         return (
             "Start with repository_summary, then use describe_* and analyze_change to build exact change scope. "
+            "If the task is what exactly must be run for a change, prefer get_minimum_verified_change_set. "
             "Use get_related_tests + describe_test_target and list_build_targets + describe_build_target for deterministic "
             "execution steps. Avoid repeated broad list/find pagination when deterministic context tools can answer directly."
         )

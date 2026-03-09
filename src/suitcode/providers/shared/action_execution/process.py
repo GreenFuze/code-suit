@@ -29,6 +29,7 @@ class ProcessExecutor:
         process = subprocess.Popen(
             list(argv),
             cwd=cwd,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,

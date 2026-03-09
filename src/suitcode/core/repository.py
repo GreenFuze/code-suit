@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING, Mapping
 
 from suitcode.core.action_intelligence import ActionIntelligence
@@ -20,7 +21,11 @@ from suitcode.core.component_context_resolver import ComponentContextResolver
 from suitcode.core.ownership_index import OwnershipIndex
 from suitcode.core.context_service import ContextService
 from suitcode.core.impact_service import ImpactService
+from suitcode.core.minimum_verified_change_set_models import MinimumVerifiedChangeSet
+from suitcode.core.minimum_verified_change_set_service import MinimumVerifiedChangeSetService
 from suitcode.core.repository_models import FileOwnerInfo, OwnedNodeInfo
+from suitcode.core.truth_coverage_models import TruthCoverageSummary
+from suitcode.core.truth_coverage_service import TruthCoverageService
 from suitcode.core.runner_service import RunnerService
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
 from suitcode.providers.code_provider_base import CodeProviderBase
@@ -56,6 +61,15 @@ class Repository:
             raise ValueError(f"repository path is not a directory: {repository_path}")
 
         ancestors = [path, *path.parents]
+
+        # Prefer the nearest provider-supported directory over generic VCS roots.
+        # This keeps nested supported repositories addressable inside a larger checkout.
+        for candidate in ancestors:
+            try:
+                if detect_support_for_root(candidate).is_supported:
+                    return candidate
+            except ValueError:
+                continue
 
         for candidate in ancestors:
             if any((candidate / marker).exists() for marker in cls._VC_MARKERS):
@@ -115,6 +129,10 @@ class Repository:
         self._change_impact_service: ChangeImpactService | None = None
         self._runner_service: RunnerService | None = None
         self._build_service: BuildService | None = None
+        self._minimum_verified_change_set_service: MinimumVerifiedChangeSetService | None = None
+        self._truth_coverage_service: TruthCoverageService | None = None
+        self._truth_coverage_cache: TruthCoverageSummary | None = None
+        self._truth_coverage_lock = Lock()
         self._initialize_providers(support)
 
         from suitcode.core.architecture.architecture_intelligence import ArchitectureIntelligence
@@ -307,6 +325,36 @@ class Repository:
             runner_preview_limit=runner_preview_limit,
         )
 
+    def get_minimum_verified_change_set(self, target: ChangeTarget) -> MinimumVerifiedChangeSet:
+        return self._build_minimum_verified_change_set_service().get_minimum_verified_change_set(target)
+
+    def get_truth_coverage(self) -> TruthCoverageSummary:
+        cached = self._truth_coverage_cache
+        if cached is not None:
+            return cached
+        with self._truth_coverage_lock:
+            cached = self._truth_coverage_cache
+            if cached is not None:
+                return cached
+            self._truth_coverage_cache = self._build_truth_coverage_service().repository_truth_coverage()
+            return self._truth_coverage_cache
+
+    def get_change_truth_coverage(
+        self,
+        target: ChangeTarget,
+        reference_preview_limit: int = 50,
+        dependent_preview_limit: int = 50,
+        test_preview_limit: int = 25,
+        runner_preview_limit: int = 25,
+    ) -> TruthCoverageSummary:
+        return self.analyze_change(
+            target,
+            reference_preview_limit=reference_preview_limit,
+            dependent_preview_limit=dependent_preview_limit,
+            test_preview_limit=test_preview_limit,
+            runner_preview_limit=runner_preview_limit,
+        ).truth_coverage
+
     def list_actions(self, query: ActionQuery | None = None) -> tuple[RepositoryAction, ...]:
         return self.actions.get_actions(query)
 
@@ -387,6 +435,7 @@ class Repository:
                 self._build_context_service(),
                 self._build_component_context_resolver(),
                 self._build_code_reference_service(),
+                self._build_truth_coverage_service(),
             )
         return self._change_impact_service
 
@@ -399,3 +448,16 @@ class Repository:
         if self._build_service is None:
             self._build_service = BuildService(self)
         return self._build_service
+
+    def _build_minimum_verified_change_set_service(self) -> MinimumVerifiedChangeSetService:
+        if self._minimum_verified_change_set_service is None:
+            self._minimum_verified_change_set_service = MinimumVerifiedChangeSetService(
+                self,
+                self._build_component_context_resolver(),
+            )
+        return self._minimum_verified_change_set_service
+
+    def _build_truth_coverage_service(self) -> TruthCoverageService:
+        if self._truth_coverage_service is None:
+            self._truth_coverage_service = TruthCoverageService(self)
+        return self._truth_coverage_service

@@ -414,6 +414,411 @@ Reduce duplication and keep object boundaries clean without changing public MCP 
 - [x] Public contracts remain stable.
 - [x] Refactor keeps fail-fast and deterministic guarantees intact.
 
+## Phase 11: Early Evaluation Telemetry
+
+### Goal
+Capture enough telemetry early to evaluate how agents use SuitCode while other roadmap phases are still being built, without blocking on full public benchmark infrastructure or vendor-perfect token reporting.
+
+### Capability work
+- [x] Add benchmark/run correlation fields across analytics and benchmark artifacts:
+  - benchmark run ID
+  - benchmark task ID
+  - agent/session ID
+  - repo/task scope
+- [x] Add transcript/artifact capture hooks for native-agent runs, even before full transcript-token accounting is complete.
+- [x] Add per-run metrics beyond MCP call counts:
+  - total turns
+  - first high-value SuitCode tool used
+  - deterministic action success
+  - authoritative / derived / heuristic mix
+- [x] Add native artifact archival hooks where practical:
+  - Codex session artifact path
+  - Claude telemetry/log reference
+  - Cursor run metadata reference
+- [x] Add a benchmark/eval summary output that can answer:
+  - was SuitCode used?
+  - was it used early?
+  - did it lead to deterministic action execution?
+  - what trust mix did the run produce?
+
+### Refactor / design hardening
+- [x] Keep this telemetry slice strictly as enabling infrastructure, not a full benchmark product.
+- [x] Reuse existing analytics models/services where semantics align; create benchmark-specific models only where necessary.
+- [x] Keep vendor-specific capture behind adapters so core analytics stays vendor-neutral.
+- [x] Fail fast when telemetry capture is explicitly requested but the required artifact path/source is unavailable.
+
+### Tests / acceptance
+- [x] Add tests for benchmark/task/session correlation fields.
+- [x] Add tests for transcript/artifact path capture.
+- [x] Add tests for per-run derived metrics such as first high-value tool used and action-success summaries.
+- [x] Add fail-fast coverage for missing configured artifact sources.
+
+### Done when
+- [x] Future roadmap phases can be measured with per-run telemetry instead of only aggregate MCP usage.
+- [x] SuitCode can evaluate agent behavior during feature development without waiting for full public benchmark infrastructure.
+
+## Phase 12: Proof-Carrying Change Graph
+
+### Goal
+Upgrade `analyze_change` from a provenance-backed summary into a proof-carrying change graph where every returned relationship and recommendation can explain exactly why it exists.
+
+### Capability work
+- [x] Extend `ChangeImpact` so each major returned category carries explicit evidence edges, not only summarized provenance:
+  - owner resolution edges
+  - ownership-to-component edges
+  - symbol/reference edges
+  - component dependency edges
+  - related-test inclusion edges
+  - runner inclusion edges
+  - quality-gate applicability edges
+- [x] Add a typed edge model, for example:
+  - `ChangeEvidenceEdge`
+  - `source_node_id`
+  - `target_node_id`
+  - `edge_kind`
+  - `reason`
+  - `provenance`
+- [x] Add optional graph-style previews to `analyze_change` output:
+  - evidence edge count
+  - evidence edges preview
+  - grouped edges by category
+- [x] Keep current summary fields intact so existing consumers do not lose the high-level artifact.
+
+### Refactor / design hardening
+- [x] Keep proof-carrying edge assembly in dedicated orchestration logic, not inside MCP presenters.
+- [x] Avoid duplicating dependency/test/reference reasoning across:
+  - `ContextService`
+  - `ImpactService`
+  - `ChangeImpactService`
+- [x] Introduce one focused internal object to assemble proof edges:
+  - `ChangeEvidenceAssembler`
+- [x] Ensure edge generation reuses existing provenance-bearing outputs instead of inventing parallel evidence models.
+
+### Tests / acceptance
+- [x] Add tests proving each edge category is populated from current evidence sources.
+- [x] Add fail-fast tests for unresolved evidence links and contradictory edge assembly.
+- [x] Add MCP tests to ensure proof edges reach the final tool output.
+- [x] Add acceptance coverage for:
+  - file target
+  - symbol target
+  - owner target
+
+### Done when
+- [x] `analyze_change` can explain each inclusion with explicit edge-level evidence.
+- [x] SuitCode can distinguish summary provenance from proof graph evidence.
+- [x] Existing high-level `analyze_change` consumers remain compatible.
+
+## Phase 13: Minimum Verified Change Set
+
+### Goal
+Return the smallest deterministic validation frontier required to trust a change for a given file, symbol, or owner.
+
+### Capability work
+- [x] Add a first-class artifact:
+  - `MinimumVerifiedChangeSet`
+- [x] Add a new MCP tool:
+  - `get_minimum_verified_change_set`
+- [x] The artifact must include:
+  - target owner / primary component
+  - exact related tests
+  - exact build targets
+  - exact runners
+  - quality gates
+  - exclusion reasoning where applicable
+  - proof edges / provenance per included item
+- [x] Distinguish:
+  - authoritative inclusion
+  - derived inclusion
+  - heuristic fallback inclusion
+- [x] Add “why minimal” semantics:
+  - deduplicated targets
+  - removed supersets
+  - no unrelated validation surfaces
+
+### Refactor / design hardening
+- [x] Do not overload `analyze_change` with minimum-validation-set logic.
+- [x] Introduce a dedicated service:
+  - `MinimumVerifiedChangeSetService`
+- [x] Reuse:
+  - existing repository descriptors and provider-backed discovery surfaces
+  - action discovery
+  - test/build/runner descriptors
+  - quality applicability logic
+- [x] Keep minimization logic explicit and testable; avoid ad hoc filtering inside presenters.
+
+### Tests / acceptance
+- [x] Add tests proving the returned set is:
+  - deterministic
+  - deduplicated
+  - smaller or equal to the full change frontier
+- [x] Add fail-fast tests for targets with no validation surfaces.
+- [x] Add provider-specific coverage for:
+  - python
+  - npm
+- [x] Add MCP acceptance coverage for exact target selection and proof visibility.
+
+### Done when
+- [x] SuitCode can answer “what is the minimum exact set I must validate for this change?”
+- [x] The answer is not a guess and includes evidence for every returned target.
+
+## Phase 14: Truth Coverage Map
+
+### Goal
+Expose how much of SuitCode’s understanding is authoritative, derived, or heuristic for a repository and for individual answers.
+
+### Capability work
+- [x] Add a typed coverage model:
+  - `TruthCoverageSummary`
+  - `TruthCoverageByDomain`
+- [x] Coverage domains should include at minimum:
+  - architecture
+  - code
+  - tests
+  - quality
+  - actions
+- [x] For each domain, report:
+  - total entities
+  - authoritative count
+  - derived count
+  - heuristic count
+  - execution availability where relevant
+  - degraded / unavailable reason where relevant
+- [x] Add one MCP tool:
+  - `get_truth_coverage`
+- [x] Add optional truth-coverage attachment to:
+  - `repository_summary`
+  - `analyze_change`
+  - benchmark reports
+
+### Refactor / design hardening
+- [x] Compute truth coverage from existing provenance, not from duplicated role-specific counters.
+- [x] Centralize coverage classification logic in one internal service:
+  - `TruthCoverageService`
+- [x] Avoid mixing repository-wide coverage and artifact-local coverage into one object unless clearly separated.
+
+### Tests / acceptance
+- [x] Add tests for coverage classification across:
+  - authoritative
+  - derived
+  - heuristic
+  - unavailable
+- [x] Add provider-specific tests for current python/npm realities.
+- [x] Add MCP tests for coverage tool output shape and consistency.
+
+### Done when
+- [x] SuitCode can explicitly report where it is authoritative and where it is partially blind.
+- [x] Benchmark reports can reference trust coverage instead of only success metrics.
+
+## Phase 15: Native-Agent Evaluation Harness
+
+### Goal
+Evaluate SuitCode under real native agents (Codex CLI, Claude Code, Cursor CLI/headless) without requiring stable vendor token APIs.
+
+Status note:
+- [x] Codex passive-ingestion telemetry is implemented:
+  - rollout discovery from `~/.codex/sessions`
+  - repository/session filtering
+  - SuitCode MCP usage detection
+  - server-local analytics correlation
+- [x] Codex harness-owned execution is implemented:
+  - `codex exec` task execution
+  - fixed prompt/control automation
+  - structured scoring and stored reports
+  - smoke evaluation task file for fast sanity checks
+- [x] Codex smoke stabilization is implemented for the current supported ecosystems:
+  - `python` truth-coverage smoke passes
+  - `npm` truth-coverage smoke passes
+  - required-tool traces are attached to evaluation results and analyzers
+- [x] Codex read-only stabilization is implemented for the current supported ecosystems:
+  - stable fixture-based read-only suite (`suitcode_readonly.json`) passes end to end
+  - `orientation`, `change_analysis`, `minimum_verified_change_set`, and `truth_coverage` are covered for both `python` and `npm`
+  - live-project read-only tasks are split into a separate stress suite (`suitcode_project_readonly.json`)
+- [x] Codex execution-task stabilization is implemented for the current stable fixture suite:
+  - stable execution suite (`suitcode_execution.json`) passes end to end
+  - `python` test execution and `npm` build execution both pass with required-tool traces
+  - subprocess-driven actions and discovery no longer inherit interactive stdin from the stdio MCP server
+- [ ] Remaining native-agent expansion work:
+  - launching/evaluating Claude and Cursor under the same contract
+  - unified benchmark execution across Codex/Claude/Cursor
+
+### Capability work
+- [ ] Add a benchmark runner layer for native agents, distinct from internal deterministic workflow benchmarks.
+- [ ] Introduce a typed run model:
+  - `NativeAgentBenchmarkRun`
+  - `NativeAgentTaskResult`
+- [ ] Add adapter families for:
+  - `codex_cli`
+  - `claude_code`
+  - `cursor_cli`
+- [ ] Each adapter must support:
+  - fresh session per task
+  - fixed prompt injection
+  - MCP availability configuration
+  - run budget / timeout
+  - result capture
+- [ ] Add run outputs:
+  - success / failure / error
+  - wall-clock duration
+  - turn count
+  - SuitCode MCP tool calls
+  - first high-value tool used
+  - deterministic action success
+  - transcript artifact path
+  - native token metrics when available
+  - provenance / truth coverage summary when available
+
+### Refactor / design hardening
+- [ ] Keep vendor-specific automation isolated behind adapter classes.
+- [ ] Do not mix native-agent execution with core MCP benchmark harness classes.
+- [ ] Introduce a shared benchmark run contract so all agents emit comparable result objects.
+- [ ] Fail fast when a required native-agent capability is unavailable on the current machine.
+
+### Tests / acceptance
+- [ ] Add dry-run/adapter contract tests for each native-agent adapter.
+- [ ] Add fixture-based tests for transcript/result parsing.
+- [ ] Add fail-fast tests for:
+  - missing agent executable
+  - unsupported headless mode
+  - malformed transcript output
+  - missing token export path when configured as required
+
+### Done when
+- [ ] SuitCode can run the same task suite through real native agents.
+- [ ] Benchmark outputs are comparable even when token observability differs by vendor.
+
+## Phase 16: Transcript-Based Token Accounting
+
+### Goal
+Provide a cross-agent token accounting layer based on captured transcripts, independent of vendor billing exports.
+
+Status note:
+- [x] Codex/OpenAI passive-ingestion transcript token accounting is implemented.
+- [ ] Claude/Cursor transcript token accounting and native-agent benchmark integration remain.
+
+### Capability work
+- [x] Add transcript capture schema including:
+  - user prompt
+  - assistant messages
+  - MCP tool calls
+  - MCP tool outputs
+  - terminal/tool output shown to the agent
+  - final answer
+- [x] Add transcript token accounting service:
+  - `TranscriptTokenEstimator`
+- [x] Report:
+  - input transcript tokens
+  - tool-output transcript tokens
+  - total transcript tokens
+  - tokens to first decisive high-value tool
+  - tokens to success
+- [x] Keep this separate from existing heuristic “tokens saved” analytics.
+- [ ] Where native token exports exist, store both:
+  - native token metrics
+  - transcript token estimate
+
+### Refactor / design hardening
+- [x] Do not present transcript-token estimates as billing truth.
+- [x] Introduce an explicit metric-kind field:
+  - `native_reported`
+  - `transcript_estimated`
+  - `heuristic_saved`
+- [x] Reuse current analytics schemas only where the semantics are actually compatible; otherwise create a benchmark-specific metric schema.
+
+### Tests / acceptance
+- [x] Add unit tests for transcript token accounting over representative benchmark traces.
+- [ ] Add tests for missing or partial transcript segments.
+- [x] Add tests ensuring native-reported and estimated metrics are not conflated.
+
+### Done when
+- [ ] Every native-agent benchmark run has a token metric even if the agent does not expose one natively.
+- [ ] Public evaluation claims can rely on transcript estimates as the common denominator.
+
+## Phase 17: Public Comparison Baselines and Benchmark Suite
+
+### Goal
+Make SuitCode’s evaluation story externally defensible with baseline comparisons and standardized benchmark task families.
+
+### Capability work
+- [ ] Split benchmark tasks into families:
+  - tool-use correctness
+  - repository-context quality
+  - end-to-end issue resolution
+  - SuitCode-native deterministic workflows
+- [ ] Add baseline modes:
+  - filesystem/search-only
+  - LSP-first
+  - search-first
+  - structure/graph-first where practical
+- [ ] Define per-task metrics:
+  - task success
+  - turns to success
+  - time to success
+  - SuitCode tool calls
+  - high-value tool correctness
+  - argument correctness where measurable
+  - action execution success
+  - authoritative evidence rate
+  - transcript tokens to success
+- [ ] Add benchmark result grouping by:
+  - agent
+  - repo
+  - task family
+  - cold start vs warm state
+  - baseline vs treatment
+
+### Refactor / design hardening
+- [ ] Keep benchmark dataset definitions separate from runner logic.
+- [ ] Keep baseline configuration explicit and reproducible.
+- [ ] Introduce one result aggregation/reporting layer that can emit:
+  - machine-readable JSON
+  - human-readable markdown summary
+
+### Tests / acceptance
+- [ ] Add validation for benchmark task schemas and baseline configs.
+- [ ] Add acceptance tests for cold vs warm state accounting.
+- [ ] Add report-generation tests ensuring all published metrics are reproducible from stored artifacts.
+
+### Done when
+- [ ] SuitCode can run reproducible A/B benchmark families under consistent harness settings.
+- [ ] Public comparison reports can be generated without manual spreadsheet stitching.
+
+## Phase 18: Native Token Telemetry Integrations
+
+### Goal
+Add optional native token telemetry collection where agents expose it, without making benchmark validity depend on vendor support.
+
+### Capability work
+- [ ] Add optional Claude Code telemetry ingestion:
+  - OTel metrics/logs
+  - token counters
+  - request/tool activity
+- [ ] Add Codex session artifact ingestion:
+  - rollout/session JSONL archival
+  - optional extraction of usage-like fields when version-validated
+- [ ] Add Cursor usage ingestion:
+  - dashboard/API batch accounting integration where practical
+- [ ] Join native token telemetry to benchmark runs by:
+  - session ID
+  - task ID
+  - timestamp window
+
+### Refactor / design hardening
+- [ ] Treat native telemetry as optional enrichments, not required benchmark dependencies.
+- [ ] Add explicit stability classification for vendor integrations:
+  - documented stable
+  - version-dependent
+  - experimental
+- [ ] Keep telemetry correlation logic outside core analytics used by SuitCode MCP itself.
+
+### Tests / acceptance
+- [ ] Add parser tests for each supported telemetry source.
+- [ ] Add fail-fast tests for incompatible or missing telemetry configuration.
+- [ ] Add explicit warnings for unstable vendor-derived usage fields.
+
+### Done when
+- [ ] SuitCode can enrich benchmark runs with native token telemetry where available.
+- [ ] Lack of native token telemetry does not block evaluation.
+
 ## Deferred / Not Now
 
 - [ ] Graph DB / persisted graph as a product direction
@@ -423,7 +828,9 @@ Reduce duplication and keep object boundaries clean without changing public MCP 
 - [ ] richer provenance fields like command hashes or repo revision binding unless a real use case demands them
 - [ ] full build-truth claims for ecosystems that are still coarse today
 - [ ] generic shell-execution MCP tools
-- [ ] external LLM/client token log correlation for high-fidelity savings validation
+- [ ] cross-vendor billing-accurate token parity as a strict requirement
+- [ ] public benchmark claims based solely on heuristic token savings
+- [ ] vendor-specific hidden-prompt accounting unless the vendor exposes it reliably
 
 ## README Direction
 
@@ -439,12 +846,20 @@ Reduce duplication and keep object boundaries clean without changing public MCP 
   - not a graph DB product
   - not a vector-search system
   - a deterministic repository intelligence engine backed by real tools
+- [ ] README eventually includes:
+  - proof-carrying change analysis
+  - minimum verified change set
+  - truth coverage reporting
+  - public benchmark methodology
+  - transcript-estimated vs native-reported token metrics distinction
 
 ## Naming Guidance for Future MCP Functions
 
 - [ ] Prefer task-explicit names over vague descriptive names.
 - [ ] Prefer names like:
   - `analyze_change`
+  - `get_minimum_verified_change_set`
+  - `get_truth_coverage`
   - `describe_test_target`
   - `run_test_target`
   - `how_to_run_related_tests`
@@ -456,3 +871,4 @@ Reduce duplication and keep object boundaries clean without changing public MCP 
   - overlapping repo-wide names like `summary` vs `overview`
   - vague `describe_*` names when the task can be stated more directly
   - names that do not tell the agent what action or question they answer
+

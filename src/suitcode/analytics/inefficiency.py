@@ -11,6 +11,8 @@ class InefficiencyDetector:
         self._excluded_tools = set(excluded_tools)
         self._high_value_tools = {
             "analyze_change",
+            "get_minimum_verified_change_set",
+            "get_truth_coverage",
             "describe_components",
             "describe_files",
             "describe_symbol_context",

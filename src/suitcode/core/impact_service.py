@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from suitcode.core.code.models import CodeLocation
 from suitcode.core.code_reference_service import CodeReferenceService
 from suitcode.core.component_context_resolver import ComponentContextResolver
+from suitcode.core.impact_target_resolution import ImpactTargetResolver
 from suitcode.core.intelligence_models import ImpactSummary, ImpactTarget
 from suitcode.core.ownership_index import OwnershipIndex
 from suitcode.core.provenance import ProvenanceEntry, SourceKind
@@ -27,10 +27,13 @@ class ImpactService:
         code_reference_service: CodeReferenceService,
     ) -> None:
         self._repository = repository
-        self._ownership_index = ownership_index
-        self._context_service = context_service
-        self._component_context_resolver = component_context_resolver
-        self._code_reference_service = code_reference_service
+        self._target_resolver = ImpactTargetResolver(
+            repository,
+            ownership_index,
+            context_service,
+            component_context_resolver,
+            code_reference_service,
+        )
 
     def analyze_impact(
         self,
@@ -39,91 +42,37 @@ class ImpactService:
         dependent_preview_limit: int,
         test_preview_limit: int,
     ) -> ImpactSummary:
-        if target.symbol_id is not None:
-            symbol_context = self._context_service.describe_symbol_context(
-                target.symbol_id,
-                reference_preview_limit=reference_preview_limit,
-                test_preview_limit=test_preview_limit,
-            )
-            primary_component_id = self._component_context_resolver.primary_component_id_for_owner(symbol_context.owner.id)
-            dependent_ids = self._component_dependents_or_empty(primary_component_id)
-            return ImpactSummary(
-                target_kind="symbol",
-                owner=symbol_context.owner,
-                primary_component_id=primary_component_id,
-                dependent_component_count=len(dependent_ids),
-                dependent_component_ids_preview=dependent_ids[:dependent_preview_limit],
-                reference_count=symbol_context.reference_count,
-                references_preview=symbol_context.references_preview[:reference_preview_limit],
-                related_test_count=symbol_context.related_test_count,
-                related_test_ids_preview=tuple(
-                    item.match.test_definition.id for item in symbol_context.related_tests_preview[:test_preview_limit]
-                ),
-                provenance=self._impact_provenance(
-                    owner_id=symbol_context.owner.id,
-                    symbol_path=symbol_context.symbol.repository_rel_path,
-                    has_references=symbol_context.reference_count > 0,
-                    dependent_ids=dependent_ids,
-                    related_tests=symbol_context.related_tests_preview,
-                ),
-            )
-
-        if target.repository_rel_path is not None:
-            file_context = self._context_service.describe_files(
-                (target.repository_rel_path,),
-                symbol_preview_limit=20,
-                test_preview_limit=test_preview_limit,
-            )[0]
-            references = self._code_reference_service.references_for_file(file_context.file_info.repository_rel_path)
-            primary_component_id = self._component_context_resolver.primary_component_id_for_file(
-                file_context.file_info.repository_rel_path,
-                file_context.owner.id,
-            )
-            dependent_ids = self._component_dependents_or_empty(primary_component_id)
-            return ImpactSummary(
-                target_kind="file",
-                owner=file_context.owner,
-                primary_component_id=primary_component_id,
-                dependent_component_count=len(dependent_ids),
-                dependent_component_ids_preview=dependent_ids[:dependent_preview_limit],
-                reference_count=len(references),
-                references_preview=references[:reference_preview_limit],
-                related_test_count=file_context.related_test_count,
-                related_test_ids_preview=tuple(
-                    item.match.test_definition.id for item in file_context.related_tests_preview[:test_preview_limit]
-                ),
-                provenance=self._impact_provenance(
-                    owner_id=file_context.owner.id,
-                    symbol_path=file_context.file_info.repository_rel_path,
-                    has_references=len(references) > 0,
-                    dependent_ids=dependent_ids,
-                    related_tests=file_context.related_tests_preview,
-                ),
-            )
-
-        if target.owner_id is None:
-            raise ValueError("impact target must include `symbol_id`, `repository_rel_path`, or `owner_id`")
-        owner = self._ownership_index.owner_info(target.owner_id)
-        primary_component_id = self._component_context_resolver.primary_component_id_for_owner(target.owner_id)
+        resolved = self._target_resolver.resolve(
+            symbol_id=target.symbol_id,
+            repository_rel_path=target.repository_rel_path,
+            owner_id=target.owner_id,
+            reference_preview_limit=reference_preview_limit,
+            test_preview_limit=test_preview_limit,
+        )
+        primary_component_id = (
+            resolved.owner_primary_component_id
+            if resolved.target_kind in {"symbol", "owner"}
+            else resolved.file_primary_component_id
+        )
         dependent_ids = self._component_dependents_or_empty(primary_component_id)
-        references = self._code_reference_service.references_for_owner(target.owner_id)
-        related_tests = self._repository.tests.get_related_tests(RelatedTestTarget(owner_id=target.owner_id))
         return ImpactSummary(
-            target_kind="owner",
-            owner=owner,
+            target_kind=resolved.target_kind,
+            owner=resolved.owner,
             primary_component_id=primary_component_id,
             dependent_component_count=len(dependent_ids),
             dependent_component_ids_preview=dependent_ids[:dependent_preview_limit],
-            reference_count=len(references),
-            references_preview=references[:reference_preview_limit],
-            related_test_count=len(related_tests),
-            related_test_ids_preview=tuple(item.match.test_definition.id for item in related_tests[:test_preview_limit]),
+            reference_count=len(resolved.reference_locations),
+            references_preview=resolved.reference_locations[:reference_preview_limit],
+            related_test_count=len(resolved.related_tests),
+            related_test_ids_preview=tuple(
+                item.match.test_definition.id for item in resolved.related_tests[:test_preview_limit]
+            ),
             provenance=self._impact_provenance(
-                owner_id=target.owner_id,
-                symbol_path=None,
-                has_references=len(references) > 0,
+                owner_id=resolved.owner.id,
+                symbol_path=resolved.evidence_path,
+                has_references=len(resolved.reference_locations) > 0,
                 dependent_ids=dependent_ids,
-                related_tests=related_tests,
+                related_tests=resolved.related_tests,
             ),
         )
 

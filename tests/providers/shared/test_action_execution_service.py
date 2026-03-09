@@ -19,7 +19,8 @@ def test_action_execution_service_writes_logs_and_returns_failed_result(tmp_path
 
     class _FakeProcessExecutor:
         def run(self, argv: tuple[str, ...], cwd: Path, timeout_seconds: int) -> ProcessExecutionResult:
-            assert argv == ("npm", "run", "test")
+            assert argv[1:] == ("run", "test")
+            assert Path(argv[0]).name.lower().startswith("npm")
             assert cwd == repository_root
             assert timeout_seconds == 30
             return ProcessExecutionResult(

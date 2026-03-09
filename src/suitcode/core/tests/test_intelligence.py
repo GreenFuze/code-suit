@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from threading import Lock
+
 from suitcode.core.models import TestDefinition
 from suitcode.core.tests.models import (
     DiscoveredTestDefinition,
@@ -10,6 +12,7 @@ from suitcode.core.tests.models import (
 )
 from suitcode.core.validation import validate_exact_batch, validate_timeout_seconds
 from suitcode.providers.provider_roles import ProviderRole
+from suitcode.providers.runtime_capability_models import TestRuntimeCapabilities
 from suitcode.providers.test_provider_base import TestProviderBase
 
 
@@ -17,6 +20,8 @@ class TestIntelligence:
     def __init__(self, repository: "Repository") -> None:
         self._repository = repository
         self._provider_index_by_test_id: dict[str, TestProviderBase] | None = None
+        self._discovered_tests_cache: tuple[DiscoveredTestDefinition, ...] | None = None
+        self._discovered_tests_lock = Lock()
 
     @property
     def repository(self) -> "Repository":
@@ -34,13 +39,25 @@ class TestIntelligence:
         return tuple(item.test_definition for item in self.get_discovered_tests())
 
     def get_discovered_tests(self) -> tuple[DiscoveredTestDefinition, ...]:
-        items = [item for provider in self.providers for item in provider.get_discovered_tests()]
-        by_id: dict[str, DiscoveredTestDefinition] = {}
-        for item in items:
-            if item.test_definition.id in by_id:
-                raise ValueError(f"duplicate test id detected across providers: `{item.test_definition.id}`")
-            by_id[item.test_definition.id] = item
-        return tuple(sorted(by_id.values(), key=lambda item: item.test_definition.id))
+        cached = self._discovered_tests_cache
+        if cached is not None:
+            return cached
+        with self._discovered_tests_lock:
+            cached = self._discovered_tests_cache
+            if cached is not None:
+                return cached
+            by_id: dict[str, DiscoveredTestDefinition] = {}
+            provider_index: dict[str, TestProviderBase] = {}
+            for provider in self.providers:
+                for discovered in provider.get_discovered_tests():
+                    discovered_id = discovered.test_definition.id
+                    if discovered_id in by_id:
+                        raise ValueError(f"duplicate test id detected across providers: `{discovered_id}`")
+                    by_id[discovered_id] = discovered
+                    provider_index[discovered_id] = provider
+            self._provider_index_by_test_id = provider_index
+            self._discovered_tests_cache = tuple(sorted(by_id.values(), key=lambda item: item.test_definition.id))
+            return self._discovered_tests_cache
 
     def get_related_tests(self, target: RelatedTestTarget) -> tuple[ResolvedRelatedTest, ...]:
         discovered_tests = {item.test_definition.id: item for item in self.get_discovered_tests()}
@@ -100,16 +117,12 @@ class TestIntelligence:
                 results_by_id[item.test_id] = item
         return tuple(results_by_id[test_id] for test_id in test_ids)
 
+    def get_runtime_capabilities(self) -> tuple[TestRuntimeCapabilities, ...]:
+        return tuple(provider.get_test_runtime_capabilities() for provider in self.providers)
+
     def _provider_for_test_id(self, test_id: str) -> TestProviderBase:
         if self._provider_index_by_test_id is None:
-            index: dict[str, TestProviderBase] = {}
-            for provider in self.providers:
-                for discovered in provider.get_discovered_tests():
-                    discovered_id = discovered.test_definition.id
-                    if discovered_id in index:
-                        raise ValueError(f"duplicate test id detected across providers: `{discovered_id}`")
-                    index[discovered_id] = provider
-            self._provider_index_by_test_id = index
+            self.get_discovered_tests()
         try:
             return self._provider_index_by_test_id[test_id]
         except KeyError as exc:

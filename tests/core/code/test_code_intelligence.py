@@ -9,6 +9,8 @@ from suitcode.core.provenance_builders import lsp_provenance
 from suitcode.core.provenance_builders import lsp_location_provenance
 from suitcode.providers.code_provider_base import CodeProviderBase
 from suitcode.providers.provider_roles import ProviderRole
+from suitcode.providers.runtime_capability_models import CodeRuntimeCapabilities, RuntimeCapability, RuntimeCapabilityAvailability
+from suitcode.core.provenance import SourceKind
 
 
 class _FakeRepository:
@@ -94,6 +96,27 @@ class _CodeProvider(CodeProviderBase):
                     ),
                 ),
             ),
+        )
+
+    def get_code_runtime_capabilities(self) -> CodeRuntimeCapabilities:
+        capability = RuntimeCapability(
+            capability_id="fake.code",
+            availability=RuntimeCapabilityAvailability.AVAILABLE,
+            source_kind=SourceKind.LSP,
+            source_tool="typescript-language-server",
+            provenance=(
+                lsp_provenance(
+                    source_tool="typescript-language-server",
+                    evidence_summary="fake code capability is available",
+                    evidence_paths=("file.ts",),
+                ),
+            ),
+        )
+        return CodeRuntimeCapabilities(
+            symbol_search=capability,
+            symbols_in_file=capability,
+            definitions=capability,
+            references=capability,
         )
 
 

@@ -3,17 +3,21 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from suitcode.core.change_models import ChangeImpact, ChangeTarget, QualityGateInfo, RunnerImpact, TestImpact
+from suitcode.core.change_evidence import ChangeEvidenceAssembler
 from suitcode.core.code.models import CodeLocation
 from suitcode.core.code_reference_service import CodeReferenceService
 from suitcode.core.component_context_resolver import ComponentContextResolver
 from suitcode.core.context_service import ContextService
+from suitcode.core.intelligence_models import ComponentDependencyEdge
+from suitcode.core.impact_target_resolution import ImpactTargetResolver
 from suitcode.core.intelligence_models import ComponentContext
 from suitcode.core.models import Component, Runner
 from suitcode.core.ownership_index import OwnershipIndex
 from suitcode.core.provenance import SourceKind
 from suitcode.core.provenance_builders import derived_summary_provenance, ownership_provenance
 from suitcode.core.provenance_summary import merge_provenance_paths, summarize_related_provenance
-from suitcode.core.tests.models import RelatedTestTarget, ResolvedRelatedTest
+from suitcode.core.tests.models import ResolvedRelatedTest
+from suitcode.core.truth_coverage_service import TruthCoverageService
 
 if TYPE_CHECKING:
     from suitcode.core.repository import Repository
@@ -27,12 +31,20 @@ class ChangeImpactService:
         context_service: ContextService,
         component_context_resolver: ComponentContextResolver,
         code_reference_service: CodeReferenceService,
+        truth_coverage_service: TruthCoverageService,
     ) -> None:
         self._repository = repository
         self._ownership_index = ownership_index
-        self._context_service = context_service
         self._component_context_resolver = component_context_resolver
-        self._code_reference_service = code_reference_service
+        self._target_resolver = ImpactTargetResolver(
+            repository,
+            ownership_index,
+            context_service,
+            component_context_resolver,
+            code_reference_service,
+        )
+        self._evidence_assembler = ChangeEvidenceAssembler()
+        self._truth_coverage_service = truth_coverage_service
 
     def analyze_change(
         self,
@@ -42,196 +54,112 @@ class ChangeImpactService:
         test_preview_limit: int,
         runner_preview_limit: int,
     ) -> ChangeImpact:
-        if target.symbol_id is not None:
-            return self._analyze_symbol_target(
-                target.symbol_id,
-                reference_preview_limit=reference_preview_limit,
-                dependent_preview_limit=dependent_preview_limit,
-                test_preview_limit=test_preview_limit,
-                runner_preview_limit=runner_preview_limit,
-            )
-        if target.repository_rel_path is not None:
-            return self._analyze_file_target(
-                target.repository_rel_path,
-                reference_preview_limit=reference_preview_limit,
-                dependent_preview_limit=dependent_preview_limit,
-                test_preview_limit=test_preview_limit,
-                runner_preview_limit=runner_preview_limit,
-            )
-        if target.owner_id is None:
-            raise ValueError("change target must include `symbol_id`, `repository_rel_path`, or `owner_id`")
-        return self._analyze_owner_target(
-            target.owner_id,
+        resolved = self._target_resolver.resolve(
+            symbol_id=target.symbol_id,
+            repository_rel_path=target.repository_rel_path,
+            owner_id=target.owner_id,
             reference_preview_limit=reference_preview_limit,
+            test_preview_limit=test_preview_limit,
+        )
+        if resolved.target_kind == "symbol":
+            return self._analyze_resolved_target(
+                resolved,
+                primary_component_id=resolved.file_primary_component_id,
+                dependent_preview_limit=dependent_preview_limit,
+                test_preview_limit=test_preview_limit,
+                runner_preview_limit=runner_preview_limit,
+            )
+        if resolved.target_kind == "file":
+            return self._analyze_resolved_target(
+                resolved,
+                primary_component_id=resolved.file_primary_component_id,
+                dependent_preview_limit=dependent_preview_limit,
+                test_preview_limit=test_preview_limit,
+                runner_preview_limit=runner_preview_limit,
+            )
+        return self._analyze_resolved_target(
+            resolved,
+            primary_component_id=resolved.owner_primary_component_id,
             dependent_preview_limit=dependent_preview_limit,
             test_preview_limit=test_preview_limit,
             runner_preview_limit=runner_preview_limit,
         )
 
-    def _analyze_symbol_target(
+    def _analyze_resolved_target(
         self,
-        symbol_id: str,
-        reference_preview_limit: int,
+        resolved,
+        *,
+        primary_component_id: str | None,
         dependent_preview_limit: int,
         test_preview_limit: int,
         runner_preview_limit: int,
     ) -> ChangeImpact:
-        symbol_context = self._context_service.describe_symbol_context(
-            symbol_id,
-            reference_preview_limit=reference_preview_limit,
-            test_preview_limit=test_preview_limit,
-        )
-        owner = symbol_context.owner
-        primary_component = self._resolve_primary_component(owner.id, symbol_context.symbol.repository_rel_path)
+        primary_component = self._target_resolver.resolve_component(primary_component_id)
         component_context = self._primary_component_context(
             primary_component,
             dependent_preview_limit=dependent_preview_limit,
             test_preview_limit=test_preview_limit,
         )
         dependent_components = self._dependent_components(primary_component, dependent_preview_limit)
-        related_tests = self._related_tests_for_target(
-            repository_rel_path=symbol_context.symbol.repository_rel_path,
-            owner_id=None,
-            test_preview_limit=test_preview_limit,
-        )
-        related_runners = self._related_runners_for_component(primary_component, runner_preview_limit)
-        quality_gates = self._quality_gates_for_path(symbol_context.symbol.repository_rel_path)
-        return ChangeImpact(
-            target_kind="symbol",
-            owner=owner,
-            primary_component=primary_component,
-            component_context=component_context,
-            symbol_context=symbol_context,
-            dependent_components=dependent_components,
-            reference_locations=symbol_context.references_preview[:reference_preview_limit],
-            related_tests=related_tests,
-            related_runners=related_runners,
-            quality_gates=quality_gates,
-            provenance=self._change_provenance(
-                owner_id=owner.id,
-                dependent_components=dependent_components,
-                reference_locations=symbol_context.references_preview[:reference_preview_limit],
-                related_tests=related_tests,
-                related_runners=related_runners,
-                quality_gates=quality_gates,
-                evidence_path=symbol_context.symbol.repository_rel_path,
-            ),
-        )
-
-    def _analyze_file_target(
-        self,
-        repository_rel_path: str,
-        reference_preview_limit: int,
-        dependent_preview_limit: int,
-        test_preview_limit: int,
-        runner_preview_limit: int,
-    ) -> ChangeImpact:
-        file_context = self._context_service.describe_files(
-            (repository_rel_path,),
-            symbol_preview_limit=20,
-            test_preview_limit=test_preview_limit,
-        )[0]
-        owner = file_context.owner
-        primary_component = self._resolve_primary_component(owner.id, file_context.file_info.repository_rel_path)
-        component_context = self._primary_component_context(
-            primary_component,
-            dependent_preview_limit=dependent_preview_limit,
-            test_preview_limit=test_preview_limit,
-        )
-        dependent_components = self._dependent_components(primary_component, dependent_preview_limit)
-        references = self._code_reference_service.references_for_file(file_context.file_info.repository_rel_path)[
-            :reference_preview_limit
-        ]
-        related_tests = self._related_tests_for_target(
-            repository_rel_path=file_context.file_info.repository_rel_path,
-            owner_id=None,
-            test_preview_limit=test_preview_limit,
-        )
-        related_runners = self._related_runners_for_component(primary_component, runner_preview_limit)
-        quality_gates = self._quality_gates_for_path(file_context.file_info.repository_rel_path)
-        return ChangeImpact(
-            target_kind="file",
-            owner=owner,
-            primary_component=primary_component,
-            component_context=component_context,
-            file_context=file_context,
-            dependent_components=dependent_components,
-            reference_locations=references,
-            related_tests=related_tests,
-            related_runners=related_runners,
-            quality_gates=quality_gates,
-            provenance=self._change_provenance(
-                owner_id=owner.id,
-                dependent_components=dependent_components,
-                reference_locations=references,
-                related_tests=related_tests,
-                related_runners=related_runners,
-                quality_gates=quality_gates,
-                evidence_path=file_context.file_info.repository_rel_path,
-            ),
-        )
-
-    def _analyze_owner_target(
-        self,
-        owner_id: str,
-        reference_preview_limit: int,
-        dependent_preview_limit: int,
-        test_preview_limit: int,
-        runner_preview_limit: int,
-    ) -> ChangeImpact:
-        owner = self._ownership_index.owner_info(owner_id)
-        primary_component = self._resolve_primary_component(owner_id, None)
-        component_context = self._primary_component_context(
-            primary_component,
-            dependent_preview_limit=dependent_preview_limit,
-            test_preview_limit=test_preview_limit,
-        )
-        dependent_components = self._dependent_components(primary_component, dependent_preview_limit)
-        references = self._code_reference_service.references_for_owner(
-            owner_id,
-            max_locations=reference_preview_limit,
-            max_files=max(10, reference_preview_limit),
-        )[:reference_preview_limit]
-        related_tests = self._related_tests_for_target(
-            repository_rel_path=None,
-            owner_id=owner_id,
-            test_preview_limit=test_preview_limit,
-        )
-        related_runners = self._related_runners_for_owner(owner_id, primary_component, runner_preview_limit)
-        quality_gates = self._quality_gates_for_owner(owner_id)
-        return ChangeImpact(
-            target_kind="owner",
-            owner=owner,
-            primary_component=primary_component,
-            component_context=component_context,
-            dependent_components=dependent_components,
-            reference_locations=references,
-            related_tests=related_tests,
-            related_runners=related_runners,
-            quality_gates=quality_gates,
-            provenance=self._change_provenance(
-                owner_id=owner.id,
-                dependent_components=dependent_components,
-                reference_locations=references,
-                related_tests=related_tests,
-                related_runners=related_runners,
-                quality_gates=quality_gates,
-                evidence_path=None,
-            ),
-        )
-
-    def _resolve_primary_component(self, owner_id: str, repository_rel_path: str | None) -> Component | None:
-        if repository_rel_path is not None:
-            component_id = self._component_context_resolver.primary_component_id_for_file(repository_rel_path, owner_id)
+        related_tests = self._test_impacts(resolved.related_tests)
+        if resolved.target_kind == "owner":
+            related_runners = self._related_runners_for_owner(resolved.owner.id, primary_component, runner_preview_limit)
+            quality_gates = self._quality_gates_for_owner(resolved.owner.id)
         else:
-            component_id = self._component_context_resolver.primary_component_id_for_owner(owner_id)
-        if component_id is None:
-            return None
-        components_by_id = {component.id: component for component in self._repository.arch.get_components()}
-        try:
-            return components_by_id[component_id]
-        except KeyError as exc:
-            raise ValueError(f"dependent component id could not be resolved: `{component_id}`") from exc
+            related_runners = self._related_runners_for_component(primary_component, runner_preview_limit)
+            if resolved.evidence_path is None:
+                raise ValueError("file and symbol targets must include evidence_path")
+            quality_gates = self._quality_gates_for_path(resolved.evidence_path)
+        dependent_edges = self._dependent_component_edges(primary_component, dependent_components)
+        return ChangeImpact(
+            target_kind=resolved.target_kind,
+            owner=resolved.owner,
+            primary_component=primary_component,
+            component_context=component_context,
+            file_context=resolved.file_context,
+            symbol_context=resolved.symbol_context,
+            dependent_components=dependent_components,
+            reference_locations=resolved.reference_locations,
+            related_tests=related_tests,
+            related_runners=related_runners,
+            quality_gates=quality_gates,
+            evidence=self._evidence_assembler.assemble(
+                target_kind=resolved.target_kind,
+                target_value=self._target_value(resolved),
+                evidence_path=resolved.evidence_path,
+                owner=resolved.owner,
+                primary_component=primary_component,
+                reference_locations=resolved.reference_locations,
+                dependent_components=dependent_components,
+                dependent_edges=dependent_edges,
+                related_tests=related_tests,
+                related_runners=related_runners,
+                quality_gates=quality_gates,
+            ),
+            truth_coverage=self._truth_coverage_service.change_truth_coverage_from_parts(
+                target_kind=resolved.target_kind,
+                owner_id=resolved.owner.id,
+                evidence_path=resolved.evidence_path,
+                primary_component=primary_component,
+                component_context=component_context,
+                file_context=resolved.file_context,
+                symbol_context=resolved.symbol_context,
+                dependent_components=dependent_components,
+                reference_locations=resolved.reference_locations,
+                related_tests=related_tests,
+                related_runners=related_runners,
+                quality_gates=quality_gates,
+            ),
+            provenance=self._change_provenance(
+                owner_id=resolved.owner.id,
+                dependent_components=dependent_components,
+                reference_locations=resolved.reference_locations,
+                related_tests=related_tests,
+                related_runners=related_runners,
+                quality_gates=quality_gates,
+                evidence_path=resolved.evidence_path,
+            ),
+        )
 
     def _primary_component_context(
         self,
@@ -266,20 +194,37 @@ class ChangeImpactService:
                 raise ValueError(f"dependent component id could not be resolved: `{component_id}`") from exc
         return tuple(resolved)
 
-    def _related_tests_for_target(
+    def _dependent_component_edges(
         self,
-        repository_rel_path: str | None,
-        owner_id: str | None,
-        test_preview_limit: int,
-    ) -> tuple[TestImpact, ...]:
-        if repository_rel_path is not None:
-            related_tests = self._repository.tests.get_related_tests(RelatedTestTarget(repository_rel_path=repository_rel_path))
-        else:
-            if owner_id is None:
-                raise ValueError("related test target must include `repository_rel_path` or `owner_id`")
-            related_tests = self._repository.tests.get_related_tests(RelatedTestTarget(owner_id=owner_id))
+        primary_component: Component | None,
+        dependent_components: tuple[Component, ...],
+    ) -> tuple[ComponentDependencyEdge, ...]:
+        if primary_component is None or not dependent_components:
+            return tuple()
+        dependent_ids = {component.id for component in dependent_components}
+        return tuple(
+            edge
+            for edge in self._repository.arch.get_component_dependency_edges()
+            if edge.target_kind == "component"
+            and edge.target_id == primary_component.id
+            and edge.source_component_id in dependent_ids
+        )
+
+    @staticmethod
+    def _target_value(resolved) -> str:
+        if resolved.target_kind == "symbol":
+            if resolved.symbol_context is None:
+                raise ValueError("symbol target requires symbol_context")
+            return resolved.symbol_context.symbol.id
+        if resolved.target_kind == "file":
+            if resolved.evidence_path is None:
+                raise ValueError("file target requires evidence_path")
+            return resolved.evidence_path
+        return resolved.owner.id
+
+    def _test_impacts(self, related_tests: tuple[ResolvedRelatedTest, ...]) -> tuple[TestImpact, ...]:
         impacts: list[TestImpact] = []
-        for related_test in related_tests[:test_preview_limit]:
+        for related_test in related_tests:
             if related_test.matched_owner_id is not None:
                 reason = "same_owner"
             elif related_test.matched_repository_rel_path is not None:

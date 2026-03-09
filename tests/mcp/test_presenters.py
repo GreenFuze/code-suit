@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from suitcode.core.change_models import ChangeImpact, QualityGateInfo, RunnerImpact, TestImpact as ChangeTestImpact
+from suitcode.analytics.models import BenchmarkArtifactReference, BenchmarkReport, BenchmarkTaskResult
+from suitcode.core.change_models import ChangeEvidenceEdge, ChangeEvidencePreview, ChangeImpact, ChangeTarget, QualityGateInfo, RunnerImpact, TestImpact as ChangeTestImpact
 from suitcode.core.build_service import BuildService
 from suitcode.core.runner_service import RunnerService
 from suitcode.core.workspace import Workspace
@@ -10,7 +11,7 @@ from suitcode.core.provenance_builders import derived_summary_provenance, lsp_lo
 from suitcode.core.provenance_builders import lsp_delta_provenance, quality_tool_provenance
 from suitcode.core.provenance import SourceKind
 from suitcode.core.tests.models import RelatedTestTarget
-from suitcode.mcp.presenters import ArchitecturePresenter, BuildPresenter, ChangeImpactPresenter, CodePresenter, ProviderPresenter, QualityPresenter, RepositoryPresenter, RunnerPresenter, TestPresenter as McpTestPresenter, WorkspacePresenter
+from suitcode.mcp.presenters import AnalyticsPresenter, ArchitecturePresenter, BuildPresenter, ChangeImpactPresenter, CodePresenter, ProviderPresenter, QualityPresenter, RepositoryPresenter, RunnerPresenter, TestPresenter as McpTestPresenter, WorkspacePresenter
 from suitcode.providers.quality_models import QualityDiagnostic, QualityEntityDelta, QualityFileResult
 from suitcode.providers.npm import NPMProvider
 from suitcode.providers.shared.action_execution import ActionExecutionResult, ActionExecutionStatus
@@ -301,6 +302,30 @@ def test_change_impact_presenter_maps_composed_artifact(npm_repo_root) -> None:
                 ),
             ),
         ),
+        evidence=ChangeEvidencePreview(
+            total_edges=1,
+            counts_by_kind={"target_owner": 1},
+            edges_preview=(
+                ChangeEvidenceEdge(
+                    source_node_kind="change_target",
+                    source_node_id="change_target:file:packages/core/src/index.ts",
+                    target_node_kind="owner",
+                    target_node_id="component:npm:@monorepo/core",
+                    edge_kind="target_owner",
+                    reason="owner resolved from file ownership",
+                    provenance=(
+                        ownership_provenance(
+                            evidence_summary="owner resolved from ownership metadata",
+                            evidence_paths=("packages/core/src/index.ts",),
+                        ),
+                    ),
+                ),
+            ),
+            truncated=False,
+        ),
+        truth_coverage=repository.get_change_truth_coverage(
+            ChangeTarget(repository_rel_path="packages/core/src/index.ts")
+        ),
         provenance=(
             ownership_provenance(
                 evidence_summary="change analysis anchored to owner",
@@ -315,6 +340,25 @@ def test_change_impact_presenter_maps_composed_artifact(npm_repo_root) -> None:
     assert view.related_tests[0].provenance
     assert view.related_runners[0].provenance
     assert view.quality_gates[0].provenance
+    assert view.evidence.total_edges == 1
+    assert view.evidence.edges_preview[0].edge_kind == "target_owner"
+    assert view.truth_coverage.scope_kind == "change"
+    assert view.provenance
+
+
+def test_change_impact_presenter_maps_minimum_verified_change_set(npm_repo_root) -> None:
+    repository = Workspace(npm_repo_root).repositories[0]
+    change_set = repository.get_minimum_verified_change_set(
+        ChangeTarget(repository_rel_path="packages/core/src/index.ts")
+    )
+
+    view = ChangeImpactPresenter().minimum_verified_change_set_view(change_set)
+
+    assert view.owner.id == "component:npm:@monorepo/core"
+    assert view.tests[0].test_id == "test:npm:@monorepo/core"
+    assert view.tests[0].command.total_arg_count >= 1
+    assert view.quality_validation_operations[0].repository_rel_paths == ("packages/core/src/index.ts",)
+    assert view.quality_validation_operations[0].proof_edges[0].provenance
     assert view.provenance
 
 
@@ -411,3 +455,52 @@ def test_build_presenter_maps_build_target_and_results(npm_repo_root) -> None:
     assert project_view.total >= 1
     assert project_view.failed_results
     assert project_view.provenance
+
+
+def test_analytics_presenter_maps_benchmark_report() -> None:
+    report = BenchmarkReport(
+        report_id="benchmark-test",
+        generated_at_utc="2026-03-07T12:00:00.000Z",
+        adapter_name="suitcode-mcp-deterministic",
+        task_total=1,
+        task_passed=1,
+        task_failed=0,
+        task_error=0,
+        avg_tool_calls=3.0,
+        avg_duration_ms=10.0,
+        high_value_tool_usage_rate=1.0,
+        high_value_tool_early_rate=1.0,
+        deterministic_action_success_rate=1.0,
+        authoritative_provenance_rate=0.5,
+        derived_provenance_rate=0.25,
+        heuristic_provenance_rate=0.25,
+        tasks=(
+            BenchmarkTaskResult(
+                task_id="orientation-1",
+                status="passed",
+                tool_calls=3,
+                turn_count=3,
+                duration_ms=10,
+                session_id="session:test",
+                repository_root="C:/repo",
+                first_high_value_tool="repository_summary",
+                first_high_value_tool_call_index=2,
+                used_high_value_tool_early=True,
+                deterministic_action_status="not_applicable",
+                provenance_confidence_mix={"authoritative": 1},
+                provenance_source_kind_mix={"manifest": 1},
+                artifact_references=(
+                    BenchmarkArtifactReference(
+                        kind="benchmark_task_metadata",
+                        location="C:/repo/.suit/benchmarks/task.json",
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    view = AnalyticsPresenter().benchmark_report_view(report)
+
+    assert view.high_value_tool_usage_rate == 1.0
+    assert view.tasks[0].session_id == "session:test"
+    assert view.tasks[0].artifact_references[0].kind == "benchmark_task_metadata"

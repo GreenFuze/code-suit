@@ -49,6 +49,9 @@ def test_change_impact_for_npm_file_target(npm_repo_root) -> None:
     assert any(component.id == "component:npm:@monorepo/utils" for component in impact.dependent_components)
     assert any(test.related_test.test_definition.id == "test:npm:@monorepo/core" for test in impact.related_tests)
     assert impact.quality_gates
+    assert impact.evidence.total_edges >= 1
+    assert impact.evidence.counts_by_kind["target_owner"] == 1
+    assert impact.evidence.edges_preview
     assert impact.provenance
 
 
@@ -91,6 +94,7 @@ def test_change_impact_for_npm_owner_target(npm_repo_root) -> None:
     assert impact.file_context is None
     assert impact.symbol_context is None
     assert impact.component_context is not None
+    assert impact.evidence.counts_by_kind["target_owner"] == 1
     assert isinstance(impact.related_runners, tuple)
 
 
@@ -138,6 +142,8 @@ def test_change_impact_for_python_symbol_target(python_repo_root) -> None:
     assert impact.dependent_components == tuple()
     assert impact.related_tests
     assert impact.quality_gates
+    assert impact.evidence.total_edges >= 1
+    assert impact.evidence.counts_by_kind["target_owner"] == 1
     assert impact.provenance
 
 

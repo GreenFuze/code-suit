@@ -2,16 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from suitcode.analytics.aggregation import AnalyticsAggregator
 from suitcode.analytics.recorder import ToolCallRecorder
-from suitcode.analytics.settings import AnalyticsSettings
-from suitcode.analytics.storage import JsonlAnalyticsStore
-from suitcode.mcp.analytics_service import AnalyticsMcpService
-from suitcode.mcp.action_service import ActionMcpService
-from suitcode.mcp.architecture_service import ArchitectureMcpService
-from suitcode.mcp.build_service import BuildMcpService
-from suitcode.mcp.code_service import CodeMcpService
-from suitcode.mcp.context_service import ContextMcpService
 from suitcode.mcp.errors import McpNotFoundError
 from suitcode.mcp.models import (
     AddRepositoryResult,
@@ -56,34 +47,15 @@ from suitcode.mcp.models import (
     SymbolView,
     ToolUsageAnalyticsView,
     TestsSnapshotView,
+    MinimumVerifiedChangeSetView,
     TestDefinitionView,
     TestTargetDescriptionView,
+    TruthCoverageSummaryView,
     WorkspaceView,
 )
 from suitcode.mcp.pagination import PaginationPolicy
-from suitcode.mcp.presenters import (
-    AnalyticsPresenter,
-    ArchitecturePresenter,
-    ActionPresenter,
-    BuildPresenter,
-    ChangeImpactPresenter,
-    CodePresenter,
-    IntelligencePresenter,
-    OwnershipPresenter,
-    ProviderPresenter,
-    QualityPresenter,
-    RepositoryPresenter,
-    RepositorySummaryPresenter,
-    RunnerPresenter,
-    TestPresenter,
-    WorkspacePresenter,
-)
-from suitcode.mcp.quality_service import QualityMcpService
-from suitcode.mcp.runner_service import RunnerMcpService
+from suitcode.mcp.service_runtime import build_mcp_service_runtime
 from suitcode.mcp.state import WorkspaceRegistry
-from suitcode.mcp.test_service import TestMcpService
-from suitcode.mcp.tool_catalog import TOOL_CATALOG
-from suitcode.mcp.workspace_service import WorkspaceMcpService
 
 
 class SuitMcpService:
@@ -94,88 +66,39 @@ class SuitMcpService:
     ) -> None:
         self._registry = registry or WorkspaceRegistry()
         self._pagination = pagination or PaginationPolicy()
-        self._provider_presenter = ProviderPresenter()
-        self._workspace_presenter = WorkspacePresenter()
-        self._repository_presenter = RepositoryPresenter()
-        self._architecture_presenter = ArchitecturePresenter()
-        self._action_presenter = ActionPresenter()
-        self._build_presenter = BuildPresenter()
-        self._code_presenter = CodePresenter()
-        self._test_presenter = TestPresenter()
-        self._runner_presenter = RunnerPresenter()
-        self._quality_presenter = QualityPresenter()
-        self._ownership_presenter = OwnershipPresenter()
-        self._repository_summary_presenter = RepositorySummaryPresenter()
-        self._intelligence_presenter = IntelligencePresenter()
-        self._change_impact_presenter = ChangeImpactPresenter()
-        self._analytics_presenter = AnalyticsPresenter()
-        self._analytics_settings = AnalyticsSettings.from_env()
-        self._analytics_store = JsonlAnalyticsStore(self._analytics_settings)
-        self._analytics_recorder = ToolCallRecorder(self._analytics_store)
-        self._analytics_aggregator = AnalyticsAggregator(
-            self._analytics_store,
-            tool_catalog=tuple(sorted(item.name for item in TOOL_CATALOG)),
-            excluded_tools=(
-                "get_analytics_summary",
-                "get_tool_usage_analytics",
-                "get_inefficient_tool_calls",
-                "get_mcp_benchmark_report",
-            ),
+        runtime = build_mcp_service_runtime(
+            registry=self._registry,
+            pagination=self._pagination,
         )
-
-        self._workspace_service = WorkspaceMcpService(
-            self._registry,
-            self._pagination,
-            self._provider_presenter,
-            self._workspace_presenter,
-            self._repository_presenter,
-        )
-        self._architecture_service = ArchitectureMcpService(
-            self._registry,
-            self._pagination,
-            self._architecture_presenter,
-            self._intelligence_presenter,
-        )
-        self._action_service = ActionMcpService(
-            self._registry,
-            self._pagination,
-            self._action_presenter,
-        )
-        self._code_service = CodeMcpService(
-            self._registry,
-            self._pagination,
-            self._code_presenter,
-        )
-        self._build_service = BuildMcpService(
-            self._registry,
-            self._pagination,
-            self._build_presenter,
-        )
-        self._test_service = TestMcpService(
-            self._registry,
-            self._pagination,
-            self._test_presenter,
-        )
-        self._quality_service = QualityMcpService(
-            self._registry,
-            self._quality_presenter,
-        )
-        self._runner_service = RunnerMcpService(
-            self._registry,
-            self._runner_presenter,
-        )
-        self._context_service = ContextMcpService(
-            self._registry,
-            self._intelligence_presenter,
-            self._repository_summary_presenter,
-            self._change_impact_presenter,
-        )
-        self._analytics_service = AnalyticsMcpService(
-            self._registry,
-            self._pagination,
-            self._analytics_aggregator,
-            self._analytics_presenter,
-        )
+        self._provider_presenter = runtime.provider_presenter
+        self._workspace_presenter = runtime.workspace_presenter
+        self._repository_presenter = runtime.repository_presenter
+        self._architecture_presenter = runtime.architecture_presenter
+        self._action_presenter = runtime.action_presenter
+        self._build_presenter = runtime.build_presenter
+        self._code_presenter = runtime.code_presenter
+        self._test_presenter = runtime.test_presenter
+        self._runner_presenter = runtime.runner_presenter
+        self._quality_presenter = runtime.quality_presenter
+        self._ownership_presenter = runtime.ownership_presenter
+        self._repository_summary_presenter = runtime.repository_summary_presenter
+        self._intelligence_presenter = runtime.intelligence_presenter
+        self._change_impact_presenter = runtime.change_impact_presenter
+        self._analytics_presenter = runtime.analytics_presenter
+        self._analytics_settings = runtime.analytics_settings
+        self._analytics_store = runtime.analytics_store
+        self._analytics_recorder = runtime.analytics_recorder
+        self._analytics_aggregator = runtime.analytics_aggregator
+        self._workspace_service = runtime.workspace_service
+        self._architecture_service = runtime.architecture_service
+        self._action_service = runtime.action_service
+        self._code_service = runtime.code_service
+        self._build_service = runtime.build_service
+        self._test_service = runtime.test_service
+        self._quality_service = runtime.quality_service
+        self._runner_service = runtime.runner_service
+        self._context_service = runtime.context_service
+        self._analytics_service = runtime.analytics_service
 
     def list_supported_providers(self, limit: int | None = None, offset: int = 0) -> ListResult[ProviderDescriptorView]:
         return self._workspace_service.list_supported_providers(limit=limit, offset=offset)
@@ -716,6 +639,32 @@ class SuitMcpService:
             dependent_preview_limit=dependent_preview_limit,
             test_preview_limit=test_preview_limit,
             runner_preview_limit=runner_preview_limit,
+        )
+
+    def get_minimum_verified_change_set(
+        self,
+        workspace_id: str,
+        repository_id: str,
+        symbol_id: str | None = None,
+        repository_rel_path: str | None = None,
+        owner_id: str | None = None,
+    ) -> MinimumVerifiedChangeSetView:
+        return self._context_service.get_minimum_verified_change_set(
+            workspace_id,
+            repository_id,
+            symbol_id=symbol_id,
+            repository_rel_path=repository_rel_path,
+            owner_id=owner_id,
+        )
+
+    def get_truth_coverage(
+        self,
+        workspace_id: str,
+        repository_id: str,
+    ) -> TruthCoverageSummaryView:
+        return self._context_service.get_truth_coverage(
+            workspace_id,
+            repository_id,
         )
 
     @property

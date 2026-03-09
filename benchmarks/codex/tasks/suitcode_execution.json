@@ -1,0 +1,38 @@
+[
+  {
+    "task_id": "python-test-execution",
+    "repository_path": "tests/test_repos/python",
+    "task_family": "test_execution",
+    "target_selector": {
+      "test_id": "test:python:pytest:root"
+    },
+    "timeout_seconds": 300,
+    "expected_required_tools": [
+      "open_workspace",
+      "describe_test_target",
+      "run_test_targets"
+    ],
+    "expected_high_value_tools": [
+      "describe_test_target",
+      "run_test_targets"
+    ]
+  },
+  {
+    "task_id": "npm-build-execution",
+    "repository_path": "tests/test_repos/npm",
+    "task_family": "build_execution",
+    "target_selector": {
+      "action_id": "action:npm:build:@monorepo/codegen"
+    },
+    "timeout_seconds": 300,
+    "expected_required_tools": [
+      "open_workspace",
+      "describe_build_target",
+      "build_target"
+    ],
+    "expected_high_value_tools": [
+      "describe_build_target",
+      "build_target"
+    ]
+  }
+]

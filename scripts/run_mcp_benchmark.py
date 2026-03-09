@@ -37,6 +37,15 @@ def main() -> None:
     print(f"Generated benchmark report: {report.report_id}")
     print(f"Adapter: {report.adapter_name}")
     print(f"Tasks total: {report.task_total}, passed: {report.task_passed}, failed: {report.task_failed}, error: {report.task_error}")
+    print(f"High-value tool usage rate: {report.high_value_tool_usage_rate:.2%}")
+    print(f"High-value tool early rate: {report.high_value_tool_early_rate:.2%}")
+    print(f"Deterministic action success rate: {report.deterministic_action_success_rate:.2%}")
+    print(
+        "Provenance rates: "
+        f"authoritative={report.authoritative_provenance_rate:.2%}, "
+        f"derived={report.derived_provenance_rate:.2%}, "
+        f"heuristic={report.heuristic_provenance_rate:.2%}"
+    )
     if args.fail_on_task_error and (report.task_failed > 0 or report.task_error > 0):
         raise SystemExit(1)
 

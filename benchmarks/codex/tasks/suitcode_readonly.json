@@ -1,0 +1,62 @@
+[
+  {
+    "task_id": "python-orientation",
+    "repository_path": "tests/test_repos/python",
+    "task_family": "orientation",
+    "timeout_seconds": 240
+  },
+  {
+    "task_id": "python-change-analysis",
+    "repository_path": "tests/test_repos/python",
+    "task_family": "change_analysis",
+    "target_selector": {
+      "repository_rel_path": "src/acme/core/repository.py"
+    },
+    "timeout_seconds": 240
+  },
+  {
+    "task_id": "python-minimum-verified",
+    "repository_path": "tests/test_repos/python",
+    "task_family": "minimum_verified_change_set",
+    "target_selector": {
+      "repository_rel_path": "src/acme/core/repository.py"
+    },
+    "timeout_seconds": 240
+  },
+  {
+    "task_id": "python-truth-coverage",
+    "repository_path": "tests/test_repos/python",
+    "task_family": "truth_coverage",
+    "timeout_seconds": 180
+  },
+  {
+    "task_id": "npm-orientation",
+    "repository_path": "tests/test_repos/npm",
+    "task_family": "orientation",
+    "timeout_seconds": 240
+  },
+  {
+    "task_id": "npm-change-analysis",
+    "repository_path": "tests/test_repos/npm",
+    "task_family": "change_analysis",
+    "target_selector": {
+      "repository_rel_path": "packages/core/src/index.ts"
+    },
+    "timeout_seconds": 240
+  },
+  {
+    "task_id": "npm-minimum-verified",
+    "repository_path": "tests/test_repos/npm",
+    "task_family": "minimum_verified_change_set",
+    "target_selector": {
+      "repository_rel_path": "packages/core/src/index.ts"
+    },
+    "timeout_seconds": 240
+  },
+  {
+    "task_id": "npm-truth-coverage",
+    "repository_path": "tests/test_repos/npm",
+    "task_family": "truth_coverage",
+    "timeout_seconds": 180
+  }
+]

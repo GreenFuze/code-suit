@@ -91,6 +91,10 @@ TOOL_CATALOG: tuple[ToolBinding, ...] = (
     ToolBinding("lint_file", "Run the selected quality provider on one file and return structured diagnostics and entity deltas."),
     ToolBinding("format_file", "Run the selected formatter provider on one file and return structured change information."),
     ToolBinding("repository_summary", "Use this for a compact first-pass repository summary with provider, architecture, test, and quality counts."),
+    ToolBinding(
+        "get_truth_coverage",
+        "Use this to see how much of the repository's architecture, code, tests, quality, and actions are authoritative, derived, heuristic, or unavailable.",
+    ),
     ToolBinding("describe_components", "Use this when you already know exact component IDs and want rich context for several components in one call."),
     ToolBinding("describe_files", "Use this when you already know exact file paths and want owner, symbol, test, and quality context before opening files manually."),
     ToolBinding("describe_symbol_context", "Use this when you already know an exact symbol ID and want owner, definition, reference, and related-test context."),
@@ -117,5 +121,9 @@ TOOL_CATALOG: tuple[ToolBinding, ...] = (
     ToolBinding(
         "analyze_change",
         "Use this for one high-level, provenance-backed change analysis of an exact file, symbol, or owner. It tells you what owns the target, what depends on it, which references, tests, runners, and quality gates matter, and why.",
+    ),
+    ToolBinding(
+        "get_minimum_verified_change_set",
+        "Use this when you need the smallest exact set of tests, builds, runner actions, and quality operations required to validate a change to one file, symbol, or owner.",
     ),
 )

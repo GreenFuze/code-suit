@@ -25,5 +25,6 @@ def test_prompt_guides_tool_first_usage(app) -> None:
 
     assert "open_workspace" in prompt_text
     assert "repository_summary" in prompt_text
+    assert "get_truth_coverage" in prompt_text
     assert "analyze_change" in prompt_text
     assert "broad list/find exploration" in prompt_text

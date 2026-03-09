@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -20,6 +21,36 @@ class ToolCallRecorder:
     ) -> None:
         self._store = store
         self._session_id = session_id or f"session:{uuid4().hex}"
+        self._benchmark_run_id: str | None = None
+        self._benchmark_task_id: str | None = None
+
+    @property
+    def session_id(self) -> str:
+        return self._session_id
+
+    @property
+    def store(self) -> JsonlAnalyticsStore:
+        return self._store
+
+    def set_benchmark_context(self, *, run_id: str, task_id: str) -> None:
+        normalized_run_id = run_id.strip()
+        normalized_task_id = task_id.strip()
+        if not normalized_run_id or not normalized_task_id:
+            raise ValueError("benchmark run_id and task_id must not be empty")
+        self._benchmark_run_id = normalized_run_id
+        self._benchmark_task_id = normalized_task_id
+
+    def clear_benchmark_context(self) -> None:
+        self._benchmark_run_id = None
+        self._benchmark_task_id = None
+
+    @contextmanager
+    def benchmark_context(self, *, run_id: str, task_id: str):
+        self.set_benchmark_context(run_id=run_id, task_id=task_id)
+        try:
+            yield
+        finally:
+            self.clear_benchmark_context()
 
     def record_success(
         self,
@@ -29,13 +60,15 @@ class ToolCallRecorder:
         repository_root: Path | None,
         result: object,
         duration_ms: int,
-    ) -> None:
+    ) -> AnalyticsEvent:
         arguments_redacted = redact_arguments(arguments)
         args_fingerprint = fingerprint_arguments(arguments_redacted)
         model_type, payload_bytes, payload_hash, item_count = _output_metadata(result)
         event = AnalyticsEvent(
             event_id=f"event:{uuid4().hex}",
             session_id=self._session_id,
+            benchmark_run_id=self._benchmark_run_id,
+            benchmark_task_id=self._benchmark_task_id,
             timestamp_utc=_timestamp_utc(),
             tool_name=tool_name,
             workspace_id=_as_str_or_none(arguments.get("workspace_id")),
@@ -51,6 +84,7 @@ class ToolCallRecorder:
             output_item_count=item_count,
         )
         self._store.append_event(event, repository_root=repository_root)
+        return event
 
     def record_error(
         self,
@@ -60,12 +94,14 @@ class ToolCallRecorder:
         repository_root: Path | None,
         error: Exception,
         duration_ms: int,
-    ) -> None:
+    ) -> AnalyticsEvent:
         arguments_redacted = redact_arguments(arguments)
         args_fingerprint = fingerprint_arguments(arguments_redacted)
         event = AnalyticsEvent(
             event_id=f"event:{uuid4().hex}",
             session_id=self._session_id,
+            benchmark_run_id=self._benchmark_run_id,
+            benchmark_task_id=self._benchmark_task_id,
             timestamp_utc=_timestamp_utc(),
             tool_name=tool_name,
             workspace_id=_as_str_or_none(arguments.get("workspace_id")),
@@ -79,6 +115,7 @@ class ToolCallRecorder:
             duration_ms=duration_ms,
         )
         self._store.append_event(event, repository_root=repository_root)
+        return event
 
 
 def _timestamp_utc() -> str:
@@ -117,4 +154,3 @@ def _output_metadata(result: object) -> tuple[str, int, str, int | None]:
         if isinstance(items, tuple | list):
             item_count = len(items)
     return model_type, payload_bytes, payload_hash, item_count
-

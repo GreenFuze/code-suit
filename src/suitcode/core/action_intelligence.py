@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+from threading import Lock
+
 from suitcode.core.action_models import ActionQuery, ActionTargetKind, RepositoryAction
 from suitcode.providers.action_provider_base import ActionProviderBase
+from suitcode.providers.runtime_capability_models import ActionRuntimeCapabilities
 
 
 class ActionIntelligence:
     def __init__(self, repository: "Repository") -> None:
         self._repository = repository
+        self._all_actions_cache: tuple[RepositoryAction, ...] | None = None
+        self._all_actions_lock = Lock()
 
     @property
     def repository(self) -> "Repository":
@@ -38,23 +43,35 @@ class ActionIntelligence:
             )
         )
 
-    def _all_actions(self) -> tuple[RepositoryAction, ...]:
-        if not self.providers:
-            return tuple()
+    def get_runtime_capabilities(self) -> tuple[ActionRuntimeCapabilities, ...]:
+        return tuple(provider.get_action_runtime_capabilities() for provider in self.providers)
 
-        by_id: dict[str, RepositoryAction] = {}
-        for provider in self.providers:
-            provider_id = provider.__class__.descriptor().provider_id
-            for action in provider.get_actions():
-                if action.provider_id != provider_id:
-                    raise ValueError(
-                        f"provider `{provider_id}` returned action `{action.id}` with mismatched provider_id "
-                        f"`{action.provider_id}`"
-                    )
-                if action.id in by_id:
-                    raise ValueError(f"duplicate action id detected across providers: `{action.id}`")
-                by_id[action.id] = action
-        return tuple(by_id.values())
+    def _all_actions(self) -> tuple[RepositoryAction, ...]:
+        cached = self._all_actions_cache
+        if cached is not None:
+            return cached
+        with self._all_actions_lock:
+            cached = self._all_actions_cache
+            if cached is not None:
+                return cached
+            if not self.providers:
+                self._all_actions_cache = tuple()
+                return self._all_actions_cache
+
+            by_id: dict[str, RepositoryAction] = {}
+            for provider in self.providers:
+                provider_id = provider.__class__.descriptor().provider_id
+                for action in provider.get_actions():
+                    if action.provider_id != provider_id:
+                        raise ValueError(
+                            f"provider `{provider_id}` returned action `{action.id}` with mismatched provider_id "
+                            f"`{action.provider_id}`"
+                        )
+                    if action.id in by_id:
+                        raise ValueError(f"duplicate action id detected across providers: `{action.id}`")
+                    by_id[action.id] = action
+            self._all_actions_cache = tuple(by_id.values())
+            return self._all_actions_cache
 
     @staticmethod
     def _filter_by_kind(

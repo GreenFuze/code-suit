@@ -17,6 +17,8 @@ def test_service_open_workspace_and_list_repositories(service: SuitMcpService, n
 
     assert opened.reused is False
     assert opened.workspace.repository_count == 1
+    assert opened.initial_repository.root_path == str(npm_repo_root)
+    assert opened.initial_repository.provider_ids == ("npm",)
     assert repositories.total == 1
 
 
@@ -364,6 +366,7 @@ def test_service_exposes_owner_related_test_and_summary_tools(service: SuitMcpSe
     assert summary.repository_id == repository_id
     assert summary.preview_limit == 5
     assert summary.component_count >= 1
+    assert summary.truth_coverage is None
     assert summary.provenance
     assert any(item.source_kind == "test_tool" for item in summary.provenance)
 
@@ -591,7 +594,48 @@ def test_service_exposes_component_file_and_impact_context(service: SuitMcpServi
     if change.related_runners:
         assert change.related_runners[0].provenance
     assert change.quality_gates
+    assert change.evidence.total_edges >= 1
+    assert change.evidence.counts_by_kind["target_owner"] == 1
+    assert change.evidence.edges_preview[0].provenance
+    assert change.truth_coverage.scope_kind == "change"
     assert change.provenance
+
+
+def test_service_get_truth_coverage(service: SuitMcpService, opened_workspace) -> None:
+    workspace_id = opened_workspace.workspace.workspace_id
+    repository_id = opened_workspace.initial_repository.repository_id
+
+    truth = service.get_truth_coverage(workspace_id, repository_id)
+
+    assert truth.scope_kind == "repository"
+    assert truth.scope_id == repository_id
+    assert {item.domain for item in truth.domains} == {
+        "architecture",
+        "code",
+        "tests",
+        "quality",
+        "actions",
+    }
+    assert truth.provenance
+
+
+def test_service_gets_minimum_verified_change_set(service: SuitMcpService, opened_workspace) -> None:
+    workspace_id = opened_workspace.workspace.workspace_id
+    repository_id = opened_workspace.initial_repository.repository_id
+
+    change_set = service.get_minimum_verified_change_set(
+        workspace_id,
+        repository_id,
+        repository_rel_path="packages/core/src/index.ts",
+    )
+
+    assert change_set.target_kind == "file"
+    assert change_set.owner.id == "component:npm:@monorepo/core"
+    assert [item.test_id for item in change_set.tests] == ["test:npm:@monorepo/core"]
+    assert change_set.tests[0].command.total_arg_count >= 1
+    assert change_set.quality_validation_operations[0].repository_rel_paths == ("packages/core/src/index.ts",)
+    assert change_set.quality_validation_operations[0].proof_edges[0].provenance
+    assert change_set.provenance
 
 
 def test_service_list_component_dependency_edges_fails_for_unknown_component(service: SuitMcpService, opened_workspace) -> None:

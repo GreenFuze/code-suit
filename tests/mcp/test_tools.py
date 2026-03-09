@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 from suitcode.mcp.tool_catalog import TOOL_CATALOG
@@ -12,6 +13,20 @@ async def _call_tool(app, name: str, arguments: dict):
 
 async def _list_tools(app):
     return await app.list_tools()
+
+
+def _payload_from_result(result):
+    if isinstance(result, list):
+        if not result:
+            raise AssertionError("tool result list is empty")
+        first = result[0]
+        text = getattr(first, "text", None)
+        if not isinstance(text, str) or not text.strip():
+            raise AssertionError("tool result did not contain JSON text")
+        return json.loads(text)
+    if isinstance(result, tuple) and len(result) >= 2:
+        return result[1]
+    raise AssertionError(f"unsupported tool result shape: {type(result)!r}")
 
 
 def test_app_registers_expected_tools(app) -> None:
@@ -72,19 +87,28 @@ def test_app_registers_expected_tools(app) -> None:
     assert "high-level" in analyze_change.description
     assert "quality gates" in analyze_change.description
 
+    minimum_verified = next(tool for tool in tools if tool.name == "get_minimum_verified_change_set")
+    assert "smallest exact set" in minimum_verified.description
+    assert "quality operations" in minimum_verified.description
+
+    truth_coverage = next(tool for tool in tools if tool.name == "get_truth_coverage")
+    assert "authoritative" in truth_coverage.description
+    assert "heuristic" in truth_coverage.description
+
 
 def test_open_workspace_tool_returns_structured_result(app, npm_repo_root) -> None:
     result = asyncio.run(_call_tool(app, "open_workspace", {"repository_path": str(npm_repo_root)}))
+    payload = _payload_from_result(result)
 
-    assert result[0][0].type == "text"
-    assert "workspace_id" in result[0][0].text
-    assert result[1]["workspace"]["workspace_id"].startswith("workspace:")
+    assert payload["workspace"]["workspace_id"].startswith("workspace:")
+    assert payload["initial_repository"]["repository_id"].startswith("repo:")
 
 
 def test_analytics_tools_return_structured_output(app, npm_repo_root) -> None:
     opened = asyncio.run(_call_tool(app, "open_workspace", {"repository_path": str(npm_repo_root)}))
-    workspace_id = opened[1]["workspace"]["workspace_id"]
-    repository_id = opened[1]["initial_repository"]["repository_id"]
+    opened_payload = _payload_from_result(opened)
+    workspace_id = opened_payload["workspace"]["workspace_id"]
+    repository_id = opened_payload["initial_repository"]["repository_id"]
     asyncio.run(
         _call_tool(
             app,
@@ -98,14 +122,14 @@ def test_analytics_tools_return_structured_output(app, npm_repo_root) -> None:
         )
     )
 
-    summary = asyncio.run(_call_tool(app, "get_analytics_summary", {}))
-    usage = asyncio.run(_call_tool(app, "get_tool_usage_analytics", {"limit": 50, "offset": 0}))
-    ineff = asyncio.run(_call_tool(app, "get_inefficient_tool_calls", {"limit": 50, "offset": 0}))
+    summary = _payload_from_result(asyncio.run(_call_tool(app, "get_analytics_summary", {})))
+    usage = _payload_from_result(asyncio.run(_call_tool(app, "get_tool_usage_analytics", {"limit": 50, "offset": 0})))
+    ineff = _payload_from_result(asyncio.run(_call_tool(app, "get_inefficient_tool_calls", {"limit": 50, "offset": 0})))
 
-    assert summary[1]["total_calls"] >= 2
-    assert "estimated_tokens_saved" in summary[1]
-    assert isinstance(usage[1]["items"], list)
-    assert isinstance(ineff[1]["items"], list)
+    assert summary["total_calls"] >= 2
+    assert "estimated_tokens_saved" in summary
+    assert isinstance(usage["items"], list)
+    assert isinstance(ineff["items"], list)
 
 
 def test_tool_call_fails_when_analytics_persistence_fails(app, monkeypatch) -> None:
