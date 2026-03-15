@@ -1,5 +1,5 @@
 {
-  "stable_readonly_tasks_file": "benchmarks/codex/tasks/suitcode_v6_headline.json",
+  "stable_readonly_tasks_file": "benchmarks/codex/tasks/suitcode_v7_headline.json",
   "calibration_tasks_file": "benchmarks/codex/tasks/suitcode_calibration.json",
   "stable_execution_tasks_file": "benchmarks/codex/tasks/suitcode_execution_ab.json",
   "stress_readonly_tasks_file": "benchmarks/codex/tasks/suitcode_project_readonly.json",
@@ -8,5 +8,5 @@
   "include_stress_readonly": true,
   "include_passive_usage_summary": true,
   "stable_timeout_seconds": 300,
-  "stress_timeout_seconds": 240
+  "stress_timeout_seconds": 600
 }

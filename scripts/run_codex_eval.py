@@ -24,6 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-full-auto", action="store_true")
     parser.add_argument("--sandbox", default="workspace-write")
     parser.add_argument("--bypass-approvals-and-sandbox", action="store_true")
+    parser.add_argument("--auto-orientation-hint", action="store_true")
     return parser
 
 
@@ -49,6 +50,7 @@ def main() -> None:
         full_auto=not args.no_full_auto,
         sandbox=args.sandbox,
         bypass_approvals_and_sandbox=args.bypass_approvals_and_sandbox,
+        auto_orientation_hint=args.auto_orientation_hint,
     )
     if args.as_json:
         print(report.model_dump_json(indent=2))

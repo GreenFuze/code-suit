@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from suitcode.evaluation.codex.runner import CodexCliRunner
 from suitcode.evaluation.codex.service import CodexEvaluationService
 from suitcode.evaluation.codex.task_models import CodexEvaluationTask, CodexTaskFamily
+from suitcode.evaluation.metadata_models import AgentKind
 from suitcode.evaluation.models import EvaluationFailureKind, EvaluationStatus
 from suitcode.evaluation.reporting import CodexEvaluationReporter
 
@@ -54,8 +55,41 @@ class _FakeSuitService:
             quality_hygiene_operations=(SimpleNamespace(id="quality_op:ruff:format"),),
         )
 
+    def analyze_impact(self, workspace_id: str, repository_id: str, **selector):
+        return SimpleNamespace(
+            target_kind="file",
+            owner=SimpleNamespace(id="component:python:suitcode"),
+            primary_component_id="component:python:suitcode",
+            dependent_component_count=1,
+            dependent_component_ids_preview=("component:python:dependents",),
+            reference_count=3,
+            references_preview=(),
+            related_test_count=1,
+            related_test_ids_preview=("test:basic",),
+            provenance=(),
+        )
+
+    def get_file_owner(self, workspace_id: str, repository_id: str, repository_rel_path: str):
+        return SimpleNamespace(
+            file=SimpleNamespace(repository_rel_path=repository_rel_path),
+            owner=SimpleNamespace(id="component:python:suitcode", kind="component"),
+        )
+
+    def get_related_tests(self, workspace_id: str, repository_id: str, repository_rel_path: str | None = None, owner_id: str | None = None, limit: int | None = None, offset: int = 0):
+        return SimpleNamespace(
+            items=(SimpleNamespace(id="test:basic"),),
+            limit=limit or 20,
+            offset=offset,
+            total=1,
+            truncated=False,
+            next_offset=None,
+        )
+
     def list_build_targets(self, workspace_id: str, repository_id: str, limit: int = 200, offset: int = 0):
         return SimpleNamespace(items=(SimpleNamespace(action_id="build:pkg"),))
+
+    def describe_test_target(self, workspace_id: str, repository_id: str, test_id: str):
+        return SimpleNamespace(command_argv=("pytest", "tests/test_basic.py"))
 
     def describe_build_target(self, workspace_id: str, repository_id: str, action_id: str):
         return SimpleNamespace(invocation=SimpleNamespace(argv=("python", "-m", "build")))
@@ -177,7 +211,13 @@ def test_codex_evaluation_service_runs_tasks_and_writes_report(tmp_path: Path) -
             target_selector={"repository_rel_path": "src/suitcode/mcp/service.py"},
             timeout_seconds=120,
         ),
-        CodexEvaluationTask(task_id="build-1", repository_path="repo", task_family=CodexTaskFamily.BUILD_EXECUTION, timeout_seconds=120),
+        CodexEvaluationTask(
+            task_id="build-1",
+            repository_path="repo",
+            task_family=CodexTaskFamily.BUILD_EXECUTION,
+            target_selector={"repository_rel_path": "src/suitcode/mcp/service.py"},
+            timeout_seconds=120,
+        ),
     )
 
     report = service.run(tasks)
@@ -191,6 +231,9 @@ def test_codex_evaluation_service_runs_tasks_and_writes_report(tmp_path: Path) -
     assert report.avg_transcript_tokens is not None
     assert report.failure_kind_mix == {}
     assert report.retry_rate == 0.0
+    assert report.agent_metadata is not None
+    assert report.agent_metadata.agent_kind == AgentKind.CODEX
+    assert report.agent_metadata.cli_name == "codex"
     latest = service.load_latest_report()
     assert latest is not None
     assert latest.report_id == report.report_id
@@ -256,6 +299,47 @@ def test_codex_evaluation_service_records_typed_error_result_when_runner_fails(t
     assert "runner timeout" in (report.tasks[0].failure_summary or "")
 
 
+def test_build_baseline_supports_v7_task_families(tmp_path: Path) -> None:
+    repo = (tmp_path / "repo").resolve()
+    repo.mkdir()
+    service = CodexEvaluationService(
+        working_directory=tmp_path,
+        reporter=CodexEvaluationReporter(tmp_path / ".suit" / "evaluation" / "codex" / "runs"),
+        service_factory=_FakeSuitService,
+    )
+
+    bug_task = CodexEvaluationTask(
+        task_id="bugfix-1",
+        repository_path="repo",
+        task_family=CodexTaskFamily.BUG_FIX_NAVIGATION,
+        target_selector={"repository_rel_path": "src/app.py"},
+    )
+    ci_task = CodexEvaluationTask(
+        task_id="ci-1",
+        repository_path="repo",
+        task_family=CodexTaskFamily.CI_DEBUGGING,
+        target_selector={"repository_rel_path": "src/app.py"},
+    )
+    unsupported_task = CodexEvaluationTask(
+        task_id="unsupported-1",
+        repository_path="repo",
+        task_family=CodexTaskFamily.UNSUPPORTED_ACTION_REASONING,
+        target_selector={"repository_rel_path": "src/app.py", "requested_action_kind": "runner"},
+    )
+
+    bug_baseline = service._build_baseline(bug_task, repository_root=repo)  # noqa: SLF001
+    ci_baseline = service._build_baseline(ci_task, repository_root=repo)  # noqa: SLF001
+    unsupported_baseline = service._build_baseline(unsupported_task, repository_root=repo)  # noqa: SLF001
+
+    assert bug_baseline.expected_answer["owner_id"] == "component:python:suitcode"
+    assert bug_baseline.expected_answer["owner_kind"] == "component"
+    assert bug_baseline.expected_answer["related_test_count"] == 1
+    assert ci_baseline.expected_answer["recommended_action_kind"] == "test"
+    assert ci_baseline.expected_answer["recommended_target_id"] == "test:basic"
+    assert unsupported_baseline.expected_answer["requested_action_kind"] == "runner"
+    assert unsupported_baseline.expected_answer["supported"] is False
+
+
 def test_codex_evaluation_service_retries_infrastructure_only_failures(tmp_path: Path) -> None:
     repo = (tmp_path / "repo").resolve()
     repo.mkdir()
@@ -285,6 +369,7 @@ def test_codex_evaluation_service_retries_infrastructure_only_failures(tmp_path:
                     status=CodexRunStatus.COMPLETED,
                     exit_code=1,
                     duration_ms=10,
+                    command_argv=("codex", "exec"),
                     stdout_jsonl_path=stdout_path,
                     stderr_path=stderr_path,
                     output_last_message_path=last_message_path,
@@ -307,6 +392,7 @@ def test_codex_evaluation_service_retries_infrastructure_only_failures(tmp_path:
                 status=CodexRunStatus.COMPLETED,
                 exit_code=0,
                 duration_ms=12,
+                command_argv=("codex", "exec"),
                 stdout_jsonl_path=stdout_path,
                 stderr_path=stderr_path,
                 output_last_message_path=last_message_path,
@@ -377,6 +463,7 @@ def test_codex_evaluation_service_classifies_usage_limit_without_retry(tmp_path:
                 status=CodexRunStatus.COMPLETED,
                 exit_code=1,
                 duration_ms=10,
+                command_argv=("codex", "exec"),
                 stdout_jsonl_path=stdout_path,
                 stderr_path=stderr_path,
                 output_last_message_path=last_message_path,

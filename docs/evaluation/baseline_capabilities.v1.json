@@ -1,0 +1,31 @@
+{
+  "version": "v1",
+  "conditions": [
+    {
+      "name": "baseline",
+      "description": "Native Codex behavior without SuitCode.",
+      "capabilities": [
+        { "capability": "filesystem_exploration", "enabled": true },
+        { "capability": "native_search_or_grep", "enabled": true },
+        { "capability": "native_code_navigation", "enabled": true },
+        { "capability": "suitcode_mcp_tools", "enabled": false },
+        { "capability": "deterministic_test_discovery", "enabled": false },
+        { "capability": "deterministic_build_target_discovery", "enabled": false },
+        { "capability": "provenance_rich_impact_analysis", "enabled": false }
+      ]
+    },
+    {
+      "name": "treatment",
+      "description": "Same native Codex behavior with SuitCode enabled.",
+      "capabilities": [
+        { "capability": "filesystem_exploration", "enabled": true },
+        { "capability": "native_search_or_grep", "enabled": true },
+        { "capability": "native_code_navigation", "enabled": true },
+        { "capability": "suitcode_mcp_tools", "enabled": true },
+        { "capability": "deterministic_test_discovery", "enabled": true },
+        { "capability": "deterministic_build_target_discovery", "enabled": true },
+        { "capability": "provenance_rich_impact_analysis", "enabled": true }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+[
+  {
+    "task_id": "fixture-python-test-execution",
+    "repository_path": "tests/test_repos/python",
+    "task_family": "test_execution",
+    "question": "After changing src/acme/core/repository.py, which deterministic test target should run, and run it?",
+    "difficulty": "medium",
+    "task_taxonomy": "test_execution",
+    "ground_truth_kind": "exact_action_target_match",
+    "expected_success_criteria": [
+      "selected_test_id matches deterministic baseline target",
+      "command_preview matches deterministic baseline describe_test_target output",
+      "execution_status matches deterministic baseline",
+      "passed/failed/errors/timeouts match deterministic baseline"
+    ],
+    "suite_role": "execution_ab",
+    "target_selector": {
+      "repository_rel_path": "src/acme/core/repository.py"
+    },
+    "timeout_seconds": 300
+  },
+  {
+    "task_id": "fixture-npm-build-execution",
+    "repository_path": "tests/test_repos/npm",
+    "task_family": "build_execution",
+    "question": "After changing tools/codegen/main.py, which deterministic build target should run, and run it?",
+    "difficulty": "medium",
+    "task_taxonomy": "build_execution",
+    "ground_truth_kind": "exact_action_target_match",
+    "expected_success_criteria": [
+      "selected_action_id matches deterministic baseline target",
+      "command_preview matches deterministic baseline describe_build_target output",
+      "execution_status matches deterministic baseline",
+      "succeeded matches deterministic baseline"
+    ],
+    "suite_role": "execution_ab",
+    "target_selector": {
+      "repository_rel_path": "tools/codegen/main.py"
+    },
+    "timeout_seconds": 300
+  }
+]

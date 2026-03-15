@@ -1,11 +1,10 @@
 {
-  "stable_readonly_tasks_file": "benchmarks/codex/tasks/suitcode_v6_headline.json",
-  "calibration_tasks_file": "benchmarks/codex/tasks/suitcode_calibration.json",
+  "stable_readonly_tasks_file": "benchmarks/codex/tasks/suitcode_calibration.json",
   "stable_execution_tasks_file": "benchmarks/codex/tasks/suitcode_execution_ab.json",
   "stress_readonly_tasks_file": "benchmarks/codex/tasks/suitcode_project_readonly.json",
   "passive_repository_root": ".",
-  "include_stable_execution": true,
-  "include_stress_readonly": true,
+  "include_stable_execution": false,
+  "include_stress_readonly": false,
   "include_passive_usage_summary": true,
   "stable_timeout_seconds": 300,
   "stress_timeout_seconds": 240

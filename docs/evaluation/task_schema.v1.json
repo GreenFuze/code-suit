@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://suitcode.dev/schemas/evaluation/task_schema.v1.json",
+  "title": "SuitCode Benchmark Task Schema v1",
+  "description": "Current Codex harness task schema. Protocol-facing metadata is optional and additive.",
+  "type": "object",
+  "required": [
+    "task_id",
+    "repository_path",
+    "task_family",
+    "timeout_seconds"
+  ],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repository_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_family": {
+      "type": "string",
+      "enum": [
+        "orientation",
+        "change_analysis",
+        "minimum_verified_change_set",
+        "truth_coverage",
+        "test_execution",
+        "build_execution"
+      ]
+    },
+    "target_selector": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "expected_required_tools": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "expected_high_value_tools": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "output_schema_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "prompt_template_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "difficulty": {
+      "type": "string",
+      "enum": ["easy", "medium", "hard"]
+    },
+    "question": {
+      "type": "string",
+      "minLength": 1
+    },
+    "expected_ground_truth_kind": {
+      "type": "string",
+      "enum": [
+        "exact_field_match",
+        "exact_id_set_match",
+        "exact_action_target_match",
+        "exact_action_result_match",
+        "provenance_presence_match"
+      ]
+    },
+    "expected_success_criteria": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "task_family": {
+            "const": "change_analysis"
+          }
+        },
+        "required": ["task_family"]
+      },
+      "then": {
+        "properties": {
+          "target_selector": {
+            "type": "object",
+            "oneOf": [
+              {
+                "required": ["symbol_id"]
+              },
+              {
+                "required": ["repository_rel_path"]
+              },
+              {
+                "required": ["owner_id"]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "task_family": {
+            "const": "minimum_verified_change_set"
+          }
+        },
+        "required": ["task_family"]
+      },
+      "then": {
+        "properties": {
+          "target_selector": {
+            "type": "object",
+            "oneOf": [
+              {
+                "required": ["symbol_id"]
+              },
+              {
+                "required": ["repository_rel_path"]
+              },
+              {
+                "required": ["owner_id"]
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "additionalProperties": false
+}

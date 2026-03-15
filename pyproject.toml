@@ -9,6 +9,7 @@ description = "SuitCode MCP server scaffold"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "matplotlib>=3.10",
     "mcp>=1,<2",
     "packaging>=24",
     "pydantic>=2.0",

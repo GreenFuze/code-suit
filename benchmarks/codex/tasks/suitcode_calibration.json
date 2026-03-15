@@ -1,0 +1,76 @@
+[
+  {
+    "task_id": "project-python-orientation-calibration",
+    "repository_path": ".",
+    "task_family": "orientation",
+    "question": "What repository providers, counts, and overall truth availability describe the project root?",
+    "difficulty": "easy",
+    "task_taxonomy": "orientation",
+    "ground_truth_kind": "exact_field_match",
+    "expected_success_criteria": [
+      "provider_ids match deterministic baseline",
+      "component_count matches deterministic baseline",
+      "test_count matches deterministic baseline",
+      "quality_provider_count matches deterministic baseline",
+      "overall_truth_availability matches deterministic baseline"
+    ],
+    "suite_role": "calibration",
+    "timeout_seconds": 180
+  },
+  {
+    "task_id": "project-python-truth-coverage-calibration",
+    "repository_path": ".",
+    "task_family": "truth_coverage",
+    "question": "What is the repository truth coverage profile across architecture, code, tests, quality, and actions for the project root?",
+    "difficulty": "easy",
+    "task_taxonomy": "truth_coverage",
+    "ground_truth_kind": "exact_field_match",
+    "expected_success_criteria": [
+      "overall_availability matches deterministic baseline",
+      "per-domain availability matches deterministic baseline",
+      "per-domain authoritative_count matches deterministic baseline",
+      "per-domain derived_count matches deterministic baseline",
+      "per-domain heuristic_count matches deterministic baseline",
+      "per-domain unavailable_count matches deterministic baseline"
+    ],
+    "suite_role": "calibration",
+    "timeout_seconds": 180
+  },
+  {
+    "task_id": "fixture-npm-orientation-calibration",
+    "repository_path": "tests/test_repos/npm",
+    "task_family": "orientation",
+    "question": "What repository providers, counts, and overall truth availability describe the npm fixture repo?",
+    "difficulty": "easy",
+    "task_taxonomy": "orientation",
+    "ground_truth_kind": "exact_field_match",
+    "expected_success_criteria": [
+      "provider_ids match deterministic baseline",
+      "component_count matches deterministic baseline",
+      "test_count matches deterministic baseline",
+      "quality_provider_count matches deterministic baseline",
+      "overall_truth_availability matches deterministic baseline"
+    ],
+    "suite_role": "calibration",
+    "timeout_seconds": 180
+  },
+  {
+    "task_id": "fixture-npm-truth-coverage-calibration",
+    "repository_path": "tests/test_repos/npm",
+    "task_family": "truth_coverage",
+    "question": "What is the repository truth coverage profile across architecture, code, tests, quality, and actions for the npm fixture repo?",
+    "difficulty": "easy",
+    "task_taxonomy": "truth_coverage",
+    "ground_truth_kind": "exact_field_match",
+    "expected_success_criteria": [
+      "overall_availability matches deterministic baseline",
+      "per-domain availability matches deterministic baseline",
+      "per-domain authoritative_count matches deterministic baseline",
+      "per-domain derived_count matches deterministic baseline",
+      "per-domain heuristic_count matches deterministic baseline",
+      "per-domain unavailable_count matches deterministic baseline"
+    ],
+    "suite_role": "calibration",
+    "timeout_seconds": 180
+  }
+]

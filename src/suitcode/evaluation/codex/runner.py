@@ -21,6 +21,7 @@ class CodexRunArtifacts:
     status: CodexRunStatus
     exit_code: int | None
     duration_ms: int
+    command_argv: tuple[str, ...]
     stdout_jsonl_path: Path
     stderr_path: Path
     output_last_message_path: Path
@@ -114,6 +115,7 @@ class CodexCliRunner:
                 status=CodexRunStatus.CLI_ERROR,
                 exit_code=None,
                 duration_ms=duration_ms,
+                command_argv=tuple(command),
                 stdout_jsonl_path=stdout_path,
                 stderr_path=stderr_path,
                 output_last_message_path=last_message_path,
@@ -135,6 +137,7 @@ class CodexCliRunner:
                 status=CodexRunStatus.TIMEOUT,
                 exit_code=None,
                 duration_ms=duration_ms,
+                command_argv=tuple(command),
                 stdout_jsonl_path=stdout_path,
                 stderr_path=stderr_path,
                 output_last_message_path=last_message_path,
@@ -157,6 +160,7 @@ class CodexCliRunner:
             status=CodexRunStatus.COMPLETED,
             exit_code=completed.returncode,
             duration_ms=duration_ms,
+            command_argv=tuple(command),
             stdout_jsonl_path=stdout_path,
             stderr_path=stderr_path,
             output_last_message_path=last_message_path,

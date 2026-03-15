@@ -1,0 +1,26 @@
+[
+  {
+    "task_id": "python-orientation-headline",
+    "repository_path": "tests/test_repos/python",
+    "task_family": "orientation",
+    "timeout_seconds": 180
+  },
+  {
+    "task_id": "python-truth-coverage-headline",
+    "repository_path": "tests/test_repos/python",
+    "task_family": "truth_coverage",
+    "timeout_seconds": 180
+  },
+  {
+    "task_id": "npm-orientation-headline",
+    "repository_path": "tests/test_repos/npm",
+    "task_family": "orientation",
+    "timeout_seconds": 180
+  },
+  {
+    "task_id": "npm-truth-coverage-headline",
+    "repository_path": "tests/test_repos/npm",
+    "task_family": "truth_coverage",
+    "timeout_seconds": 180
+  }
+]

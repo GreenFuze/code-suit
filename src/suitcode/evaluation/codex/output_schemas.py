@@ -109,6 +109,31 @@ class BuildExecutionOutputModel(StrictModel):
     succeeded: bool = Field(description="Copy success exactly from the build result.")
 
 
+class BugFixNavigationOutputModel(StrictModel):
+    owner_id: str = Field(description="Copy owner.id exactly from get_file_owner.")
+    owner_kind: str = Field(description="Copy owner.kind exactly from get_file_owner.")
+    related_test_ids_preview: tuple[str, ...] = Field(description="Copy the sorted related test IDs exactly from get_related_tests.")
+    related_test_count: int = Field(description="Copy total exactly from get_related_tests.")
+
+
+class CiDebuggingOutputModel(StrictModel):
+    owner_id: str = Field(description="Copy owner.id exactly from the deterministic baseline used for CI debugging.")
+    primary_component_id: str | None = Field(default=None, description="Copy primary_component.id exactly from get_minimum_verified_change_set, or null.")
+    recommended_action_kind: str = Field(description="Copy whether the chosen deterministic target is a test or build action.")
+    recommended_target_id: str = Field(description="Copy the chosen deterministic target ID exactly.")
+    command_preview: tuple[str, ...] = Field(description="Copy the describe_* command preview exactly for the chosen target.")
+    target_source_tool: str = Field(description="Copy the deterministic source tool used to describe the chosen target, such as describe_test_target or describe_build_target.")
+
+
+class UnsupportedActionReasoningOutputModel(StrictModel):
+    requested_action_kind: str = Field(description="Copy the requested action kind exactly from the task selector.")
+    supported: bool = Field(description="Report whether a deterministic target exists for the requested action kind.")
+    available_action_kinds: tuple[str, ...] = Field(description="Copy the sorted set of deterministic action kinds available from get_minimum_verified_change_set.")
+    overall_truth_availability: AvailabilityLiteral = Field(description="Copy overall_availability exactly from get_truth_coverage.")
+    actions_availability: AvailabilityLiteral = Field(description="Copy actions.availability exactly from get_truth_coverage.")
+    reason_code: str = Field(description="Copy the deterministic support classification exactly: available, actions_truth_unavailable, requested_kind_not_in_minimum_verified_set, or no_deterministic_actions_available.")
+
+
 _OUTPUT_MODELS = {
     CodexTaskFamily.ORIENTATION: OrientationOutputModel,
     CodexTaskFamily.CHANGE_ANALYSIS: ChangeAnalysisOutputModel,
@@ -116,6 +141,9 @@ _OUTPUT_MODELS = {
     CodexTaskFamily.TRUTH_COVERAGE: TruthCoverageOutputModel,
     CodexTaskFamily.TEST_EXECUTION: TestExecutionOutputModel,
     CodexTaskFamily.BUILD_EXECUTION: BuildExecutionOutputModel,
+    CodexTaskFamily.BUG_FIX_NAVIGATION: BugFixNavigationOutputModel,
+    CodexTaskFamily.CI_DEBUGGING: CiDebuggingOutputModel,
+    CodexTaskFamily.UNSUPPORTED_ACTION_REASONING: UnsupportedActionReasoningOutputModel,
 }
 
 

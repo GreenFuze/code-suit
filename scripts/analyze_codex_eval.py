@@ -12,6 +12,37 @@ if str(SRC_ROOT) not in sys.path:
 from suitcode.evaluation.codex.service import CodexEvaluationService
 
 
+def _print_agent_metadata(prefix: str, *, report_metadata) -> None:
+    print(
+        f"{prefix}agent={report_metadata.agent_kind.value}, "
+        f"cli={report_metadata.cli_name} {report_metadata.cli_version or '(unknown)'}, "
+        f"model={report_metadata.model_name or '(unknown)'}, "
+        f"provider={report_metadata.model_provider or '(unknown)'}"
+    )
+    print(
+        f"{prefix}host_os={report_metadata.host_os}, "
+        f"cwd={report_metadata.working_directory}, "
+        f"transport={report_metadata.mcp_transport or '(none)'}, "
+        f"suitcode_enabled={report_metadata.suitcode_enabled}"
+    )
+    print(
+        f"{prefix}sandbox={report_metadata.sandbox_mode or '(default)'}, "
+        f"full_auto={report_metadata.full_auto}, "
+        f"bypass={report_metadata.bypass_approvals_and_sandbox}, "
+        f"profile={report_metadata.profile_name or '(none)'}"
+    )
+    print(
+        f"{prefix}git_commit={report_metadata.git_commit_hash or '(unknown)'}, "
+        f"git_branch={report_metadata.git_branch or '(unknown)'}, "
+        f"git_remote={report_metadata.git_repository_url or '(unknown)'}"
+    )
+    print(
+        f"{prefix}command_prefix={' '.join(report_metadata.command_prefix) if report_metadata.command_prefix else '(unknown)'}"
+    )
+    if report_metadata.config_overrides:
+        print(f"{prefix}config_overrides={list(report_metadata.config_overrides)}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="analyze_codex_eval")
     parser.add_argument("--report-id", default=None)
@@ -38,6 +69,9 @@ def main() -> None:
     print("Codex Evaluation Report")
     print("=======================")
     print(f"Report id: {report.report_id}")
+    if report.agent_metadata is not None:
+        print("Agent metadata:")
+        _print_agent_metadata("  ", report_metadata=report.agent_metadata)
     print(f"Tasks total: {report.task_total}, passed: {report.task_passed}, failed: {report.task_failed}, error: {report.task_error}")
     print(f"Required-tool success rate: {report.required_tool_success_rate:.2%}")
     print(f"High-value tool early rate: {report.high_value_tool_early_rate:.2%}")
@@ -73,6 +107,8 @@ def main() -> None:
             f"  tools: required={task.required_tool_count}, used_suitcode={task.used_suitcode_tool_count if task.used_suitcode_tool_count is not None else '-'}, "
             f"used_high_value={task.used_high_value_tool_count if task.used_high_value_tool_count is not None else '-'}"
         )
+        if task.invocation_command:
+            print(f"  command: {' '.join(task.invocation_command)}")
         for trace in task.required_tool_traces:
             print(
                 f"  attempt {trace.attempt_number} required_tool[{trace.tool_name}]: called={trace.called}, success={trace.success}, "

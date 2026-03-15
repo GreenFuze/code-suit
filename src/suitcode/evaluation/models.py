@@ -6,6 +6,7 @@ from pydantic import Field, field_validator, model_validator
 
 from suitcode.analytics.models import StrictModel
 from suitcode.analytics.transcript_models import TranscriptTokenBreakdown
+from suitcode.evaluation.metadata_models import AgentRunMetadata
 
 
 class EvaluationStatus(StrEnum):
@@ -132,6 +133,7 @@ class CodexEvaluationTaskResult(StrictModel):
     required_tool_traces: tuple[RequiredToolTrace, ...] = ()
     transcript_token_breakdown: TranscriptTokenBreakdown | None = None
     correlation_quality: str | None = None
+    invocation_command: tuple[str, ...] = ()
     stdout_jsonl_path: str
     rollout_artifact_path: str | None = None
     output_last_message_path: str
@@ -172,12 +174,16 @@ class CodexEvaluationTaskResult(StrictModel):
             raise ValueError("attempt_failure_kinds require attempt_count > 1")
         if self.infrastructure_retry_applied and self.attempt_count <= 1:
             raise ValueError("infrastructure_retry_applied requires attempt_count > 1")
+        for item in self.invocation_command:
+            if not item.strip():
+                raise ValueError("invocation_command must not contain empty values")
         return self
 
 
 class CodexEvaluationReport(StrictModel):
     report_id: str
     generated_at_utc: str
+    agent_metadata: AgentRunMetadata | None = None
     task_total: int
     task_passed: int
     task_failed: int

@@ -1,0 +1,86 @@
+{
+  "version": "v1",
+  "description": "Failure taxonomy used by SuitCode benchmark reports.",
+  "categories": [
+    {
+      "name": "answer_correctness",
+      "kinds": [
+        {
+          "id": "answer_mismatch",
+          "meaning": "The final answer satisfied the schema but differed from deterministic ground truth.",
+          "counts_as_benchmark_failure": true
+        }
+      ]
+    },
+    {
+      "name": "tool_use_or_scoring",
+      "kinds": [
+        {
+          "id": "schema_validation_failed",
+          "meaning": "The final answer did not satisfy the required schema.",
+          "counts_as_benchmark_failure": true
+        },
+        {
+          "id": "required_tools_missing",
+          "meaning": "The run did not satisfy the required tool-use contract.",
+          "counts_as_benchmark_failure": true
+        },
+        {
+          "id": "argument_mismatch",
+          "meaning": "A required tool was used with incorrect task-defining arguments.",
+          "counts_as_benchmark_failure": true
+        }
+      ]
+    },
+    {
+      "name": "action_correctness",
+      "kinds": [
+        {
+          "id": "required_action_not_executed",
+          "meaning": "The execution task did not run the required deterministic action.",
+          "counts_as_benchmark_failure": true
+        },
+        {
+          "id": "required_action_wrong_target",
+          "meaning": "The execution task ran the wrong deterministic target.",
+          "counts_as_benchmark_failure": true
+        }
+      ]
+    },
+    {
+      "name": "infrastructure",
+      "kinds": [
+        {
+          "id": "timeout",
+          "meaning": "The run hit the configured timeout budget.",
+          "counts_as_benchmark_failure": false
+        },
+        {
+          "id": "cli_error",
+          "meaning": "The agent CLI failed before a valid task result was produced.",
+          "counts_as_benchmark_failure": false
+        },
+        {
+          "id": "usage_limit",
+          "meaning": "The agent usage quota prevented a valid run.",
+          "counts_as_benchmark_failure": false
+        },
+        {
+          "id": "session_artifact_missing",
+          "meaning": "The expected session artifact could not be resolved.",
+          "counts_as_benchmark_failure": false
+        },
+        {
+          "id": "session_correlation_ambiguous",
+          "meaning": "Multiple candidate session artifacts prevented deterministic attribution.",
+          "counts_as_benchmark_failure": false
+        },
+        {
+          "id": "unexpected_exception",
+          "meaning": "The harness raised an unexpected exception rather than completing a task evaluation.",
+          "counts_as_benchmark_failure": false
+        }
+      ]
+    }
+  ]
+}

@@ -4,7 +4,9 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
+import platform
 from pathlib import Path
+import subprocess
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -33,6 +35,7 @@ from suitcode.evaluation.models import (
     RequiredToolTrace,
     ToolSelectionScore,
 )
+from suitcode.evaluation.metadata_models import AgentKind, AgentRunMetadata
 from suitcode.evaluation.reporting import CodexEvaluationReporter
 
 
@@ -119,6 +122,7 @@ class CodexEvaluationService:
         full_auto: bool = True,
         sandbox: str = "workspace-write",
         bypass_approvals_and_sandbox: bool = False,
+        auto_orientation_hint: bool = False,
     ) -> CodexEvaluationReport:
         report_id = f"codex-eval-{uuid4().hex}"
         task_metadata: dict[str, dict[str, object]] = {}
@@ -135,6 +139,7 @@ class CodexEvaluationService:
                     full_auto=full_auto,
                     sandbox=sandbox,
                     bypass_approvals_and_sandbox=bypass_approvals_and_sandbox,
+                    auto_orientation_hint=auto_orientation_hint,
                     task_metadata=task_metadata,
                 )
             except Exception as exc:  # noqa: BLE001
@@ -151,7 +156,20 @@ class CodexEvaluationService:
                 }
             results_list.append(result)
         results = tuple(results_list)
-        report = self._build_report(report_id=report_id, results=results)
+        report = self._build_report(
+            report_id=report_id,
+            results=results,
+            agent_metadata=self._build_agent_metadata(
+                results=results,
+                model=model,
+                profile=profile,
+                prompt_arm=prompt_arm,
+                config_overrides=config_overrides,
+                full_auto=full_auto,
+                sandbox=sandbox,
+                bypass_approvals_and_sandbox=bypass_approvals_and_sandbox,
+            ),
+        )
         self._reporter.write_report(report, task_metadata=task_metadata)
         return report
 
@@ -167,6 +185,7 @@ class CodexEvaluationService:
         full_auto: bool,
         sandbox: str,
         bypass_approvals_and_sandbox: bool,
+        auto_orientation_hint: bool,
         task_metadata: dict[str, dict[str, object]],
     ) -> CodexEvaluationTaskResult:
         repository_root = (self._working_directory / task.repository_path).expanduser().resolve()
@@ -174,18 +193,24 @@ class CodexEvaluationService:
             raise ValueError(f"repository path not found for task `{task.task_id}`: `{repository_root}`")
         task_dir = self._reporter.runs_root / report_id / "tasks" / task.task_id
         baseline = self._build_baseline(task, repository_root=repository_root)
-        prompt_text = self._prompt_library.build_prompt(task, repository_root=repository_root, arm=prompt_arm)
+        prompt_text = self._prompt_library.build_prompt(
+            task,
+            repository_root=repository_root,
+            arm=prompt_arm,
+            auto_orientation_hint=auto_orientation_hint,
+        )
         attempts = [
             self._execute_attempt(
                 task=task,
                 baseline=baseline,
                 repository_root=repository_root,
                 prompt_text=prompt_text,
-                model=model,
-                profile=profile,
-                config_overrides=config_overrides,
-                full_auto=full_auto,
-                sandbox=sandbox,
+                      model=model,
+                      profile=profile,
+                      prompt_arm=prompt_arm,
+                      config_overrides=config_overrides,
+                      full_auto=full_auto,
+                      sandbox=sandbox,
                 bypass_approvals_and_sandbox=bypass_approvals_and_sandbox,
                 output_directory=task_dir / "attempt-1",
                 attempt_number=1,
@@ -200,6 +225,7 @@ class CodexEvaluationService:
                     prompt_text=prompt_text,
                     model=model,
                     profile=profile,
+                    prompt_arm=prompt_arm,
                     config_overrides=config_overrides,
                     full_auto=full_auto,
                     sandbox=sandbox,
@@ -237,6 +263,7 @@ class CodexEvaluationService:
                     "stdout_jsonl_path": str(attempt.run.stdout_jsonl_path),
                     "rollout_artifact_path": (str(attempt.run.session_artifact_path) if attempt.run.session_artifact_path is not None else None),
                     "output_last_message_path": str(attempt.run.output_last_message_path),
+                    "command_argv": list(attempt.run.command_argv),
                 }
                 for attempt in attempts
             ],
@@ -270,6 +297,7 @@ class CodexEvaluationService:
             required_tool_traces=all_required_tool_traces,
             transcript_token_breakdown=final_attempt.token_breakdown,
             correlation_quality=final_attempt.correlation_quality,
+            invocation_command=final_attempt.run.command_argv,
             stdout_jsonl_path=str(final_attempt.run.stdout_jsonl_path),
             rollout_artifact_path=(str(final_attempt.run.session_artifact_path) if final_attempt.run.session_artifact_path is not None else None),
             output_last_message_path=str(final_attempt.run.output_last_message_path),
@@ -285,6 +313,7 @@ class CodexEvaluationService:
         prompt_text: str,
         model: str | None,
         profile: str | None,
+        prompt_arm: EvaluationArm,
         config_overrides: tuple[str, ...],
         full_auto: bool,
         sandbox: str,
@@ -322,12 +351,15 @@ class CodexEvaluationService:
         actual_answer, schema_valid, answer_notes = self._load_final_answer(task, run.output_last_message_path)
         notes.extend(answer_notes)
 
+        required_tools = task.expected_required_tools if prompt_arm == EvaluationArm.SUITCODE else ()
+        expected_argument_subsets = baseline.expected_argument_subsets if prompt_arm == EvaluationArm.SUITCODE else ()
+
         if session is None:
             tool_selection = ToolSelectionScore(
-                required_tools_present=False,
-                required_tool_names=task.expected_required_tools,
+                required_tools_present=not required_tools,
+                required_tool_names=required_tools,
                 used_tool_names=(),
-                missing_required_tools=task.expected_required_tools,
+                missing_required_tools=required_tools,
             )
             argument_scores = ()
             action_score = ActionScore(
@@ -346,8 +378,8 @@ class CodexEvaluationService:
             session_id = None
             token_breakdown = None
         else:
-            tool_selection = self._scorer.tool_selection_score(session, required_tools=task.expected_required_tools)
-            argument_scores = self._scorer.argument_scores(session, expected_argument_subsets=baseline.expected_argument_subsets)
+            tool_selection = self._scorer.tool_selection_score(session, required_tools=required_tools)
+            argument_scores = self._scorer.argument_scores(session, expected_argument_subsets=expected_argument_subsets)
             action_score = self._scorer.action_score(
                 session,
                 required_action_kind=baseline.required_action_kind,
@@ -365,7 +397,7 @@ class CodexEvaluationService:
 
         required_tool_traces = self._required_tool_traces(
             session=session,
-            required_tools=task.expected_required_tools,
+            required_tools=required_tools,
             repository_root=repository_root,
             attempt_number=attempt_number,
         )
@@ -374,6 +406,7 @@ class CodexEvaluationService:
             actual_answer=actual_answer,
             expected_answer=baseline.expected_answer,
             schema_valid=schema_valid,
+            ignored_fields=self._ignored_answer_fields(task=task, prompt_arm=prompt_arm),
         )
         status, failure_kind, failure_summary = self._classify_result(
             run=run,
@@ -383,6 +416,7 @@ class CodexEvaluationService:
             answer_score=answer_score,
             action_score=action_score,
             required_action=baseline.required_action_kind is not None,
+            enforce_action_trace=(prompt_arm == EvaluationArm.SUITCODE),
             answer_notes=answer_notes,
         )
         if failure_summary is not None and failure_summary not in notes:
@@ -528,13 +562,93 @@ class CodexEvaluationService:
                     },
                     expected_argument_subsets=contract.expected_argument_subsets(task, workspace_id=workspace_id, repository_id=repository_id),
                 )
+            if task.task_family == CodexTaskFamily.BUG_FIX_NAVIGATION:
+                repository_rel_path = task.target_selector["repository_rel_path"]
+                owner = service.get_file_owner(workspace_id, repository_id, repository_rel_path)
+                related_tests = service.get_related_tests(
+                    workspace_id,
+                    repository_id,
+                    repository_rel_path=repository_rel_path,
+                    limit=20,
+                )
+                return _BaselineExpectation(
+                    expected_answer={
+                        "owner_id": owner.owner.id,
+                        "owner_kind": owner.owner.kind,
+                        "related_test_ids_preview": sorted(item.id for item in related_tests.items),
+                        "related_test_count": related_tests.total,
+                    },
+                    expected_argument_subsets=contract.expected_argument_subsets(task, workspace_id=workspace_id, repository_id=repository_id),
+                )
+            if task.task_family == CodexTaskFamily.CI_DEBUGGING:
+                selector = self._context_selector(task.target_selector)
+                change_set = service.get_minimum_verified_change_set(workspace_id, repository_id, **selector)
+                action_kind, target_id, command_preview, target_source_tool = self._ci_debugging_target(
+                    service=service,
+                    workspace_id=workspace_id,
+                    repository_id=repository_id,
+                    change_set=change_set,
+                )
+                return _BaselineExpectation(
+                    expected_answer={
+                        "owner_id": change_set.owner.id,
+                        "primary_component_id": (change_set.primary_component.id if change_set.primary_component is not None else None),
+                        "recommended_action_kind": action_kind,
+                        "recommended_target_id": target_id,
+                        "command_preview": command_preview,
+                        "target_source_tool": target_source_tool,
+                    },
+                    expected_argument_subsets=contract.expected_argument_subsets(task, workspace_id=workspace_id, repository_id=repository_id),
+                )
+            if task.task_family == CodexTaskFamily.UNSUPPORTED_ACTION_REASONING:
+                selector = self._context_selector(task.target_selector)
+                requested_action_kind = task.target_selector["requested_action_kind"]
+                change_set = service.get_minimum_verified_change_set(workspace_id, repository_id, **selector)
+                truth = service.get_truth_coverage(workspace_id, repository_id)
+                available_action_kinds: list[str] = []
+                if change_set.tests:
+                    available_action_kinds.append("test")
+                if change_set.build_targets:
+                    available_action_kinds.append("build")
+                if change_set.runner_actions:
+                    available_action_kinds.append("runner")
+                available_action_kinds = sorted(available_action_kinds)
+                supported = requested_action_kind in available_action_kinds
+                actions_domain = next(domain for domain in truth.domains if domain.domain == "actions")
+                if supported:
+                    reason_code = "available"
+                elif actions_domain.availability == "unavailable":
+                    reason_code = "actions_truth_unavailable"
+                elif available_action_kinds:
+                    reason_code = "requested_kind_not_in_minimum_verified_set"
+                else:
+                    reason_code = "no_deterministic_actions_available"
+                return _BaselineExpectation(
+                    expected_answer={
+                        "requested_action_kind": requested_action_kind,
+                        "supported": supported,
+                        "available_action_kinds": available_action_kinds,
+                        "overall_truth_availability": truth.overall_availability,
+                        "actions_availability": actions_domain.availability,
+                        "reason_code": reason_code,
+                    },
+                    expected_argument_subsets=contract.expected_argument_subsets(task, workspace_id=workspace_id, repository_id=repository_id),
+                )
             if task.task_family == CodexTaskFamily.TEST_EXECUTION:
                 explicit_test_id = task.target_selector.get("test_id")
                 if explicit_test_id is None:
-                    tests = service.list_tests(workspace_id, repository_id, limit=200, offset=0)
-                    if not tests.items:
-                        raise ValueError("no discovered tests available for test_execution baseline")
-                    test_id = tests.items[0].id
+                    selector = {
+                        key: value
+                        for key, value in task.target_selector.items()
+                        if key in {"repository_rel_path", "symbol_id", "owner_id"}
+                    }
+                    if len(selector) != 1:
+                        raise ValueError("test_execution baseline requires exactly one test_id or one context selector")
+                    change_set = service.get_minimum_verified_change_set(workspace_id, repository_id, **selector)
+                    target_ids = sorted(item.test_id for item in change_set.tests)
+                    if not target_ids:
+                        raise ValueError("no deterministic test targets available from minimum verified change set")
+                    test_id = target_ids[0]
                 else:
                     test_id = explicit_test_id
                 description = service.describe_test_target(workspace_id, repository_id, test_id)
@@ -561,10 +675,18 @@ class CodexEvaluationService:
             if task.task_family == CodexTaskFamily.BUILD_EXECUTION:
                 explicit_action_id = task.target_selector.get("action_id")
                 if explicit_action_id is None:
-                    builds = service.list_build_targets(workspace_id, repository_id, limit=200, offset=0)
-                    if not builds.items:
-                        raise ValueError("no deterministic build targets available for build_execution baseline")
-                    action_id = builds.items[0].action_id
+                    selector = {
+                        key: value
+                        for key, value in task.target_selector.items()
+                        if key in {"repository_rel_path", "symbol_id", "owner_id"}
+                    }
+                    if len(selector) != 1:
+                        raise ValueError("build_execution baseline requires exactly one action_id or one context selector")
+                    change_set = service.get_minimum_verified_change_set(workspace_id, repository_id, **selector)
+                    action_ids = sorted(item.action_id for item in change_set.build_targets)
+                    if not action_ids:
+                        raise ValueError("no deterministic build targets available from minimum verified change set")
+                    action_id = action_ids[0]
                 else:
                     action_id = explicit_action_id
                 description = service.describe_build_target(workspace_id, repository_id, action_id)
@@ -592,6 +714,28 @@ class CodexEvaluationService:
             except Exception:  # noqa: BLE001
                 pass
 
+    @staticmethod
+    def _context_selector(target_selector: dict[str, str]) -> dict[str, str]:
+        return {
+            key: value
+            for key, value in target_selector.items()
+            if key in {"repository_rel_path", "symbol_id", "owner_id"}
+        }
+
+    @staticmethod
+    def _ci_debugging_target(*, service, workspace_id: str, repository_id: str, change_set) -> tuple[str, str, list[str], str]:
+        test_ids = sorted(item.test_id for item in change_set.tests)
+        if test_ids:
+            test_id = test_ids[0]
+            description = service.describe_test_target(workspace_id, repository_id, test_id)
+            return "test", test_id, list(description.command_argv), "describe_test_target"
+        build_ids = sorted(item.action_id for item in change_set.build_targets)
+        if build_ids:
+            action_id = build_ids[0]
+            description = service.describe_build_target(workspace_id, repository_id, action_id)
+            return "build", action_id, list(description.invocation.argv), "describe_build_target"
+        raise ValueError("no deterministic test or build target available for ci_debugging baseline")
+
     def _load_final_answer(self, task: CodexEvaluationTask, path: Path) -> tuple[dict[str, object] | None, bool, tuple[str, ...]]:
         if not path.exists():
             return None, False, (f"final answer file missing: `{path}`",)
@@ -605,7 +749,13 @@ class CodexEvaluationService:
             return None, False, (f"final answer schema validation failed: {exc}",)
         return validated.model_dump(mode="json"), True, ()
 
-    def _build_report(self, *, report_id: str, results: tuple[CodexEvaluationTaskResult, ...]) -> CodexEvaluationReport:
+    def _build_report(
+        self,
+        *,
+        report_id: str,
+        results: tuple[CodexEvaluationTaskResult, ...],
+        agent_metadata: AgentRunMetadata,
+    ) -> CodexEvaluationReport:
         task_total = len(results)
         task_passed = sum(1 for item in results if item.status == EvaluationStatus.PASSED)
         task_failed = sum(1 for item in results if item.status == EvaluationStatus.FAILED)
@@ -643,6 +793,7 @@ class CodexEvaluationService:
         return CodexEvaluationReport(
             report_id=report_id,
             generated_at_utc=datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+            agent_metadata=agent_metadata,
             task_total=task_total,
             task_passed=task_passed,
             task_failed=task_failed,
@@ -674,6 +825,105 @@ class CodexEvaluationService:
             required_tool_failure_mix=dict(required_tool_failure_mix),
             correlation_quality_mix=dict(correlation_quality_mix),
             tasks=results,
+        )
+
+    def _build_agent_metadata(
+        self,
+        *,
+        results: tuple[CodexEvaluationTaskResult, ...],
+        model: str | None,
+        profile: str | None,
+        config_overrides: tuple[str, ...],
+        full_auto: bool,
+        sandbox: str,
+        bypass_approvals_and_sandbox: bool,
+        prompt_arm: EvaluationArm,
+    ) -> AgentRunMetadata:
+        cli_version, model_provider, model_name = self._extract_run_identity(results)
+        git_commit_hash, git_branch, git_repository_url = self._git_identity(self._working_directory)
+        command_prefix = next((item.invocation_command for item in results if item.invocation_command), ("codex", "exec", "--json"))
+        return AgentRunMetadata(
+            agent_kind=AgentKind.CODEX,
+            cli_name="codex",
+            cli_version=cli_version,
+            model_name=model_name or model,
+            model_provider=model_provider,
+            host_os=platform.platform(),
+            working_directory=str(self._working_directory),
+            command_prefix=tuple(command_prefix),
+            profile_name=profile,
+            config_overrides=config_overrides,
+            full_auto=full_auto,
+            sandbox_mode=sandbox,
+            bypass_approvals_and_sandbox=bypass_approvals_and_sandbox,
+            suitcode_enabled=(prompt_arm == EvaluationArm.SUITCODE),
+            mcp_transport=("stdio" if prompt_arm == EvaluationArm.SUITCODE else None),
+            git_commit_hash=git_commit_hash,
+            git_branch=git_branch,
+            git_repository_url=git_repository_url,
+        )
+
+    @staticmethod
+    def _extract_run_identity(results: tuple[CodexEvaluationTaskResult, ...]) -> tuple[str | None, str | None, str | None]:
+        for item in results:
+            rollout_path = item.rollout_artifact_path
+            if rollout_path is None:
+                continue
+            path = Path(rollout_path)
+            if not path.exists():
+                continue
+            cli_version: str | None = None
+            model_provider: str | None = None
+            model_name: str | None = None
+            for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if payload.get("type") == "session_meta":
+                    session_meta = payload.get("payload")
+                    if isinstance(session_meta, dict):
+                        raw_cli_version = session_meta.get("cli_version")
+                        if isinstance(raw_cli_version, str) and raw_cli_version.strip():
+                            cli_version = raw_cli_version.strip()
+                        raw_model_provider = session_meta.get("model_provider")
+                        if isinstance(raw_model_provider, str) and raw_model_provider.strip():
+                            model_provider = raw_model_provider.strip()
+                if payload.get("type") == "turn_context":
+                    turn_context = payload.get("payload")
+                    if isinstance(turn_context, dict):
+                        raw_model_name = turn_context.get("model")
+                        if isinstance(raw_model_name, str) and raw_model_name.strip():
+                            model_name = raw_model_name.strip()
+                if cli_version is not None and model_provider is not None and model_name is not None:
+                    return cli_version, model_provider, model_name
+            return cli_version, model_provider, model_name
+        return None, None, None
+
+    @staticmethod
+    def _git_identity(working_directory: Path) -> tuple[str | None, str | None, str | None]:
+        def _run_git(*args: str) -> str | None:
+            completed = subprocess.run(
+                ["git", *args],
+                cwd=working_directory,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+            if completed.returncode != 0:
+                return None
+            value = completed.stdout.strip()
+            return value or None
+
+        return (
+            _run_git("rev-parse", "HEAD"),
+            _run_git("rev-parse", "--abbrev-ref", "HEAD"),
+            _run_git("config", "--get", "remote.origin.url"),
         )
 
     @staticmethod
@@ -738,6 +988,7 @@ class CodexEvaluationService:
         answer_score: AnswerScore,
         action_score: ActionScore,
         required_action: bool,
+        enforce_action_trace: bool,
         answer_notes: tuple[str, ...],
     ) -> tuple[EvaluationStatus, EvaluationFailureKind | None, str | None]:
         usage_limit_summary = CodexEvaluationService._usage_limit_summary(run=run, session=session)
@@ -772,11 +1023,17 @@ class CodexEvaluationService:
             if answer_score.mismatched_fields:
                 details.append("mismatched=" + ", ".join(answer_score.mismatched_fields))
             return EvaluationStatus.FAILED, EvaluationFailureKind.ANSWER_MISMATCH, "; ".join(details)
-        if required_action and not action_score.executed:
+        if required_action and enforce_action_trace and not action_score.executed:
             return EvaluationStatus.FAILED, EvaluationFailureKind.REQUIRED_ACTION_NOT_EXECUTED, "required deterministic action was not executed"
-        if required_action and not action_score.matched_target:
+        if required_action and enforce_action_trace and not action_score.matched_target:
             return EvaluationStatus.FAILED, EvaluationFailureKind.REQUIRED_ACTION_WRONG_TARGET, "deterministic action executed with the wrong target"
         return EvaluationStatus.PASSED, None, None
+
+    @staticmethod
+    def _ignored_answer_fields(*, task: CodexEvaluationTask, prompt_arm: EvaluationArm) -> tuple[str, ...]:
+        if prompt_arm == EvaluationArm.BASELINE and task.task_family == CodexTaskFamily.ORIENTATION:
+            return ("workspace_id", "repository_id")
+        return ()
 
     def _required_tool_traces(
         self,

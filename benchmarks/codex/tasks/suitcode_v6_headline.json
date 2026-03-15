@@ -1,0 +1,92 @@
+[
+  {
+    "task_id": "project-python-change-impact-headline",
+    "repository_path": ".",
+    "task_family": "change_analysis",
+    "question": "If src/suitcode/mcp/descriptions.py changes, what is the owner, primary component, related tests, quality gates, and evidence-backed impact summary?",
+    "difficulty": "medium",
+    "task_taxonomy": "impact_analysis",
+    "ground_truth_kind": "exact_field_match",
+    "expected_success_criteria": [
+      "owner_id matches deterministic baseline",
+      "primary_component_id matches deterministic baseline",
+      "related_test_ids match deterministic baseline",
+      "quality_gate_provider_ids match deterministic baseline",
+      "evidence_edge_count matches deterministic baseline",
+      "overall_truth_availability matches deterministic baseline"
+    ],
+    "suite_role": "headline_ab",
+    "target_selector": {
+      "repository_rel_path": "src/suitcode/mcp/descriptions.py"
+    },
+    "timeout_seconds": 240
+  },
+  {
+    "task_id": "project-python-minimum-verified-headline",
+    "repository_path": ".",
+    "task_family": "minimum_verified_change_set",
+    "question": "After changing src/suitcode/mcp/service.py, what exact deterministic validation set must run?",
+    "difficulty": "medium",
+    "task_taxonomy": "minimum_verified_change_set",
+    "ground_truth_kind": "exact_id_set_match",
+    "expected_success_criteria": [
+      "owner_id matches deterministic baseline",
+      "primary_component_id matches deterministic baseline",
+      "test_target_ids match deterministic baseline exactly",
+      "build_target_ids match deterministic baseline exactly",
+      "runner_action_ids match deterministic baseline exactly",
+      "quality_validation_operation_ids match deterministic baseline exactly",
+      "quality_hygiene_operation_ids match deterministic baseline exactly"
+    ],
+    "suite_role": "headline_ab",
+    "target_selector": {
+      "repository_rel_path": "src/suitcode/mcp/service.py"
+    },
+    "timeout_seconds": 240
+  },
+  {
+    "task_id": "fixture-npm-change-impact-headline",
+    "repository_path": "tests/test_repos/npm",
+    "task_family": "change_analysis",
+    "question": "If packages/core/src/index.ts changes, what is the owner, primary component, related tests, quality gates, and evidence-backed impact summary?",
+    "difficulty": "medium",
+    "task_taxonomy": "impact_analysis",
+    "ground_truth_kind": "exact_field_match",
+    "expected_success_criteria": [
+      "owner_id matches deterministic baseline",
+      "primary_component_id matches deterministic baseline",
+      "related_test_ids match deterministic baseline",
+      "quality_gate_provider_ids match deterministic baseline",
+      "evidence_edge_count matches deterministic baseline",
+      "overall_truth_availability matches deterministic baseline"
+    ],
+    "suite_role": "headline_ab",
+    "target_selector": {
+      "repository_rel_path": "packages/core/src/index.ts"
+    },
+    "timeout_seconds": 240
+  },
+  {
+    "task_id": "fixture-npm-minimum-verified-headline",
+    "repository_path": "tests/test_repos/npm",
+    "task_family": "minimum_verified_change_set",
+    "question": "After changing packages/core/src/index.ts, what exact deterministic validation set must run?",
+    "difficulty": "medium",
+    "task_taxonomy": "minimum_verified_change_set",
+    "ground_truth_kind": "exact_id_set_match",
+    "expected_success_criteria": [
+      "owner_id matches deterministic baseline",
+      "primary_component_id matches deterministic baseline",
+      "test_target_ids match deterministic baseline exactly",
+      "build_target_ids match deterministic baseline exactly",
+      "runner_action_ids match deterministic baseline exactly",
+      "quality_validation_operation_ids match deterministic baseline exactly",
+      "quality_hygiene_operation_ids match deterministic baseline exactly"
+    ],
+    "suite_role": "headline_ab",
+    "target_selector": {
+      "repository_rel_path": "packages/core/src/index.ts"
+    },
+    "timeout_seconds": 240
+  }
+]

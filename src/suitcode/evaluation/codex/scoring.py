@@ -93,13 +93,23 @@ class CodexEvaluationScorer:
             )
         return tuple(results)
 
-    def answer_score(self, *, actual_answer: dict[str, object] | None, expected_answer: dict[str, object], schema_valid: bool) -> AnswerScore:
+    def answer_score(
+        self,
+        *,
+        actual_answer: dict[str, object] | None,
+        expected_answer: dict[str, object],
+        schema_valid: bool,
+        ignored_fields: tuple[str, ...] = (),
+    ) -> AnswerScore:
+        comparable_fields = tuple(key for key in expected_answer if key not in ignored_fields)
         if actual_answer is None:
-            return AnswerScore(schema_valid=False, field_matches={}, missing_fields=tuple(expected_answer), mismatched_fields=tuple())
+            return AnswerScore(schema_valid=False, field_matches={}, missing_fields=comparable_fields, mismatched_fields=tuple())
         field_matches: dict[str, bool] = {}
         missing_fields: list[str] = []
         mismatched_fields: list[str] = []
         for key, expected in expected_answer.items():
+            if key in ignored_fields:
+                continue
             if key not in actual_answer:
                 field_matches[key] = False
                 missing_fields.append(key)

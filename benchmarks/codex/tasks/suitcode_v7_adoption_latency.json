@@ -1,0 +1,88 @@
+[
+  {
+    "task_id": "project-python-bug-fix-navigation-adoption",
+    "repository_path": ".",
+    "task_family": "bug_fix_navigation",
+    "question": "A bug is reported around src/suitcode/evaluation/codex/service.py. What owner, dependency frontier, and related tests define the minimal debugging surface?",
+    "difficulty": "hard",
+    "task_taxonomy": "bug_fix_navigation",
+    "ground_truth_kind": "exact_field_match",
+    "expected_success_criteria": [
+      "owner_id matches deterministic baseline",
+      "related_test_ids_preview matches deterministic baseline",
+      "owner_kind matches deterministic baseline",
+      "related_test_count matches deterministic baseline"
+    ],
+    "suite_role": "adoption_experiment",
+    "target_selector": {
+      "repository_rel_path": "src/suitcode/evaluation/codex/service.py"
+    },
+    "timeout_seconds": 300
+  },
+  {
+    "task_id": "project-python-minimum-verified-adoption",
+    "repository_path": ".",
+    "task_family": "minimum_verified_change_set",
+    "question": "After changing src/suitcode/mcp/service.py, what exact deterministic validation set must run?",
+    "difficulty": "medium",
+    "task_taxonomy": "minimum_verified_change_set",
+    "ground_truth_kind": "exact_id_set_match",
+    "expected_success_criteria": [
+      "owner_id matches deterministic baseline",
+      "primary_component_id matches deterministic baseline exactly",
+      "test_target_ids match deterministic baseline exactly",
+      "build_target_ids match deterministic baseline exactly",
+      "runner_action_ids match deterministic baseline exactly",
+      "quality_validation_operation_ids match deterministic baseline exactly",
+      "quality_hygiene_operation_ids match deterministic baseline exactly"
+    ],
+    "suite_role": "adoption_experiment",
+    "target_selector": {
+      "repository_rel_path": "src/suitcode/mcp/service.py"
+    },
+    "timeout_seconds": 300
+  },
+  {
+    "task_id": "fixture-npm-bug-fix-navigation-adoption",
+    "repository_path": "tests/test_repos/npm",
+    "task_family": "bug_fix_navigation",
+    "question": "A bug is reported around packages/core/src/index.ts. What owner, dependency frontier, and related tests define the minimal debugging surface?",
+    "difficulty": "hard",
+    "task_taxonomy": "bug_fix_navigation",
+    "ground_truth_kind": "exact_field_match",
+    "expected_success_criteria": [
+      "owner_id matches deterministic baseline",
+      "related_test_ids_preview matches deterministic baseline",
+      "owner_kind matches deterministic baseline",
+      "related_test_count matches deterministic baseline"
+    ],
+    "suite_role": "adoption_experiment",
+    "target_selector": {
+      "repository_rel_path": "packages/core/src/index.ts"
+    },
+    "timeout_seconds": 300
+  },
+  {
+    "task_id": "fixture-npm-unsupported-runner-adoption",
+    "repository_path": "tests/test_repos/npm",
+    "task_family": "unsupported_action_reasoning",
+    "question": "Why can the requested runner action for packages/core/src/index.ts not be resolved deterministically?",
+    "difficulty": "hard",
+    "task_taxonomy": "unsupported_action_reasoning",
+    "ground_truth_kind": "exact_field_match",
+    "expected_success_criteria": [
+      "requested_action_kind matches the task selector exactly",
+      "supported matches deterministic baseline",
+      "available_action_kinds match deterministic baseline",
+      "overall_truth_availability matches deterministic baseline",
+      "actions_availability matches deterministic baseline",
+      "reason_code matches deterministic baseline"
+    ],
+    "suite_role": "adoption_experiment",
+    "target_selector": {
+      "repository_rel_path": "packages/core/src/index.ts",
+      "requested_action_kind": "runner"
+    },
+    "timeout_seconds": 300
+  }
+]

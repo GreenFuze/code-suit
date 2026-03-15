@@ -1,0 +1,18 @@
+{
+  "repo_id": "repo:example",
+  "repository_path": "tests/test_repos/example",
+  "repo_revision": "git-sha-or-tag",
+  "ecosystem": "python",
+  "language_hint": "python",
+  "repository_shape": "single-service fixture",
+  "build_tool": "python",
+  "test_tool": "pytest",
+  "quality_tools": ["ruff"],
+  "approximate_file_count": 0,
+  "approximate_component_count": 0,
+  "approximate_test_count": 0,
+  "architecture_basis": "manifest-derived provider truth",
+  "test_discovery_basis": "authoritative",
+  "quality_basis": "provider-backed deterministic tool resolution",
+  "notes": []
+}

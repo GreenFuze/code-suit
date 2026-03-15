@@ -100,3 +100,29 @@ def test_scorer_scores_required_tools_and_arguments() -> None:
     assert tool_selection.required_tools_present is True
     assert tool_selection.first_high_value_tool == "repository_summary"
     assert argument_scores[0].matched is True
+
+
+def test_answer_score_can_ignore_non_substantive_fields() -> None:
+    scorer = CodexEvaluationScorer()
+
+    score = scorer.answer_score(
+        actual_answer={
+            "workspace_id": "",
+            "repository_id": "",
+            "provider_ids": ["python"],
+            "component_count": 1,
+        },
+        expected_answer={
+            "workspace_id": "workspace:python",
+            "repository_id": "repo:python",
+            "provider_ids": ["python"],
+            "component_count": 1,
+        },
+        schema_valid=True,
+        ignored_fields=("workspace_id", "repository_id"),
+    )
+
+    assert score.schema_valid is True
+    assert score.missing_fields == tuple()
+    assert score.mismatched_fields == tuple()
+    assert score.field_matches == {"provider_ids": True, "component_count": True}
