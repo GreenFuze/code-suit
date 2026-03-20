@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 suitcode-mcp = "suitcode.mcp.server:main"
+suitcode-install = "suitcode.install:main"
 
 [project.optional-dependencies]
 cpp = []
