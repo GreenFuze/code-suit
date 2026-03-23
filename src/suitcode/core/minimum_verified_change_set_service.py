@@ -26,6 +26,8 @@ from suitcode.core.provenance_builders import derived_summary_provenance, owners
 from suitcode.core.provenance_summary import merge_provenance_paths, preferred_confidence_mode
 from suitcode.core.repository_models import OwnedNodeInfo
 from suitcode.core.tests.models import ResolvedRelatedTest, RelatedTestTarget, TestTargetDescription
+from suitcode.core.tests.models import DiscoveredTestDefinition, RelatedTestMatch
+from suitcode.core.intelligence_models import ComponentDependencyEdge
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,12 @@ class _ResolvedBuildCandidate:
     proof_edges: tuple[MinimumVerifiedEvidenceEdge, ...]
     provenance: tuple[ProvenanceEntry, ...]
     selection_scope: str
+
+
+@dataclass(frozen=True)
+class _ResolvedDependentComponent:
+    component: Component
+    dependency_edges: tuple[ComponentDependencyEdge, ...]
 
 
 class MinimumVerifiedQualityPlanner:
@@ -219,6 +227,70 @@ class MinimumVerifiedCandidateResolver:
             resolved.owner_files,
         )
 
+    def direct_dependent_components(self, resolved: _ResolvedMinimumTarget) -> tuple[_ResolvedDependentComponent, ...]:
+        if resolved.primary_component is None:
+            return tuple()
+        components_by_id = {component.id: component for component in self._repository.arch.get_components()}
+        dependent_components: list[_ResolvedDependentComponent] = []
+        for dependent_id in self._repository.arch.get_component_dependents(resolved.primary_component.id):
+            component = components_by_id.get(dependent_id)
+            if component is None:
+                continue
+            dependency_edges = tuple(
+                edge
+                for edge in self._repository.arch.get_component_dependency_edges(dependent_id)
+                if edge.target_kind == "component" and edge.target_id == resolved.primary_component.id
+            )
+            if not dependency_edges:
+                continue
+            dependent_components.append(
+                _ResolvedDependentComponent(
+                    component=component,
+                    dependency_edges=dependency_edges,
+                )
+            )
+        return tuple(sorted(dependent_components, key=lambda item: item.component.id))
+
+    def related_tests_for_dependent_components(
+        self,
+        dependents: tuple[_ResolvedDependentComponent, ...],
+    ) -> tuple[tuple[ResolvedRelatedTest, tuple[ProvenanceEntry, ...]], ...]:
+        candidates: list[tuple[ResolvedRelatedTest, tuple[ProvenanceEntry, ...]]] = []
+        seen_test_ids: set[str] = set()
+        for dependent in dependents:
+            related = self._repository.tests.get_related_tests(RelatedTestTarget(owner_id=dependent.component.id))
+            dependency_provenance = self._merge_provenance(*(edge.provenance for edge in dependent.dependency_edges))
+            for item in related:
+                if item.test_definition.id in seen_test_ids:
+                    continue
+                seen_test_ids.add(item.test_definition.id)
+                candidates.append(
+                    (
+                        ResolvedRelatedTest(
+                            match=RelatedTestMatch(
+                                test_definition=item.test_definition,
+                                relation_reason="dependent_component",
+                                matched_owner_id=dependent.component.id,
+                            ),
+                            discovered_test=DiscoveredTestDefinition(
+                                test_definition=item.discovered_test.test_definition,
+                                provenance=item.discovered_test.provenance,
+                            ),
+                        ),
+                        dependency_provenance,
+                    )
+                )
+        return tuple(candidates)
+
+    @staticmethod
+    def _merge_provenance(*groups: tuple[ProvenanceEntry, ...]) -> tuple[ProvenanceEntry, ...]:
+        merged: list[ProvenanceEntry] = []
+        for group in groups:
+            for entry in group:
+                if entry not in merged:
+                    merged.append(entry)
+        return tuple(merged)
+
     def _primary_component_for_file(self, repository_rel_path: str, owner_id: str) -> Component | None:
         component_id = self._component_context_resolver.primary_component_id_for_file(repository_rel_path, owner_id)
         return self._component_by_id(component_id)
@@ -291,6 +363,63 @@ class MinimumVerifiedEvidenceAssembler:
             inclusion_confidence_mode=preferred_confidence_mode(target.provenance),
             proof_edges=proof,
             provenance=target.provenance,
+        )
+
+    def dependent_test_item(
+        self,
+        *,
+        target_anchor_id: str,
+        match: ResolvedRelatedTest,
+        description: TestTargetDescription,
+        dependency_provenance: tuple[ProvenanceEntry, ...],
+        inclusion_reason: str,
+    ) -> MinimumVerifiedTestTarget:
+        proof_provenance = self._merged_provenance(dependency_provenance, match.provenance, description.provenance)
+        proof = (
+            MinimumVerifiedEvidenceEdge(
+                source_node_kind="change_target",
+                source_node_id=target_anchor_id,
+                target_node_kind="test_target",
+                target_node_id=description.test_definition.id,
+                edge_kind=MinimumVerifiedEvidenceEdgeKind.TARGET_TEST_TARGET,
+                reason=inclusion_reason,
+                provenance=proof_provenance,
+            ),
+        )
+        return MinimumVerifiedTestTarget(
+            target=description,
+            inclusion_reason=inclusion_reason,
+            inclusion_confidence_mode=preferred_confidence_mode(proof_provenance),
+            proof_edges=proof,
+            provenance=proof_provenance,
+        )
+
+    def dependent_build_item(
+        self,
+        *,
+        source_component_id: str,
+        target: BuildTargetDescription,
+        dependency_provenance: tuple[ProvenanceEntry, ...],
+        inclusion_reason: str,
+    ) -> MinimumVerifiedBuildTarget:
+        proof_provenance = self._merged_provenance(dependency_provenance, target.provenance)
+        proof = (
+            MinimumVerifiedEvidenceEdge(
+                source_node_kind="component",
+                source_node_id=source_component_id,
+                target_node_kind="build_target",
+                target_node_id=target.action_id,
+                edge_kind=MinimumVerifiedEvidenceEdgeKind.COMPONENT_BUILD_TARGET,
+                reason=inclusion_reason,
+                provenance=proof_provenance,
+            ),
+        )
+        return MinimumVerifiedBuildTarget(
+            target=target,
+            inclusion_reason=inclusion_reason,
+            inclusion_confidence_mode=preferred_confidence_mode(proof_provenance),
+            proof_edges=proof,
+            provenance=proof_provenance,
         )
 
     def runner_item(
@@ -435,6 +564,7 @@ class MinimumVerifiedMinimizer:
         owner: OwnedNodeInfo,
         primary_component: Component | None,
         targets: tuple[BuildTargetDescription, ...],
+        dependent_components: tuple[_ResolvedDependentComponent, ...] = tuple(),
     ) -> tuple[tuple[MinimumVerifiedBuildTarget, ...], tuple[ExcludedMinimumVerifiedItem, ...]]:
         component_targets = tuple(
             target
@@ -508,6 +638,28 @@ class MinimumVerifiedMinimizer:
                 tuple(exclusions),
             )
 
+        dependent_component_targets: list[tuple[_ResolvedDependentComponent, BuildTargetDescription]] = []
+        for dependent in dependent_components:
+            for target in targets:
+                if target.target_kind == ActionTargetKind.COMPONENT and target.target_id == dependent.component.id:
+                    dependent_component_targets.append((dependent, target))
+        if dependent_component_targets and primary_component is not None:
+            deduped: dict[str, tuple[_ResolvedDependentComponent, BuildTargetDescription]] = {}
+            for dependent, target in sorted(dependent_component_targets, key=lambda item: item[1].action_id):
+                deduped.setdefault(target.action_id, (dependent, target))
+            included = tuple(
+                self._evidence_assembler.dependent_build_item(
+                    source_component_id=primary_component.id,
+                    target=target,
+                    dependency_provenance=MinimumVerifiedEvidenceAssembler._merged_provenance(
+                        *(edge.provenance for edge in dependent.dependency_edges)
+                    ),
+                    inclusion_reason="directly dependent buildable component is the narrowest deterministic build surface",
+                )
+                for dependent, target in deduped.values()
+            )
+            return included, tuple(exclusions)
+
         return (
             tuple(
                 self._evidence_assembler.build_item(
@@ -553,6 +705,8 @@ class MinimumVerifiedMinimizer:
     def _human_test_reason(match: ResolvedRelatedTest) -> str:
         if match.matched_repository_rel_path is not None:
             return "exact file-related test"
+        if match.relation_reason == "dependent_component":
+            return "direct dependent component test"
         if match.matched_owner_id is not None:
             return "same owner/component test"
         return "broad fallback test suite"
@@ -572,18 +726,40 @@ class MinimumVerifiedChangeSetService:
 
     def get_minimum_verified_change_set(self, target: ChangeTarget) -> MinimumVerifiedChangeSet:
         resolved = self._candidate_resolver.resolve_target(target)
+        dependent_components = self._candidate_resolver.direct_dependent_components(resolved)
 
         related_tests = self._candidate_resolver.related_tests(resolved)
         tests, test_exclusions = self._minimizer.minimize_tests(
             target_anchor_id=resolved.target_anchor_id,
             matches=related_tests,
         )
+        if not tests and dependent_components:
+            dependent_matches = self._candidate_resolver.related_tests_for_dependent_components(dependent_components)
+            if dependent_matches:
+                tests = tuple(
+                    self._evidence_assembler.dependent_test_item(
+                        target_anchor_id=resolved.target_anchor_id,
+                        match=match,
+                        description=self._repository.describe_test_target(match.test_definition.id),
+                        dependency_provenance=dependency_provenance,
+                        inclusion_reason=self._minimizer._human_test_reason(match),
+                    )
+                    for match, dependency_provenance in dependent_matches
+                )
 
         build_targets, build_exclusions = self._minimizer.minimize_build_targets(
             owner=resolved.owner,
             primary_component=resolved.primary_component,
             targets=self._candidate_resolver.build_targets(),
+            dependent_components=tuple(),
         )
+        if not tests and not build_targets and dependent_components:
+            build_targets, build_exclusions = self._minimizer.minimize_build_targets(
+                owner=resolved.owner,
+                primary_component=resolved.primary_component,
+                targets=self._candidate_resolver.build_targets(),
+                dependent_components=dependent_components,
+            )
 
         runner_actions: tuple[MinimumVerifiedRunnerAction, ...] = tuple()
         runner_exclusions: list[ExcludedMinimumVerifiedItem] = []
@@ -623,6 +799,15 @@ class MinimumVerifiedChangeSetService:
             has_exclusions=bool(test_exclusions or build_exclusions or runner_exclusions),
         )
 
+        self._validate_non_empty_change_set(
+            resolved=resolved,
+            tests=tests,
+            build_targets=build_targets,
+            runner_actions=runner_actions,
+            quality_validation_operations=quality_validation_operations,
+            quality_hygiene_operations=quality_hygiene_operations,
+        )
+
         return MinimumVerifiedChangeSet(
             target_kind=resolved.target_kind,
             owner=resolved.owner,
@@ -660,6 +845,32 @@ class MinimumVerifiedChangeSetService:
                 )
             )
         return tuple(merged)
+
+    def _validate_non_empty_change_set(
+        self,
+        *,
+        resolved: _ResolvedMinimumTarget,
+        tests: tuple[MinimumVerifiedTestTarget, ...],
+        build_targets: tuple[MinimumVerifiedBuildTarget, ...],
+        runner_actions: tuple[MinimumVerifiedRunnerAction, ...],
+        quality_validation_operations: tuple[MinimumVerifiedQualityOperation, ...],
+        quality_hygiene_operations: tuple[MinimumVerifiedQualityOperation, ...],
+    ) -> None:
+        if any(
+            (
+                tests,
+                build_targets,
+                runner_actions,
+                quality_validation_operations,
+                quality_hygiene_operations,
+            )
+        ):
+            return
+        target_descriptor = resolved.evidence_path or resolved.owner.id
+        raise ValueError(
+            "no deterministic validation surfaces were found for "
+            f"{resolved.target_kind} target `{target_descriptor}`"
+        )
 
 
 from typing import TYPE_CHECKING

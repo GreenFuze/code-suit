@@ -4,9 +4,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-
-MCP_PREFIXES = ("mcp__", "functions.mcp__")
-SUITCODE_PREFIXES = ("mcp__suitcode__", "functions.mcp__suitcode__")
+from suitcode.analytics.tool_naming import canonical_suitcode_tool_name, is_mcp_tool_name
 
 
 def iter_rollout_events(path: Path):
@@ -70,17 +68,3 @@ def message_text(content: object) -> str:
 
 def message_text_length(content: object) -> int:
     return len(message_text(content))
-
-
-def is_mcp_tool_name(tool_name: str) -> bool:
-    return tool_name.startswith(MCP_PREFIXES)
-
-
-def canonical_suitcode_tool_name(tool_name: str) -> str | None:
-    for prefix in SUITCODE_PREFIXES:
-        if tool_name.startswith(prefix):
-            suffix = tool_name[len(prefix) :].strip()
-            if not suffix:
-                raise ValueError(f"invalid SuitCode tool name `{tool_name}`")
-            return suffix
-    return None

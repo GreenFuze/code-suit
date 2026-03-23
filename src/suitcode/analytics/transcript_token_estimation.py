@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 
 from suitcode.analytics.high_value_tools import HIGH_VALUE_TOOL_SET
-from suitcode.analytics.native_agent_models import CodexSessionAnalytics, NativeAgentKind
+from suitcode.analytics.native_agent_models import NativeAgentKind, NativeSessionAnalytics
 from suitcode.analytics.tokenizers import OpenAiTranscriptTokenizer, TranscriptTokenizer
 from suitcode.analytics.transcript_models import (
     TokenMetricKind,
@@ -17,16 +17,19 @@ class TranscriptTokenEstimator:
     def __init__(self, tokenizers: tuple[TranscriptTokenizer, ...] | None = None) -> None:
         self._tokenizers = tokenizers or (OpenAiTranscriptTokenizer(),)
 
-    def estimate_codex_session(self, session: CodexSessionAnalytics) -> CodexSessionAnalytics:
+    def estimate_session(self, session: NativeSessionAnalytics) -> NativeSessionAnalytics:
         capture = session.transcript_capture
         if capture is None:
-            raise ValueError("Codex session token estimation requires transcript_capture")
+            raise ValueError("session token estimation requires transcript_capture")
         breakdown = self.estimate_capture(
             agent_kind=session.agent_kind,
             model_provider=session.artifact.model_provider,
             capture=capture,
         )
         return session.model_copy(update={"token_breakdown": breakdown})
+
+    def estimate_codex_session(self, session: NativeSessionAnalytics) -> NativeSessionAnalytics:
+        return self.estimate_session(session)
 
     def estimate_capture(
         self,

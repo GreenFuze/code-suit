@@ -104,7 +104,14 @@ class Repository:
         repository_root = cls.root_candidate(repository_directory)
         return detect_support_for_root(repository_root)
 
-    def __init__(self, workspace: Workspace, repository_directory: Path, repository_id: str) -> None:
+    def __init__(
+        self,
+        workspace: Workspace,
+        repository_directory: Path,
+        repository_id: str,
+        *,
+        materialize_suit_dir: bool = True,
+    ) -> None:
         self._workspace = workspace
         self._root = self.root_candidate(repository_directory)
         self._id = repository_id
@@ -118,7 +125,7 @@ class Repository:
                 "Use Repository.support_for_path(...) to inspect support before construction."
             )
 
-        self._suit_dir = self.ensure_suit_layout(self._root)
+        self._suit_dir = self.ensure_suit_layout(self._root) if materialize_suit_dir else (self._root / ".suit")
         self._providers_by_id: dict[str, ProviderBase] = {}
         self._provider_roles_by_id: dict[str, frozenset[ProviderRole]] = {}
         self._ownership_index_service: OwnershipIndex | None = None

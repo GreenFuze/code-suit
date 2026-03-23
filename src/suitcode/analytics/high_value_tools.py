@@ -3,12 +3,16 @@ from __future__ import annotations
 
 HIGH_VALUE_TOOLS = (
     "repository_summary",
+    "repository_summary_by_path",
     "describe_components",
     "describe_files",
     "describe_symbol_context",
     "analyze_change",
     "analyze_impact",
     "get_minimum_verified_change_set",
+    "get_minimum_verified_change_set_by_path",
+    "get_file_owner_by_path",
+    "get_related_tests_by_path",
     "get_truth_coverage",
     "describe_test_target",
     "run_test_targets",

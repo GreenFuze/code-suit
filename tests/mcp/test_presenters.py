@@ -33,7 +33,7 @@ def test_workspace_and_repository_presenters_map_core_objects(npm_repo_root) -> 
 
     assert workspace_view.workspace_id.startswith("workspace:")
     assert repository_view.repository_id.startswith("repo:")
-    assert repository_view.provider_ids == ("npm",)
+    assert repository_view.provider_ids == ("go", "npm")
 
 
 def test_test_presenter_maps_provenance(npm_repo_root) -> None:

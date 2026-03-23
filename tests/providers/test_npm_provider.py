@@ -143,7 +143,7 @@ def test_npm_provider_internal_analysis_stays_npm_specific(npm_provider: NPMProv
 
 def test_npm_provider_uses_fixture_repository_root(npm_repository: Repository) -> None:
     assert npm_repository.root.name == "npm"
-    assert npm_repository.provider_ids == ("npm",)
+    assert npm_repository.provider_ids == ("go", "npm")
 
 
 def test_npm_provider_get_symbol_returns_entity_info(npm_provider: NPMProvider) -> None:
@@ -263,8 +263,10 @@ def test_repository_intelligence_wraps_registered_npm_provider(npm_repository: R
     component_ids = {component.id for component in npm_repository.arch.get_components()}
     test_ids = {test.id for test in npm_repository.tests.get_tests()}
 
-    assert component_ids == EXPECTED_COMPONENT_IDS
-    assert test_ids == EXPECTED_TEST_IDS
+    assert EXPECTED_COMPONENT_IDS.issubset(component_ids)
+    assert "component:go:native-addon" in component_ids
+    assert EXPECTED_TEST_IDS.issubset(test_ids)
+    assert npm_repository.provider_ids == ("go", "npm")
     assert npm_repository.quality.provider_ids == ("npm",)
 
 

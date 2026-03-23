@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -18,8 +19,102 @@ def test_service_open_workspace_and_list_repositories(service: SuitMcpService, n
     assert opened.reused is False
     assert opened.workspace.repository_count == 1
     assert opened.initial_repository.root_path == str(npm_repo_root)
-    assert opened.initial_repository.provider_ids == ("npm",)
+    assert opened.initial_repository.provider_ids == ("go", "npm")
+    assert opened.guidance.session_scope == "process_local"
+    assert "process" in opened.guidance.message.lower()
+    assert "repository_summary" in opened.guidance.recommended_next_calls
+    assert "repository_summary_by_path" in opened.guidance.read_only_alternatives
     assert repositories.total == 1
+
+
+def test_read_only_by_path_tools_match_workspace_tools_without_registry_mutation(service: SuitMcpService, npm_repo_root: Path) -> None:
+    shutil.rmtree(npm_repo_root / ".suit", ignore_errors=True)
+    assert not (npm_repo_root / ".suit").exists()
+    assert service.list_open_workspaces().total == 0
+
+    summary_by_path = service.repository_summary_by_path(str(npm_repo_root), preview_limit=5)
+    owner_by_path = service.get_file_owner_by_path(str(npm_repo_root), "packages/core/src/index.ts")
+    related_by_path = service.get_related_tests_by_path(
+        str(npm_repo_root),
+        repository_rel_path="packages/core/src/index.ts",
+        limit=50,
+        offset=0,
+    )
+    change_set_by_path = service.get_minimum_verified_change_set_by_path(
+        str(npm_repo_root),
+        repository_rel_path="packages/core/src/index.ts",
+    )
+
+    assert service.list_open_workspaces().total == 0
+    assert not (npm_repo_root / ".suit").exists()
+
+    opened = service.open_workspace(str(npm_repo_root))
+    workspace_id = opened.workspace.workspace_id
+    repository_id = opened.initial_repository.repository_id
+
+    summary = service.repository_summary(workspace_id, repository_id, preview_limit=5)
+    owner = service.get_file_owner(workspace_id, repository_id, "packages/core/src/index.ts")
+    related = service.get_related_tests(
+        workspace_id,
+        repository_id,
+        repository_rel_path="packages/core/src/index.ts",
+        limit=50,
+        offset=0,
+    )
+    change_set = service.get_minimum_verified_change_set(
+        workspace_id,
+        repository_id,
+        repository_rel_path="packages/core/src/index.ts",
+    )
+
+    assert summary_by_path.model_dump() == summary.model_dump()
+    assert owner_by_path.model_dump() == owner.model_dump()
+    assert related_by_path.model_dump() == related.model_dump()
+    assert change_set_by_path.model_dump() == change_set.model_dump()
+
+
+def test_read_only_by_path_tools_validate_and_map_errors(service: SuitMcpService, npm_repo_root: Path, tmp_path: Path) -> None:
+    with pytest.raises(McpValidationError):
+        service.repository_summary_by_path(str(npm_repo_root), preview_limit=0)
+
+    with pytest.raises(McpValidationError):
+        service.get_related_tests_by_path(str(npm_repo_root))
+
+    with pytest.raises(McpValidationError):
+        service.get_minimum_verified_change_set_by_path(str(npm_repo_root))
+
+    with pytest.raises(McpNotFoundError):
+        service.get_file_owner_by_path(str(npm_repo_root), "missing/file.ts")
+
+    unsupported_root = tmp_path / "repo"
+    unsupported_root.mkdir()
+    (unsupported_root / ".git").mkdir()
+
+    with pytest.raises(McpUnsupportedRepositoryError):
+        service.repository_summary_by_path(str(unsupported_root))
+
+
+def test_read_only_by_path_minimum_verified_change_set_returns_clear_empty_surface_error(
+    service: SuitMcpService,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "go-orphan"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "go.mod").write_text("module example.com/orphan\n\ngo 1.22\n", encoding="utf-8")
+    (repo_root / "pkg" / "orphan").mkdir(parents=True)
+    (repo_root / "pkg" / "orphan" / "orphan.go").write_text(
+        'package orphan\n\nfunc Value() string { return "orphan" }\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        McpValidationError,
+        match=r"no deterministic validation surfaces were found for file target `pkg/orphan/orphan\.go`",
+    ):
+        service.get_minimum_verified_change_set_by_path(
+            str(repo_root),
+            repository_rel_path="pkg/orphan/orphan.go",
+        )
 
 
 def test_service_open_workspace_reuses_same_root(service: SuitMcpService, npm_repo_root: Path) -> None:

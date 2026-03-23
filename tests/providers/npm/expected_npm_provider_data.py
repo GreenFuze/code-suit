@@ -84,7 +84,6 @@ EXPECTED_EXTERNAL_PACKAGE_IDS = {
 
 EXPECTED_PACKAGE_MANAGER_IDS = (
     "pkgmgr:cargo",
-    "pkgmgr:go",
     "pkgmgr:npm:root",
     "pkgmgr:python",
 )
@@ -96,7 +95,6 @@ EXPECTED_REPRESENTATIVE_FILE_OWNERS = {
     "package.json": "pkgmgr:npm:root",
     "tools/codegen/pyproject.toml": "pkgmgr:python",
     "modules/wasm-module/Cargo.toml": "pkgmgr:cargo",
-    "modules/native-addon/go.mod": "pkgmgr:go",
 }
 
 EXPECTED_COMPONENT_LANGUAGES = {

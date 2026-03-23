@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0",
+  "repositories": [
+    {
+      "label": "suitcode",
+      "repository_root": "C:\\src\\github.com\\GreenFuze\\suit-code",
+      "ecosystems": [
+        "python",
+        "npm",
+        "go"
+      ],
+      "notes": [
+        "Primary product repository.",
+        "Use for daily agent-on-product dogfooding."
+      ],
+      "is_primary": true
+    },
+    {
+      "label": "mygames-server",
+      "repository_root": "C:\\src\\github.com\\GreenFuze\\MyGamesAnywhere\\server",
+      "ecosystems": [
+        "go"
+      ],
+      "notes": [
+        "Real multi-module Go validation target.",
+        "No go.work; multiple plugin modules under one repo root."
+      ],
+      "is_primary": false
+    }
+  ]
+}

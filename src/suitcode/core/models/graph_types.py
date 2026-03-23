@@ -31,6 +31,7 @@ class EdgeKind(StrEnum):
 class BuildSystemKind(StrEnum):
     CMAKE = "cmake"
     CARGO = "cargo"
+    GO = "go"
     NPM = "npm"
     PIP = "pip"
     BAZEL = "bazel"
@@ -58,6 +59,7 @@ class ComponentKind(StrEnum):
 
 
 class TestFramework(StrEnum):
+    GO_TEST = "go_test"
     PYTEST = "pytest"
     UNITTEST = "unittest"
     GTEST = "gtest"

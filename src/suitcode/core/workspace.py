@@ -17,7 +17,7 @@ class Workspace:
     def supported_providers(cls) -> tuple[ProviderDescriptor, ...]:
         return get_provider_descriptors()
 
-    def __init__(self, repository_directory: Path) -> None:
+    def __init__(self, repository_directory: Path, *, materialize_suit_dir: bool = True) -> None:
         initial_root = Repository.root_candidate(repository_directory)
         support = Repository.support_for_path(initial_root)
         if not support.is_supported:
@@ -30,6 +30,7 @@ class Workspace:
 
         self._id = f"workspace:{initial_root.name}"
         self._repositories_by_root: dict[Path, Repository] = {}
+        self._materialize_suit_dir = materialize_suit_dir
         self.add_repository(repository_directory)
 
     @property
@@ -61,6 +62,7 @@ class Workspace:
                 workspace=self,
                 repository_directory=repository_root,
                 repository_id=repository_id,
+                materialize_suit_dir=self._materialize_suit_dir,
             )
         return self._repositories_by_root[repository_root]
 

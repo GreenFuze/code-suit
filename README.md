@@ -177,6 +177,7 @@ Full example:
 Current repository/provider support:
 - Python
 - npm
+- Go
 
 Current agent setup paths:
 - Codex
@@ -184,9 +185,15 @@ Current agent setup paths:
 - Cursor
 
 Current analytics/evaluation support:
-- Codex: live today
-- Claude Code: planned next
-- Cursor: planned next
+- Codex: live evaluation and passive analytics
+- Claude Code: passive analytics
+- Cursor: passive analytics
+
+Current Go scope:
+- single-module repositories
+- multi-module repositories with no `go.work`
+- mixed repositories with Go module subtrees and no `go.work`
+- `go.work` support comes next
 
 ## Evidence
 

@@ -12,7 +12,6 @@ def test_package_manager_discovery_finds_multiple_repository_level_managers() ->
     managers = RepositoryPackageManagerDiscoverer().discover(FIXTURE_ROOT)
     assert [manager.node_id for manager in managers] == [
         "pkgmgr:cargo",
-        "pkgmgr:go",
         "pkgmgr:npm:root",
         "pkgmgr:python",
     ]

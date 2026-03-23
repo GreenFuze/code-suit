@@ -48,7 +48,7 @@ class RelatedTestMatch(StrictModel):
 
     @model_validator(mode="after")
     def _validate_reason_and_match(self) -> "RelatedTestMatch":
-        allowed = {"same_owner", "same_component", "same_package", "repository_default_suite"}
+        allowed = {"same_owner", "same_component", "same_package", "dependent_component", "repository_default_suite"}
         if self.relation_reason not in allowed:
             raise ValueError(f"unsupported relation_reason: `{self.relation_reason}`")
         if self.matched_repository_rel_path is not None:

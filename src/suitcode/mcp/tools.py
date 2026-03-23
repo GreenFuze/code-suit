@@ -19,6 +19,7 @@ def register_tools(app: FastMCP, service: SuitMcpService) -> None:
             app.tool(
                 name=binding.name,
                 description=binding.description,
+                annotations=binding.to_annotations(),
                 structured_output=True,
             )(handler)
     finally:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from suitcode.core.change_models import ChangeTarget
@@ -82,6 +84,71 @@ def test_minimum_verified_change_set_for_python_owner_target(python_repo_root) -
         "src/acme/providers/__init__.py",
     )
     assert change_set.provenance
+
+
+def test_minimum_verified_change_set_uses_direct_dependent_tests_when_file_has_no_local_go_tests(go_repo_root) -> None:
+    repository = Workspace(go_repo_root).repositories[0]
+
+    change_set = repository.get_minimum_verified_change_set(
+        ChangeTarget(repository_rel_path="pkg/util/util.go")
+    )
+
+    assert [item.target.test_definition.id for item in change_set.tests] == [
+        "test:go:example.com/acme/go-demo/internal/service"
+    ]
+    assert change_set.tests[0].inclusion_reason == "direct dependent component test"
+    assert change_set.build_targets == tuple()
+    assert change_set.provenance
+
+
+def test_minimum_verified_change_set_uses_direct_dependent_build_when_no_tests_exist(tmp_path: Path) -> None:
+    repo_root = tmp_path / "go-no-tests"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "go.mod").write_text("module example.com/mvcsbuild\n\ngo 1.22\n", encoding="utf-8")
+    (repo_root / "internal" / "lib").mkdir(parents=True)
+    (repo_root / "internal" / "lib" / "lib.go").write_text(
+        'package lib\n\nfunc Message() string { return "ok" }\n',
+        encoding="utf-8",
+    )
+    (repo_root / "cmd" / "app").mkdir(parents=True)
+    (repo_root / "cmd" / "app" / "main.go").write_text(
+        'package main\n\nimport (\n    "fmt"\n    "example.com/mvcsbuild/internal/lib"\n)\n\nfunc main() { fmt.Println(lib.Message()) }\n',
+        encoding="utf-8",
+    )
+
+    repository = Workspace(repo_root).repositories[0]
+
+    change_set = repository.get_minimum_verified_change_set(
+        ChangeTarget(repository_rel_path="internal/lib/lib.go")
+    )
+
+    assert change_set.tests == tuple()
+    assert [item.target.action_id for item in change_set.build_targets] == [
+        "action:go:build:example.com/mvcsbuild/cmd/app"
+    ]
+    assert change_set.build_targets[0].inclusion_reason == (
+        "directly dependent buildable component is the narrowest deterministic build surface"
+    )
+    assert change_set.provenance
+
+
+def test_minimum_verified_change_set_fails_cleanly_when_no_surfaces_exist(tmp_path: Path) -> None:
+    repo_root = tmp_path / "go-orphan"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "go.mod").write_text("module example.com/orphan\n\ngo 1.22\n", encoding="utf-8")
+    (repo_root / "pkg" / "orphan").mkdir(parents=True)
+    (repo_root / "pkg" / "orphan" / "orphan.go").write_text(
+        'package orphan\n\nfunc Value() string { return "orphan" }\n',
+        encoding="utf-8",
+    )
+
+    repository = Workspace(repo_root).repositories[0]
+
+    with pytest.raises(
+        ValueError,
+        match=r"no deterministic validation surfaces were found for file target `pkg/orphan/orphan\.go`",
+    ):
+        repository.get_minimum_verified_change_set(ChangeTarget(repository_rel_path="pkg/orphan/orphan.go"))
 
 
 def test_minimum_verified_quality_operation_validates_contract() -> None:

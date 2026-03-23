@@ -29,7 +29,7 @@ def register_resources(app: FastMCP, service: SuitMcpService) -> None:
         mime_type="application/json",
     )
     def workspaces_resource() -> str:
-        return _json_content(service.list_workspaces(limit=200, offset=0))
+        return _json_content(service.workspaces_resource_view(limit=200, offset=0))
 
     @app.resource(
         "suitcode://workspace/{workspace_id}",

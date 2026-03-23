@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable, TypeVar
 
 from suitcode.analytics.recorder import ToolCallRecorder
-from suitcode.mcp.errors import McpNotFoundError
+from suitcode.core.change_models import ChangeTarget
+from suitcode.core.repository import Repository
+from suitcode.core.tests.models import RelatedTestTarget
+from suitcode.core.validation import validate_preview_limit
+from suitcode.core.workspace import Workspace
+from suitcode.mcp.errors import McpNotFoundError, McpUnsupportedRepositoryError, McpValidationError
 from suitcode.mcp.models import (
     AddRepositoryResult,
     AggregatorView,
@@ -52,10 +58,13 @@ from suitcode.mcp.models import (
     TestTargetDescriptionView,
     TruthCoverageSummaryView,
     WorkspaceView,
+    WorkspacesResourceView,
 )
 from suitcode.mcp.pagination import PaginationPolicy
 from suitcode.mcp.service_runtime import build_mcp_service_runtime
 from suitcode.mcp.state import WorkspaceRegistry
+
+T = TypeVar("T")
 
 
 class SuitMcpService:
@@ -115,6 +124,17 @@ class SuitMcpService:
     def list_open_workspaces(self, limit: int | None = None, offset: int = 0) -> ListResult[WorkspaceView]:
         return self.list_workspaces(limit=limit, offset=offset)
 
+    def workspaces_resource_view(self, limit: int | None = None, offset: int = 0) -> WorkspacesResourceView:
+        listing = self.list_workspaces(limit=limit, offset=offset)
+        return self._workspace_presenter.workspaces_resource_view(
+            listing.items,
+            limit=listing.limit,
+            offset=listing.offset,
+            total=listing.total,
+            truncated=listing.truncated,
+            next_offset=listing.next_offset,
+        )
+
     def get_workspace(self, workspace_id: str) -> WorkspaceView:
         return self._workspace_service.get_workspace(workspace_id)
 
@@ -136,6 +156,70 @@ class SuitMcpService:
 
     def add_repository(self, workspace_id: str, repository_path: str) -> AddRepositoryResult:
         return self._workspace_service.add_repository(workspace_id, repository_path)
+
+    def repository_summary_by_path(
+        self,
+        repository_path: str,
+        preview_limit: int = 10,
+    ) -> RepositorySummaryView:
+        validate_preview_limit(preview_limit, "preview_limit", max_value=25, error_cls=McpValidationError)
+
+        def _callback(repository: Repository) -> RepositorySummaryView:
+            return self._repository_summary_presenter.summary_view(repository, preview_limit)
+
+        return self._with_read_only_repository(repository_path, _callback)
+
+    def get_file_owner_by_path(self, repository_path: str, repository_rel_path: str) -> FileOwnerView:
+        def _callback(repository: Repository) -> FileOwnerView:
+            try:
+                return self._ownership_presenter.file_owner_view(repository.get_file_owner(repository_rel_path))
+            except ValueError as exc:
+                raise McpNotFoundError(str(exc)) from exc
+
+        return self._with_read_only_repository(repository_path, _callback)
+
+    def get_related_tests_by_path(
+        self,
+        repository_path: str,
+        repository_rel_path: str | None = None,
+        owner_id: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> ListResult[RelatedTestView]:
+        def _callback(repository: Repository) -> ListResult[RelatedTestView]:
+            try:
+                items = tuple(
+                    self._test_presenter.related_test_view(item)
+                    for item in repository.tests.get_related_tests(
+                        RelatedTestTarget(repository_rel_path=repository_rel_path, owner_id=owner_id)
+                    )
+                )
+                return self._pagination.paginate(items, limit, offset)
+            except ValueError as exc:
+                raise McpValidationError(str(exc)) from exc
+
+        return self._with_read_only_repository(repository_path, _callback)
+
+    def get_minimum_verified_change_set_by_path(
+        self,
+        repository_path: str,
+        symbol_id: str | None = None,
+        repository_rel_path: str | None = None,
+        owner_id: str | None = None,
+    ) -> MinimumVerifiedChangeSetView:
+        def _callback(repository: Repository) -> MinimumVerifiedChangeSetView:
+            try:
+                target = ChangeTarget(
+                    symbol_id=symbol_id,
+                    repository_rel_path=repository_rel_path,
+                    owner_id=owner_id,
+                )
+                change_set = repository.get_minimum_verified_change_set(target)
+                return self._change_impact_presenter.minimum_verified_change_set_view(change_set)
+            except ValueError as exc:
+                raise McpValidationError(str(exc)) from exc
+
+        return self._with_read_only_repository(repository_path, _callback)
 
     def list_components(self, workspace_id: str, repository_id: str, limit: int | None = None, offset: int = 0) -> ListResult[ComponentView]:
         return self._architecture_service.list_components(workspace_id, repository_id, limit=limit, offset=offset)
@@ -689,3 +773,22 @@ class SuitMcpService:
             except Exception:  # noqa: BLE001
                 return None
         return None
+
+    def _with_read_only_repository(
+        self,
+        repository_path: str,
+        callback: Callable[[Repository], T],
+    ) -> T:
+        try:
+            workspace = Workspace(Path(repository_path), materialize_suit_dir=False)
+            repository = workspace.repositories[0]
+            return callback(repository)
+        except (McpNotFoundError, McpValidationError, McpUnsupportedRepositoryError):
+            raise
+        except ValueError as exc:
+            message = str(exc)
+            if "No registered providers matched" in message or "unsupported repository" in message:
+                raise McpUnsupportedRepositoryError(message) from exc
+            if "does not exist" in message or "is not a directory" in message:
+                raise McpValidationError(message) from exc
+            raise McpValidationError(message) from exc

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from suitcode.analytics.high_value_tools import HIGH_VALUE_TOOL_SET
-from suitcode.analytics.native_agent_models import CodexSessionAnalytics
+from suitcode.analytics.native_agent_models import NativeSessionAnalytics
 from suitcode.analytics.transcript_models import TranscriptCapture, TranscriptSegmentKind
 
 
@@ -61,7 +61,7 @@ def shell_heavy_before_first_suitcode(capture: TranscriptCapture | None) -> bool
     )
 
 
-def with_usage_flags(session: CodexSessionAnalytics) -> CodexSessionAnalytics:
+def with_usage_flags(session: NativeSessionAnalytics) -> NativeSessionAnalytics:
     return session.model_copy(
         update={
             "late_suitcode_adoption": is_late_suitcode_adoption(session.first_suitcode_tool_index),

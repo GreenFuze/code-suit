@@ -6,6 +6,7 @@ import pytest
 
 from suitcode.core.repository import Repository
 from suitcode.core.workspace import Workspace
+from suitcode.providers.go import GoProvider
 from suitcode.providers.npm import NPMProvider
 from suitcode.providers.provider_base import ProviderBase
 from suitcode.providers.provider_roles import ProviderRole
@@ -13,22 +14,30 @@ from suitcode.providers.python import PythonProvider
 from suitcode.providers.registry import BUILTIN_PROVIDER_CLASSES, detect_support_for_root, get_provider_descriptors
 
 
-def test_provider_registry_contains_npm_and_python_providers() -> None:
-    assert BUILTIN_PROVIDER_CLASSES == (NPMProvider, PythonProvider)
+def test_provider_registry_contains_go_npm_and_python_providers() -> None:
+    assert BUILTIN_PROVIDER_CLASSES == (GoProvider, NPMProvider, PythonProvider)
 
 
-def test_workspace_supported_providers_exposes_npm_and_python_descriptors() -> None:
+def test_workspace_supported_providers_exposes_go_npm_and_python_descriptors() -> None:
     descriptors = Workspace.supported_providers()
 
-    assert tuple(descriptor.provider_id for descriptor in descriptors) == ('npm', 'python')
+    assert tuple(descriptor.provider_id for descriptor in descriptors) == ('go', 'npm', 'python')
 
 
 def test_repository_support_for_path_detects_npm_fixture(npm_repo_root: Path) -> None:
     support = Repository.support_for_path(npm_repo_root)
 
     assert support.is_supported is True
-    assert support.provider_ids == ('npm',)
+    assert support.provider_ids == ('go', 'npm')
+    assert support.detected_providers[0].provider_id == 'go'
     assert support.detected_providers[0].detected_roles == frozenset(
+        {
+            ProviderRole.ARCHITECTURE,
+            ProviderRole.TEST,
+        }
+    )
+    assert support.detected_providers[1].provider_id == 'npm'
+    assert support.detected_providers[1].detected_roles == frozenset(
         {
             ProviderRole.ARCHITECTURE,
             ProviderRole.CODE,
@@ -49,6 +58,19 @@ def test_repository_support_for_path_detects_python_fixture(python_repo_root: Pa
             ProviderRole.CODE,
             ProviderRole.TEST,
             ProviderRole.QUALITY,
+        }
+    )
+
+
+def test_repository_support_for_path_detects_go_fixture(go_repo_root: Path) -> None:
+    support = Repository.support_for_path(go_repo_root)
+
+    assert support.is_supported is True
+    assert support.provider_ids == ('go',)
+    assert support.detected_providers[0].detected_roles == frozenset(
+        {
+            ProviderRole.ARCHITECTURE,
+            ProviderRole.TEST,
         }
     )
 

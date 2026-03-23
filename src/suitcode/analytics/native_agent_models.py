@@ -12,6 +12,8 @@ from suitcode.analytics.transcript_models import TranscriptCapture, TranscriptTo
 class NativeAgentKind(StrEnum):
     __test__ = False
     CODEX = "codex"
+    CLAUDE = "claude"
+    CURSOR = "cursor"
 
 
 class CorrelationQuality(StrEnum):
@@ -23,7 +25,7 @@ class CorrelationQuality(StrEnum):
     STRONG = "strong"
 
 
-class CodexSessionArtifact(StrictModel):
+class NativeSessionArtifact(StrictModel):
     session_id: str
     artifact_path: str
     repository_root: str | None = None
@@ -42,7 +44,7 @@ class CodexSessionArtifact(StrictModel):
         return value.strip()
 
     @model_validator(mode="after")
-    def _validate_session_artifact(self) -> "CodexSessionArtifact":
+    def _validate_session_artifact(self) -> "NativeSessionArtifact":
         if self.event_count < 0:
             raise ValueError("event_count must be >= 0")
         if self.last_event_at < self.started_at:
@@ -50,7 +52,7 @@ class CodexSessionArtifact(StrictModel):
         return self
 
 
-class CodexSuitCodeToolUse(StrictModel):
+class NativeSuitCodeToolUse(StrictModel):
     tool_name: str
     call_count: int
     first_seen_at: datetime | None = None
@@ -64,7 +66,7 @@ class CodexSuitCodeToolUse(StrictModel):
         return value.strip()
 
     @model_validator(mode="after")
-    def _validate_tool_use(self) -> "CodexSuitCodeToolUse":
+    def _validate_tool_use(self) -> "NativeSuitCodeToolUse":
         if self.call_count <= 0:
             raise ValueError("call_count must be > 0")
         if self.first_seen_at and self.last_seen_at and self.last_seen_at < self.first_seen_at:
@@ -72,7 +74,7 @@ class CodexSuitCodeToolUse(StrictModel):
         return self
 
 
-class CodexTranscriptMetrics(StrictModel):
+class NativeTranscriptMetrics(StrictModel):
     event_count: int = 0
     message_event_count: int = 0
     tool_event_count: int = 0
@@ -82,9 +84,13 @@ class CodexTranscriptMetrics(StrictModel):
     suitcode_tool_call_count: int = 0
     approx_input_characters: int = 0
     approx_output_characters: int = 0
+    native_reported_input_tokens: int | None = None
+    native_reported_output_tokens: int | None = None
+    native_reported_cache_creation_tokens: int | None = None
+    native_reported_cache_read_tokens: int | None = None
 
     @model_validator(mode="after")
-    def _validate_metrics(self) -> "CodexTranscriptMetrics":
+    def _validate_metrics(self) -> "NativeTranscriptMetrics":
         fields = (
             self.event_count,
             self.message_event_count,
@@ -98,21 +104,29 @@ class CodexTranscriptMetrics(StrictModel):
         )
         if any(value < 0 for value in fields):
             raise ValueError("transcript metrics must be >= 0")
+        optional_counts = (
+            self.native_reported_input_tokens,
+            self.native_reported_output_tokens,
+            self.native_reported_cache_creation_tokens,
+            self.native_reported_cache_read_tokens,
+        )
+        if any(value is not None and value < 0 for value in optional_counts):
+            raise ValueError("native-reported token metrics must be >= 0 when provided")
         return self
 
 
-class CodexSessionAnalytics(StrictModel):
+class NativeSessionAnalytics(StrictModel):
     agent_kind: NativeAgentKind
     session_id: str
-    artifact: CodexSessionArtifact
+    artifact: NativeSessionArtifact
     repository_root: str | None = None
     used_suitcode: bool
-    suitcode_tools: tuple[CodexSuitCodeToolUse, ...]
+    suitcode_tools: tuple[NativeSuitCodeToolUse, ...]
     first_suitcode_tool: str | None = None
     first_suitcode_tool_index: int | None = None
     first_high_value_suitcode_tool: str | None = None
     first_high_value_suitcode_tool_index: int | None = None
-    transcript_metrics: CodexTranscriptMetrics
+    transcript_metrics: NativeTranscriptMetrics
     transcript_capture: TranscriptCapture | None = None
     token_breakdown: TranscriptTokenBreakdown | None = None
     late_suitcode_adoption: bool = False
@@ -134,7 +148,7 @@ class CodexSessionAnalytics(StrictModel):
         return value.strip()
 
     @model_validator(mode="after")
-    def _validate_session(self) -> "CodexSessionAnalytics":
+    def _validate_session(self) -> "NativeSessionAnalytics":
         if self.correlated_event_count < 0:
             raise ValueError("correlated_event_count must be >= 0")
         if not self.used_suitcode and self.suitcode_tools:
@@ -165,7 +179,7 @@ class CodexSessionAnalytics(StrictModel):
         return self
 
 
-class CodexRepositoryAnalyticsSummary(StrictModel):
+class NativeRepositoryAnalyticsSummary(StrictModel):
     repository_root: str | None = None
     session_count: int
     sessions_using_suitcode: int
@@ -175,11 +189,11 @@ class CodexRepositoryAnalyticsSummary(StrictModel):
     sessions_with_late_high_value_adoption: int = 0
     sessions_with_shell_heavy_pre_suitcode: int = 0
     skipped_artifacts: int = 0
-    tool_usage: tuple[CodexSuitCodeToolUse, ...]
+    tool_usage: tuple[NativeSuitCodeToolUse, ...]
     first_tool_distribution: dict[str, int] = Field(default_factory=dict)
     first_high_value_tool_distribution: dict[str, int] = Field(default_factory=dict)
     correlation_quality_mix: dict[str, int] = Field(default_factory=dict)
-    transcript_metrics: CodexTranscriptMetrics
+    transcript_metrics: NativeTranscriptMetrics
     avg_first_suitcode_tool_index: float | None = None
     avg_first_high_value_suitcode_tool_index: float | None = None
     total_tokens: int | None = None
@@ -187,6 +201,10 @@ class CodexRepositoryAnalyticsSummary(StrictModel):
     avg_tokens_before_first_suitcode_tool: float | None = None
     avg_tokens_before_first_high_value_suitcode_tool: float | None = None
     token_breakdowns_by_kind: dict[str, int] = Field(default_factory=dict)
+    native_reported_input_tokens: int | None = None
+    native_reported_output_tokens: int | None = None
+    native_reported_cache_creation_tokens: int | None = None
+    native_reported_cache_read_tokens: int | None = None
     latest_session_id: str | None = None
     latest_session_at: datetime | None = None
     notes: tuple[str, ...] = ()
@@ -201,7 +219,7 @@ class CodexRepositoryAnalyticsSummary(StrictModel):
         return value.strip()
 
     @model_validator(mode="after")
-    def _validate_summary(self) -> "CodexRepositoryAnalyticsSummary":
+    def _validate_summary(self) -> "NativeRepositoryAnalyticsSummary":
         counts = (
             self.session_count,
             self.sessions_using_suitcode,
@@ -234,9 +252,21 @@ class CodexRepositoryAnalyticsSummary(StrictModel):
             raise ValueError("avg_tokens_per_session must be >= 0")
         if self.avg_tokens_before_first_suitcode_tool is not None and self.avg_tokens_before_first_suitcode_tool < 0:
             raise ValueError("avg_tokens_before_first_suitcode_tool must be >= 0")
-        if (
-            self.avg_tokens_before_first_high_value_suitcode_tool is not None
-            and self.avg_tokens_before_first_high_value_suitcode_tool < 0
-        ):
+        if self.avg_tokens_before_first_high_value_suitcode_tool is not None and self.avg_tokens_before_first_high_value_suitcode_tool < 0:
             raise ValueError("avg_tokens_before_first_high_value_suitcode_tool must be >= 0")
+        optional_native_counts = (
+            self.native_reported_input_tokens,
+            self.native_reported_output_tokens,
+            self.native_reported_cache_creation_tokens,
+            self.native_reported_cache_read_tokens,
+        )
+        if any(value is not None and value < 0 for value in optional_native_counts):
+            raise ValueError("native-reported token summary counts must be >= 0 when provided")
         return self
+
+
+CodexSessionArtifact = NativeSessionArtifact
+CodexSuitCodeToolUse = NativeSuitCodeToolUse
+CodexTranscriptMetrics = NativeTranscriptMetrics
+CodexSessionAnalytics = NativeSessionAnalytics
+CodexRepositoryAnalyticsSummary = NativeRepositoryAnalyticsSummary

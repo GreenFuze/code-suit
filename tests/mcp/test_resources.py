@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 
 async def _read_resource(app, uri: str):
@@ -30,3 +31,14 @@ def test_resource_returns_json_content(app, npm_repo_root) -> None:
 
     assert contents[0].mime_type == "application/json"
     assert "workspace:" in contents[0].content
+
+
+def test_workspaces_resource_includes_guidance_when_empty(app) -> None:
+    contents = asyncio.run(_read_resource(app, "suitcode://workspaces"))
+    payload = json.loads(contents[0].content)
+
+    assert payload["items"] == []
+    assert payload["total"] == 0
+    assert payload["guidance"]["session_scope"] == "process_local"
+    assert "open a workspace" in payload["guidance"]["message"].lower()
+    assert "repository_summary_by_path" in payload["guidance"]["read_only_alternatives"]

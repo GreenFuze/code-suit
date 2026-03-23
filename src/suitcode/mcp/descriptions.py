@@ -12,7 +12,7 @@ TOOL_DESCRIPTIONS = {item.name: item.description for item in TOOL_CATALOG}
 
 RESOURCE_DESCRIPTIONS = {
     "supported_providers": "Read-only snapshot of supported providers.",
-    "workspaces": "Read-only snapshot of open workspaces.",
+    "workspaces": "Read-only snapshot of open workspaces plus session guidance for stateful vs read-only SuitCode usage.",
     "workspace": "Compact snapshot of one workspace.",
     "workspace_repositories": "Compact snapshot of repositories in one workspace.",
     "repository": "Compact snapshot of one repository.",

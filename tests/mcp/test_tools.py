@@ -46,7 +46,8 @@ def test_app_registers_expected_tools(app) -> None:
     assert "list_symbols_in_file" in find_definition.description
 
     repository_summary = next(tool for tool in tools if tool.name == "repository_summary")
-    assert "compact first-pass" in repository_summary.description
+    assert "workspace-based" in repository_summary.description.lower()
+    assert "open_workspace" in repository_summary.description
 
     list_actions = next(tool for tool in tools if tool.name == "list_actions")
     assert "deterministic provider-backed actions" in list_actions.description
@@ -88,12 +89,35 @@ def test_app_registers_expected_tools(app) -> None:
     assert "quality gates" in analyze_change.description
 
     minimum_verified = next(tool for tool in tools if tool.name == "get_minimum_verified_change_set")
-    assert "smallest exact set" in minimum_verified.description
-    assert "quality operations" in minimum_verified.description
+    assert "what should run after a change" in minimum_verified.description.lower()
+    assert "workspace_id" in minimum_verified.description
 
     truth_coverage = next(tool for tool in tools if tool.name == "get_truth_coverage")
     assert "authoritative" in truth_coverage.description
     assert "heuristic" in truth_coverage.description
+
+    repository_summary_annotations = repository_summary.annotations
+    assert repository_summary_annotations is not None
+    assert repository_summary_annotations.readOnlyHint is True
+    assert repository_summary_annotations.idempotentHint is True
+    assert repository_summary_annotations.destructiveHint is False
+
+    open_workspace = next(tool for tool in tools if tool.name == "open_workspace")
+    assert "stateful setup step" in open_workspace.description.lower()
+    assert "*_by_path" in open_workspace.description
+    assert open_workspace.annotations is not None
+    assert open_workspace.annotations.readOnlyHint is False
+
+    repository_summary_by_path = next(tool for tool in tools if tool.name == "repository_summary_by_path")
+    assert repository_summary_by_path.annotations is not None
+    assert repository_summary_by_path.annotations.readOnlyHint is True
+    assert "cold-start" in repository_summary_by_path.description.lower()
+    assert "repository_path" in repository_summary_by_path.description
+
+    minimum_change_by_path = next(tool for tool in tools if tool.name == "get_minimum_verified_change_set_by_path")
+    assert minimum_change_by_path.annotations is not None
+    assert minimum_change_by_path.annotations.readOnlyHint is True
+    assert "what should run after a change" in minimum_change_by_path.description.lower()
 
 
 def test_open_workspace_tool_returns_structured_result(app, npm_repo_root) -> None:
@@ -102,6 +126,61 @@ def test_open_workspace_tool_returns_structured_result(app, npm_repo_root) -> No
 
     assert payload["workspace"]["workspace_id"].startswith("workspace:")
     assert payload["initial_repository"]["repository_id"].startswith("repo:")
+
+
+def test_read_only_by_path_tools_return_structured_results_without_workspace(app, npm_repo_root) -> None:
+    summary = _payload_from_result(
+        asyncio.run(
+            _call_tool(
+                app,
+                "repository_summary_by_path",
+                {"repository_path": str(npm_repo_root), "preview_limit": 5},
+            )
+        )
+    )
+    owner = _payload_from_result(
+        asyncio.run(
+            _call_tool(
+                app,
+                "get_file_owner_by_path",
+                {
+                    "repository_path": str(npm_repo_root),
+                    "repository_rel_path": "packages/core/src/index.ts",
+                },
+            )
+        )
+    )
+    related = _payload_from_result(
+        asyncio.run(
+            _call_tool(
+                app,
+                "get_related_tests_by_path",
+                {
+                    "repository_path": str(npm_repo_root),
+                    "repository_rel_path": "packages/core/src/index.ts",
+                },
+            )
+        )
+    )
+    minimum_change = _payload_from_result(
+        asyncio.run(
+            _call_tool(
+                app,
+                "get_minimum_verified_change_set_by_path",
+                {
+                    "repository_path": str(npm_repo_root),
+                    "repository_rel_path": "packages/core/src/index.ts",
+                },
+            )
+        )
+    )
+
+    assert len(summary["provider_ids"]) >= 1
+    assert owner["owner"]["id"]
+    assert related["total"] >= 1
+    assert isinstance(minimum_change["tests"], list)
+    assert isinstance(minimum_change["build_targets"], list)
+    assert isinstance(minimum_change["runner_actions"], list)
 
 
 def test_analytics_tools_return_structured_output(app, npm_repo_root) -> None:

@@ -13,8 +13,10 @@ from suitcode.mcp.models import (
     RepositorySnapshotView,
     RepositorySupportView,
     RepositoryView,
+    WorkspaceUsageGuidanceView,
     WorkspaceSnapshotView,
     WorkspaceView,
+    WorkspacesResourceView,
 )
 from suitcode.providers.provider_metadata import DetectedProviderSupport, ProviderDescriptor, RepositorySupportResult
 
@@ -87,11 +89,54 @@ class WorkspacePresenter:
             repository_ids=repository_ids,
         )
 
+    def workspace_usage_guidance(self) -> WorkspaceUsageGuidanceView:
+        return WorkspaceUsageGuidanceView(
+            session_scope="process_local",
+            message=(
+                "Workspace state is local to the current MCP server process. "
+                "Open a workspace in this session before using workspace-based tools. "
+                "Use the read-only *_by_path tools when you need a cold-start answer from repository_path alone."
+            ),
+            recommended_next_calls=(
+                "repository_summary",
+                "get_file_owner",
+                "get_related_tests",
+                "get_minimum_verified_change_set",
+            ),
+            read_only_alternatives=(
+                "repository_summary_by_path",
+                "get_file_owner_by_path",
+                "get_related_tests_by_path",
+                "get_minimum_verified_change_set_by_path",
+            ),
+        )
+
     def open_workspace_result(self, workspace: Workspace, repository: Repository, reused: bool) -> OpenWorkspaceResult:
         return OpenWorkspaceResult(
             workspace=self.workspace_view(workspace),
             initial_repository=self._repository_presenter.repository_view(repository),
             reused=reused,
+            guidance=self.workspace_usage_guidance(),
+        )
+
+    def workspaces_resource_view(
+        self,
+        items: tuple[WorkspaceView, ...],
+        *,
+        limit: int,
+        offset: int,
+        total: int,
+        truncated: bool,
+        next_offset: int | None,
+    ) -> WorkspacesResourceView:
+        return WorkspacesResourceView(
+            items=items,
+            limit=limit,
+            offset=offset,
+            total=total,
+            truncated=truncated,
+            next_offset=next_offset,
+            guidance=self.workspace_usage_guidance(),
         )
 
     def add_repository_result(

@@ -58,10 +58,28 @@ class RepositoryView(StrictModel):
     provider_roles: dict[str, tuple[str, ...]]
 
 
+class WorkspaceUsageGuidanceView(StrictModel):
+    session_scope: str
+    message: str
+    recommended_next_calls: tuple[str, ...]
+    read_only_alternatives: tuple[str, ...]
+
+
 class OpenWorkspaceResult(StrictModel):
     workspace: WorkspaceView
     initial_repository: RepositoryView
     reused: bool
+    guidance: WorkspaceUsageGuidanceView
+
+
+class WorkspacesResourceView(StrictModel):
+    items: tuple[WorkspaceView, ...]
+    limit: int
+    offset: int
+    total: int
+    truncated: bool
+    next_offset: int | None = None
+    guidance: WorkspaceUsageGuidanceView
 
 
 class AddRepositoryResult(StrictModel):

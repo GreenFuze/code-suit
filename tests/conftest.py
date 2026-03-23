@@ -8,6 +8,7 @@ import pytest
 
 from suitcode.core.repository import Repository
 from suitcode.core.workspace import Workspace
+from suitcode.providers.go import GoProvider
 from suitcode.providers.npm import NPMProvider
 from suitcode.providers.python import PythonProvider
 
@@ -71,3 +72,31 @@ def python_repository(python_workspace: Workspace) -> Repository:
 @pytest.fixture
 def python_provider(python_repository: Repository) -> PythonProvider:
     return PythonProvider(python_repository)
+
+
+@pytest.fixture
+def go_fixture_root() -> Path:
+    return Path("tests/test_repos/go")
+
+
+@pytest.fixture
+def go_repo_root(tmp_path: Path, go_fixture_root: Path) -> Path:
+    repo_root = tmp_path / "go"
+    shutil.copytree(go_fixture_root, repo_root)
+    (repo_root / ".git").mkdir()
+    return repo_root
+
+
+@pytest.fixture
+def go_workspace(go_repo_root: Path) -> Workspace:
+    return Workspace(go_repo_root)
+
+
+@pytest.fixture
+def go_repository(go_workspace: Workspace) -> Repository:
+    return go_workspace.repositories[0]
+
+
+@pytest.fixture
+def go_provider(go_repository: Repository) -> GoProvider:
+    return GoProvider(go_repository)

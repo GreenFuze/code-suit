@@ -39,21 +39,22 @@ SUPPORTED_EVALUATION_AGENTS: tuple[EvaluationAgentSupport, ...] = (
     EvaluationAgentSupport(
         agent_kind=AgentKind.CLAUDE,
         live_harness_available=False,
-        passive_telemetry_available=False,
-        transcript_token_estimation_available=False,
+        passive_telemetry_available=True,
+        transcript_token_estimation_available=True,
         notes=(
-            "Claude is represented in the evaluation metadata schema for future harness work.",
-            "No live Claude runner or paper-grade telemetry pipeline is implemented yet.",
+            "Claude passive telemetry and transcript-estimated token summaries are available.",
+            "No live Claude benchmark harness is implemented yet.",
         ),
     ),
     EvaluationAgentSupport(
         agent_kind=AgentKind.CURSOR,
         live_harness_available=False,
-        passive_telemetry_available=False,
-        transcript_token_estimation_available=False,
+        passive_telemetry_available=True,
+        transcript_token_estimation_available=True,
         notes=(
-            "Cursor is represented in the evaluation metadata schema for future harness work.",
-            "No live Cursor runner or paper-grade telemetry pipeline is implemented yet.",
+            "Cursor passive telemetry and transcript-estimated token summaries are available.",
+            "Cursor tool-level adoption metrics remain best-effort because current native artifacts expose weaker tool traces.",
+            "No live Cursor benchmark harness is implemented yet.",
         ),
     ),
 )

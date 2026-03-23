@@ -342,6 +342,7 @@ class TruthCoverageService:
                 )
             else:
                 accumulator.availability = TruthAvailability.AVAILABLE
+                accumulator.degraded_reason = None
         return accumulator.finalize()
 
     def _summary(

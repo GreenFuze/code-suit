@@ -42,18 +42,6 @@ class RepositoryPackageManagerDiscoverer:
                 )
             )
 
-        go_files = self._sorted_existing(root, "go.mod")
-        if go_files:
-            analyses.append(
-                NpmPackageManagerAnalysis(
-                    node_id="pkgmgr:go",
-                    display_name="go",
-                    manager="go",
-                    config_path=go_files[0].relative_to(root).as_posix(),
-                    owned_files=tuple(path.relative_to(root).as_posix() for path in go_files),
-                )
-            )
-
         return tuple(sorted(analyses, key=lambda analysis: analysis.node_id))
 
     def _sorted_existing(self, root: Path, pattern: str) -> list[Path]:

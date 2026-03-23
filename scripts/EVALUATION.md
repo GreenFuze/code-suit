@@ -38,11 +38,22 @@ Current default protocol status:
 Current live evaluation support:
 - Codex CLI
 
-Current schema-level support reserved for future work:
+Current passive analytics support:
+- Codex
 - Claude
 - Cursor
 
-The report schema already records agent metadata in a way that is intended to be reusable for those agents when live harnesses are added.
+Current live harness support not yet implemented:
+- Claude
+- Cursor
+
+The report schema already records agent metadata in a reusable shape for those agents when live harnesses are added.
+
+Dogfooding workflow:
+- `docs/dogfooding/tracked_repositories.v1.json`
+- `docs/dogfooding/phase3_runbook.md`
+- `python scripts/analyze_dogfooding.py --tracked-label suitcode`
+- `python scripts/analyze_dogfooding.py --tracked-label mygames-server`
 
 ## Output Locations
 

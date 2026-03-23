@@ -9,14 +9,14 @@ from suitcode.analytics.tokenizers.base import TranscriptTokenizer
 class OpenAiTranscriptTokenizer(TranscriptTokenizer):
     def __init__(self, encoding_name: str = "cl100k_base") -> None:
         self._encoding = tiktoken.get_encoding(encoding_name)
-        self._model_family = "openai/codex"
+        self._model_family = f"openai/{encoding_name}"
 
     @property
     def model_family(self) -> str:
         return self._model_family
 
     def supports(self, agent_kind: NativeAgentKind, model_provider: str | None) -> bool:
-        return agent_kind == NativeAgentKind.CODEX and (model_provider is None or model_provider == "openai")
+        return True
 
     def count_text(self, text: str) -> int:
         return len(self._encoding.encode(text))

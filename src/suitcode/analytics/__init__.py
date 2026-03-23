@@ -22,9 +22,16 @@ from suitcode.analytics.native_agent_models import (
     CodexTranscriptMetrics,
     CorrelationQuality,
     NativeAgentKind,
+    NativeRepositoryAnalyticsSummary,
+    NativeSessionAnalytics,
+    NativeSessionArtifact,
+    NativeSuitCodeToolUse,
+    NativeTranscriptMetrics,
 )
+from suitcode.analytics.native_analytics_service import NativeAnalyticsService
 from suitcode.analytics.settings import AnalyticsSettings
 from suitcode.analytics.storage import JsonlAnalyticsStore
+from suitcode.analytics.tool_naming import canonical_suitcode_tool_name, is_mcp_tool_name
 from suitcode.analytics.transcript_models import TranscriptCapture, TranscriptSegment, TranscriptTokenBreakdown
 from suitcode.analytics.transcript_token_estimation import TranscriptTokenEstimator
 
@@ -50,10 +57,18 @@ __all__ = [
     "InefficiencyFinding",
     "JsonlAnalyticsStore",
     "NativeAgentKind",
+    "NativeAnalyticsService",
+    "NativeRepositoryAnalyticsSummary",
+    "NativeSessionAnalytics",
+    "NativeSessionArtifact",
+    "NativeSuitCodeToolUse",
+    "NativeTranscriptMetrics",
     "TranscriptCapture",
     "TranscriptSegment",
     "TranscriptTokenBreakdown",
     "TranscriptTokenEstimator",
     "TokenEstimate",
     "ToolUsageStats",
+    "canonical_suitcode_tool_name",
+    "is_mcp_tool_name",
 ]
