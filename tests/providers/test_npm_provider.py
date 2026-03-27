@@ -385,6 +385,16 @@ def test_repository_related_tests_for_npm_component_file(npm_repository: Reposit
     assert all(match.relation_reason == "same_package" for match in matches)
 
 
+def test_npm_provider_returns_no_related_tests_for_non_npm_owner(npm_repository: Repository) -> None:
+    npm_provider = npm_repository.get_provider("npm")
+
+    matches = npm_provider.get_related_tests(
+        RelatedTestTarget(owner_id="component:go:native-addon")
+    )
+
+    assert matches == tuple()
+
+
 def test_npm_provider_returns_component_dependencies_and_dependents(npm_provider: NPMProvider) -> None:
     dependencies = npm_provider.get_component_dependencies("component:npm:@monorepo/utils")
     dependency_edges = npm_provider.get_component_dependency_edges("component:npm:@monorepo/utils")

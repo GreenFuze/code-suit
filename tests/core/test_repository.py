@@ -8,6 +8,7 @@ import pytest
 from suitcode.core.build_service import BuildService
 from suitcode.core.repository import Repository
 from suitcode.core.runner_service import RunnerService
+from suitcode.core.tests.models import RelatedTestTarget
 from suitcode.core.workspace import Workspace
 from suitcode.providers.provider_roles import ProviderRole
 from suitcode.providers.shared.action_execution import ActionExecutionResult, ActionExecutionStatus
@@ -307,3 +308,31 @@ def test_repository_build_project_fails_fast_without_build_targets() -> None:
         assert repository.list_build_targets() == tuple()
         with pytest.raises(ValueError, match="no deterministic build targets"):
             repository.build_project()
+
+
+def test_repository_routes_related_tests_to_owning_provider_only(npm_repository) -> None:
+    npm_provider = npm_repository.get_provider("npm")
+
+    def _unexpected_call(target):
+        raise AssertionError(f"npm provider should not handle foreign target: {target}")
+
+    npm_provider.get_related_tests = _unexpected_call  # type: ignore[method-assign]
+
+    matches = npm_repository.tests.get_related_tests(
+        RelatedTestTarget(owner_id="component:go:native-addon")
+    )
+
+    assert matches == tuple()
+
+
+def test_repository_routes_file_symbol_lookup_to_owning_provider_only(npm_repository) -> None:
+    assert npm_repository.get_file_owner("packages/core/src/index.ts").owner.id == "component:npm:@monorepo/core"
+
+    python_provider = npm_repository.get_provider("python")
+
+    def _unexpected_symbol_call(*args, **kwargs):
+        raise AssertionError("non-owning code provider should not be queried")
+
+    python_provider.list_symbols_in_file = _unexpected_symbol_call  # type: ignore[method-assign]
+
+    assert isinstance(npm_repository.code.list_symbols_in_file("packages/core/src/index.ts"), tuple)

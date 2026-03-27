@@ -49,7 +49,7 @@ class CodeIntelligence:
     ) -> tuple[EntityInfo, ...]:
         normalized_path = normalize_repository_relative_path(repository_rel_path)
         items: list[EntityInfo] = []
-        for provider in self.providers:
+        for provider in self._providers_for_file(normalized_path):
             try:
                 items.extend(
                     provider.list_symbols_in_file(
@@ -70,7 +70,7 @@ class CodeIntelligence:
     def find_definition(self, target: SymbolLookupTarget) -> tuple[CodeLocation, ...]:
         repository_rel_path, line, column = self._resolve_lookup_target(target)
         items: list[CodeLocation] = []
-        for provider in self.providers:
+        for provider in self._providers_for_file(repository_rel_path):
             try:
                 items.extend(provider.find_definition(repository_rel_path, line, column))
             except ValueError:
@@ -92,7 +92,7 @@ class CodeIntelligence:
     ) -> tuple[FileRelationshipRef, ...]:
         normalized_path = normalize_repository_relative_path(repository_rel_path)
         merged: dict[tuple[FileRelationshipKind, str], FileRelationshipRef] = {}
-        for provider in self.providers:
+        for provider in self._providers_for_file(normalized_path):
             try:
                 items = provider.get_file_relationships(normalized_path)
             except ValueError:
@@ -129,7 +129,7 @@ class CodeIntelligence:
     ) -> tuple[CodeLocation, ...]:
         repository_rel_path, line, column = self._resolve_lookup_target(target)
         items: list[CodeLocation] = []
-        for provider in self.providers:
+        for provider in self._providers_for_file(repository_rel_path):
             try:
                 items.extend(
                     provider.find_references(
@@ -180,6 +180,13 @@ class CodeIntelligence:
         if match.line_start is None or match.column_start is None:
             raise ValueError(f"symbol id has no usable location: `{symbol_id}`")
         return repository_rel_path, match.line_start, match.column_start
+
+    def _providers_for_file(self, repository_rel_path: str) -> tuple[CodeProviderBase, ...]:
+        return tuple(
+            provider
+            for provider in self._repository.get_providers_for_file_role(repository_rel_path, ProviderRole.CODE)
+            if isinstance(provider, CodeProviderBase)
+        )
 
 
 from typing import TYPE_CHECKING

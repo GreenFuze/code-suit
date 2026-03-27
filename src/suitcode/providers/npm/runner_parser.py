@@ -44,7 +44,7 @@ class NpmRunnerScriptInspector:
             command=command,
             executable="npm",
             argv=("npm", "run", script_name),
-            cwd=package_path,
+            cwd=package_path or None,
             referenced_files=referenced_files,
         )
 

@@ -62,7 +62,20 @@ class TestIntelligence:
     def get_related_tests(self, target: RelatedTestTarget) -> tuple[ResolvedRelatedTest, ...]:
         discovered_tests = {item.test_definition.id: item for item in self.get_discovered_tests()}
         items: list[ResolvedRelatedTest] = []
-        for provider in self.providers:
+        if target.owner_id is not None:
+            providers = tuple(
+                provider
+                for provider in self._repository.get_providers_for_owner_role(target.owner_id, ProviderRole.TEST)
+                if isinstance(provider, TestProviderBase)
+            )
+        else:
+            assert target.repository_rel_path is not None
+            providers = tuple(
+                provider
+                for provider in self._repository.get_providers_for_file_role(target.repository_rel_path, ProviderRole.TEST)
+                if isinstance(provider, TestProviderBase)
+            )
+        for provider in providers:
             for match in provider.get_related_tests(target):
                 try:
                     discovered_test = discovered_tests[match.test_definition.id]

@@ -101,7 +101,9 @@ class ContextService:
                     dependent_files_preview=dependent_files[:symbol_preview_limit],
                     related_test_count=len(related_tests),
                     related_tests_preview=related_tests[:test_preview_limit],
-                    quality_provider_ids=self._repository.quality.provider_ids,
+                    quality_provider_ids=self._repository.quality.provider_ids_for_files(
+                        (file_owner.file_info.repository_rel_path,)
+                    ),
                     provenance=self._file_context_provenance(
                         repository_rel_path,
                         symbols,

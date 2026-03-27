@@ -71,7 +71,7 @@ class NpmActionService:
             component_id = component_id_by_package.get(test.package_name)
             if component_id is None:
                 continue
-            test_runner = runner_by_package_script.get((test.package_name, "test"))
+            test_runner = runner_by_package_script.get((test.package_name, test.script_name))
             test_id = f"test:npm:{test.package_name}"
             argv, cwd = self._test_invocation(test, test_runner)
             actions.append(
@@ -116,8 +116,8 @@ class NpmActionService:
     @staticmethod
     def _test_provenance_summary(test: NpmTestAnalysis) -> str:
         if test.discovery_method == TestDiscoveryMethod.AUTHORITATIVE_JEST_LIST_TESTS:
-            return "derived from authoritative jest test discovery and package test script"
-        return "derived from heuristic npm test discovery and package test script"
+            return f"derived from authoritative jest test discovery and npm `{test.script_name}` script"
+        return f"derived from heuristic npm test discovery and npm `{test.script_name}` script"
 
     @staticmethod
     def _test_invocation(
@@ -126,7 +126,7 @@ class NpmActionService:
     ) -> tuple[tuple[str, ...], str | None]:
         if runner is not None:
             return runner.argv, runner.cwd
-        return ("npm", "run", "test", "--workspace", test.package_name), None
+        return ("npm", "run", test.script_name, "--workspace", test.package_name), None
 
     @staticmethod
     def _finalize(actions: list[ProviderActionSpec]) -> tuple[ProviderActionSpec, ...]:

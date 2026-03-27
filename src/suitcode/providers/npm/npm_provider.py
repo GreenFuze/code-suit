@@ -363,7 +363,7 @@ class NPMProvider(
                 return tuple()
             package_root = self._package_root_for_owner(owner.id)
             if package_root is None:
-                raise ValueError(f"component owner id could not be resolved to a package: `{owner.id}`")
+                return tuple()
             return self._tests_for_package_root(package_root, matched_owner_id=owner.id)
 
         if target.repository_rel_path is None:
@@ -388,7 +388,7 @@ class NPMProvider(
             return tuple()
         package_root = self._package_root_for_file(target.repository_rel_path)
         if package_root is None:
-            raise ValueError(f"file could not be resolved to a workspace package: `{target.repository_rel_path}`")
+            return tuple()
         return self._tests_for_package_root(package_root, matched_owner_id=owner_info.owner.id, matched_repository_rel_path=target.repository_rel_path)
 
     def lint_file(self, repository_rel_path: str, is_fix: bool) -> QualityFileResult:
@@ -729,7 +729,7 @@ class NPMProvider(
         return replace(
             analysis,
             package_path=self._rebase_path(analysis.package_path),
-            cwd=self._rebase_path(analysis.cwd),
+            cwd=self._rebase_optional_path(analysis.cwd),
             referenced_files=self._rebase_paths(analysis.referenced_files),
         )
 
@@ -765,7 +765,8 @@ class NPMProvider(
     def _rebase_optional_path(self, value: str | None) -> str | None:
         if value is None:
             return None
-        return self._rebase_path(value)
+        rebased = self._rebase_path(value)
+        return rebased or None
 
     def _rebase_manager_id(self, manager_id: str) -> str:
         if not self.attachment_root_rel_path or self.attachment_root_rel_path == ".":

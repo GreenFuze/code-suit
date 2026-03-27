@@ -91,7 +91,7 @@ class NpmModelTranslator:
     def to_test_definition(self, analysis: NpmTestAnalysis) -> TestDefinition:
         return TestDefinition(
             id=f"test:npm:{analysis.package_name}",
-            name=f"{analysis.package_name}:test",
+            name=f"{analysis.package_name}:{analysis.script_name}",
             framework=analysis.framework,
             test_files=analysis.test_files,
             provenance=self._test_provenance(analysis),

@@ -17,6 +17,41 @@ from suitcode.core.provenance_builders import heuristic_provenance
 from suitcode.core.workspace import Workspace
 
 
+def _make_mixed_go_npm_repo(repo_root: Path) -> Path:
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "server" / "internal" / "db").mkdir(parents=True)
+    (repo_root / "server" / "go.mod").write_text(
+        "module example.com/mixed/server\n\ngo 1.22\n",
+        encoding="utf-8",
+    )
+    (repo_root / "server" / "internal" / "db" / "repo.go").write_text(
+        "package db\n\nfunc Name() string { return \"db\" }\n",
+        encoding="utf-8",
+    )
+    (repo_root / "server" / "internal" / "db" / "repo_test.go").write_text(
+        "package db\n\nimport \"testing\"\n\nfunc TestName(t *testing.T) { _ = Name() }\n",
+        encoding="utf-8",
+    )
+    (repo_root / "server" / "frontend" / "src").mkdir(parents=True)
+    (repo_root / "server" / "frontend" / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true,
+          "scripts": {
+            "build": "vite build"
+          }
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "server" / "frontend" / "src" / "index.tsx").write_text(
+        "export const App = () => null;\n",
+        encoding="utf-8",
+    )
+    return repo_root
+
+
 def test_minimum_verified_change_set_for_npm_file_target(npm_repo_root) -> None:
     repository = Workspace(npm_repo_root).repositories[0]
 
@@ -29,7 +64,7 @@ def test_minimum_verified_change_set_for_npm_file_target(npm_repo_root) -> None:
     assert change_set.primary_component is not None
     assert change_set.primary_component.id == "component:npm:@monorepo/core"
     assert [item.target.test_definition.id for item in change_set.tests] == ["test:npm:@monorepo/core"]
-    assert change_set.build_targets == tuple()
+    assert [item.target.action_id for item in change_set.build_targets] == ["action:npm:build:@monorepo/core"]
     assert change_set.runner_actions == tuple()
     assert len(change_set.quality_validation_operations) == 1
     assert len(change_set.quality_hygiene_operations) == 1
@@ -84,6 +119,20 @@ def test_minimum_verified_change_set_for_python_owner_target(python_repo_root) -
         "src/acme/providers/__init__.py",
     )
     assert change_set.provenance
+
+
+def test_minimum_verified_change_set_routes_quality_to_owning_provider_in_mixed_repo(tmp_path: Path) -> None:
+    repository = Workspace(_make_mixed_go_npm_repo(tmp_path / "mixed")).repositories[0]
+
+    change_set = repository.get_minimum_verified_change_set(
+        ChangeTarget(repository_rel_path="server/internal/db/repo.go")
+    )
+
+    assert [item.target.test_definition.id for item in change_set.tests] == [
+        "test:go:example.com/mixed/server/internal/db"
+    ]
+    assert change_set.quality_validation_operations == tuple()
+    assert change_set.quality_hygiene_operations == tuple()
 
 
 def test_minimum_verified_change_set_uses_direct_dependent_tests_when_file_has_no_local_go_tests(go_repo_root) -> None:

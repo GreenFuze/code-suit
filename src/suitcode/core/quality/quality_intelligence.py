@@ -26,6 +26,21 @@ class QualityIntelligence:
     def provider_ids(self) -> tuple[str, ...]:
         return tuple(provider.__class__.descriptor().provider_id for provider in self.providers)
 
+    def provider_ids_for_files(self, repository_rel_paths: tuple[str, ...]) -> tuple[str, ...]:
+        provider_ids: list[str] = []
+        for repository_rel_path in repository_rel_paths:
+            for provider in self._repository.get_providers_for_file_role(repository_rel_path, ProviderRole.QUALITY):
+                provider_id = provider.__class__.descriptor().provider_id
+                if provider_id not in provider_ids:
+                    provider_ids.append(provider_id)
+        return tuple(provider_ids)
+
+    def provider_ids_for_owner(self, owner_id: str) -> tuple[str, ...]:
+        owned_files = self._repository.list_files_by_owner(owner_id)
+        if not owned_files:
+            return tuple()
+        return self.provider_ids_for_files(tuple(file_info.repository_rel_path for file_info in owned_files))
+
     def lint_file(self, repository_rel_path: str, is_fix: bool, provider_id: str) -> QualityFileResult:
         provider = self._get_quality_provider(provider_id)
         return provider.lint_file(repository_rel_path, is_fix)
@@ -38,7 +53,15 @@ class QualityIntelligence:
         self,
         repository_rel_paths: tuple[str, ...] | None = None,
     ) -> tuple[QualityRuntimeCapabilities, ...]:
-        return tuple(provider.get_quality_runtime_capabilities(repository_rel_paths) for provider in self.providers)
+        if repository_rel_paths is None:
+            providers = self.providers
+        else:
+            providers = tuple(
+                provider
+                for provider_id in self.provider_ids_for_files(repository_rel_paths)
+                for provider in (self._get_quality_provider(provider_id),)
+            )
+        return tuple(provider.get_quality_runtime_capabilities(repository_rel_paths) for provider in providers)
 
     def _get_quality_provider(self, provider_id: str) -> QualityProviderBase:
         provider = self._repository.get_provider(provider_id)

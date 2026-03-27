@@ -410,6 +410,7 @@ class RepositorySummaryPresenter:
         external_packages = repository.arch.get_external_packages()
         tests = repository.tests.get_discovered_tests()
         files = repository.arch.get_files()
+        visible_files = self._summary_visible_files(files, components)
         provenance_entries = [
             derived_summary_provenance(
                 source_kind=SourceKind.MANIFEST,
@@ -435,8 +436,8 @@ class RepositorySummaryPresenter:
             provenance_entries.append(
                 derived_summary_provenance(
                     source_kind=SourceKind.OWNERSHIP,
-                    evidence_summary="repository summary includes file ownership counts",
-                    evidence_paths=tuple(file.repository_rel_path for file in files[:10]),
+                    evidence_summary="repository summary includes non-artifact file ownership counts",
+                    evidence_paths=tuple(file.repository_rel_path for file in visible_files[:10]),
                 )
             )
         return RepositorySummaryView(
@@ -454,7 +455,7 @@ class RepositorySummaryPresenter:
             package_manager_count=len(package_managers),
             external_package_count=len(external_packages),
             test_count=len(tests),
-            file_count=len(files),
+            file_count=len(visible_files),
             component_ids_preview=tuple(sorted(item.id for item in components)[:preview_limit]),
             runner_ids_preview=tuple(sorted(item.id for item in runners)[:preview_limit]),
             package_manager_ids_preview=tuple(sorted(item.id for item in package_managers)[:preview_limit]),
@@ -463,3 +464,55 @@ class RepositorySummaryPresenter:
             truth_coverage=None,
             provenance=provenance_views(tuple(provenance_entries)),
         )
+
+    @staticmethod
+    def _summary_visible_files(files, components):
+        artifact_prefixes = tuple(
+            sorted(
+                {
+                    path.strip().strip("/").replace("\\", "/")
+                    for component in components
+                    for path in component.artifact_paths
+                    if path.strip().strip("/").replace("\\", "/")
+                }
+            )
+        )
+        source_prefixes = tuple(
+            sorted(
+                {
+                    path.strip().strip("/").replace("\\", "/")
+                    for component in components
+                    for path in component.source_roots
+                    if path.strip().strip("/").replace("\\", "/")
+                }
+            )
+        )
+        return tuple(
+            file_info
+            for file_info in files
+            if not RepositorySummaryPresenter._is_summary_artifact_path(
+                file_info.repository_rel_path,
+                artifact_prefixes,
+                source_prefixes,
+            )
+        )
+
+    @staticmethod
+    def _is_summary_artifact_path(
+        repository_rel_path: str,
+        artifact_prefixes: tuple[str, ...],
+        source_prefixes: tuple[str, ...],
+    ) -> bool:
+        normalized = repository_rel_path.strip().strip("/").replace("\\", "/")
+        if not normalized:
+            return False
+        for artifact_prefix in artifact_prefixes:
+            if normalized != artifact_prefix and not normalized.startswith(f"{artifact_prefix}/"):
+                continue
+            if any(
+                normalized == source_prefix or normalized.startswith(f"{source_prefix}/")
+                for source_prefix in source_prefixes
+            ):
+                return False
+            return True
+        return False

@@ -211,6 +211,68 @@ def test_frontend_standalone_package_surfaces_build_script_as_action(service: Su
     assert "build" in availability.available_action_kinds
 
 
+def test_frontend_standalone_package_uses_test_prefixed_script_for_validation(service: SuitMcpService, tmp_path: Path) -> None:
+    repo_root = tmp_path / "frontend"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true,
+          "scripts": {
+            "test:unit": "vitest run"
+          }
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "LibraryPage.tsx").write_text("export const LibraryPage = () => null;\n", encoding="utf-8")
+    (repo_root / "src" / "LibraryPage.spec.jsx").write_text("it('works', () => {});\n", encoding="utf-8")
+
+    minimum = service.what_should_i_run(
+        str(repo_root),
+        repository_rel_path="src/LibraryPage.tsx",
+    )
+    availability = service.can_i_do_this(
+        str(repo_root),
+        repository_rel_path="src/LibraryPage.tsx",
+        requested_action_kind="test",
+    )
+
+    assert [item.test_id for item in minimum.tests] == ["test:npm:frontend"]
+    assert minimum.tests[0].command.argv_preview == ("npm", "run", "test:unit")
+    assert availability.supported is True
+    assert "test" in availability.available_action_kinds
+
+
+def test_repository_summary_excludes_tracked_artifact_files_from_file_count(service: SuitMcpService, tmp_path: Path) -> None:
+    repo_root = tmp_path / "frontend"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "dist").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true,
+          "main": "dist/index.js"
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "index.ts").write_text("export const value = 1;\n", encoding="utf-8")
+    (repo_root / "dist" / "index.js").write_text("export const value = 1;\n", encoding="utf-8")
+
+    understanding = service.understand_repository(str(repo_root), preview_limit=10)
+
+    assert understanding.repository.file_count == 2
+    ownership_provenance = next(
+        item for item in understanding.repository.provenance if item.source_kind == "ownership"
+    )
+    assert "dist/index.js" not in ownership_provenance.evidence_paths
+
+
 def test_read_only_by_path_minimum_verified_change_set_returns_clear_empty_surface_error(
     service: SuitMcpService,
     tmp_path: Path,

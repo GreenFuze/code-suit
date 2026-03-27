@@ -784,9 +784,10 @@ class MinimumVerifiedChangeSetService:
         quality_validation_operations: tuple[MinimumVerifiedQualityOperation, ...] = tuple()
         quality_hygiene_operations: tuple[MinimumVerifiedQualityOperation, ...] = tuple()
         if resolved.relevant_files:
+            quality_provider_ids = self._repository.quality.provider_ids_for_files(resolved.relevant_files)
             quality_validation_operations, quality_hygiene_operations = self._quality_planner.build_operations(
                 target_anchor_id=resolved.target_anchor_id,
-                provider_ids=self._repository.quality.provider_ids,
+                provider_ids=quality_provider_ids,
                 relevant_files=resolved.relevant_files,
             )
 

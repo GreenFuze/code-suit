@@ -35,6 +35,7 @@ from suitcode.providers.provider_metadata import (
     ProviderAttachmentContext,
     RepositorySupportResult,
 )
+from suitcode.providers.provider_base import ProviderBase
 from suitcode.providers.provider_roles import ProviderRole
 from suitcode.providers.quality_provider_base import QualityProviderBase
 from suitcode.providers.registry import BUILTIN_PROVIDER_CLASSES, detect_support_for_root, get_provider_descriptors
@@ -313,6 +314,62 @@ class Repository:
     def supports_role(self, role: ProviderRole) -> bool:
         return any(role in roles for roles in self._provider_roles_by_id.values())
 
+    def provider_id_for_owner(self, owner_id: str) -> str:
+        normalized = owner_id.strip()
+        if not normalized:
+            raise ValueError("owner_id must not be empty")
+        parts = normalized.split(":", 2)
+        if len(parts) < 2 or not parts[1].strip():
+            raise ValueError(f"owner id does not encode a provider id: `{owner_id}`")
+        provider_id = parts[1].strip()
+        if provider_id not in self._providers_by_id:
+            raise ValueError(f"owner id references unknown provider `{provider_id}`: `{owner_id}`")
+        return provider_id
+
+    def get_providers_for_owner_role(
+        self,
+        owner_id: str,
+        role: ProviderRole,
+    ) -> tuple[ProviderBase, ...]:
+        provider_id = self.provider_id_for_owner(owner_id)
+        if role not in self._provider_roles_by_id.get(provider_id, frozenset()):
+            return tuple()
+        providers = self._providers_by_id[provider_id]
+        if len(providers) <= 1:
+            return providers
+        owner_files = self.list_files_by_owner(owner_id)
+        if not owner_files:
+            return providers
+        matched = tuple(
+            provider
+            for provider in providers
+            if any(
+                self._attachment_contains_path(
+                    provider.attachment.attachment_root_rel_path,
+                    file_info.repository_rel_path,
+                )
+                for file_info in owner_files
+            )
+        )
+        return matched or providers
+
+    def get_providers_for_file_role(
+        self,
+        repository_rel_path: str,
+        role: ProviderRole,
+    ) -> tuple[ProviderBase, ...]:
+        owner = self.get_file_owner(repository_rel_path).owner
+        providers = self.get_providers_for_owner_role(owner.id, role)
+        matched = tuple(
+            provider
+            for provider in providers
+            if self._attachment_contains_path(
+                provider.attachment.attachment_root_rel_path,
+                repository_rel_path,
+            )
+        )
+        return matched or providers
+
     @property
     def arch(self) -> "ArchitectureIntelligence":
         return self._arch
@@ -565,5 +622,13 @@ class Repository:
                         f"`{file_info.repository_rel_path}` between "
                         f"`{existing[2]}` ({existing[0]} @ {existing[1]}) and "
                         f"`{current[2]}` ({current[0]} @ {current[1]})"
-                    )
+                )
                 file_owners[file_info.repository_rel_path] = current
+
+    @staticmethod
+    def _attachment_contains_path(attachment_root_rel_path: str, repository_rel_path: str) -> bool:
+        attachment_root = attachment_root_rel_path.strip().strip("/").replace("\\", "/")
+        normalized_path = repository_rel_path.strip().strip("/").replace("\\", "/")
+        if not attachment_root or attachment_root == ".":
+            return True
+        return normalized_path == attachment_root or normalized_path.startswith(f"{attachment_root}/")

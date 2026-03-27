@@ -16,9 +16,15 @@ class NpmTestDiscoverer:
         "*.test.ts",
         "*.test.tsx",
         "*.test.js",
+        "*.test.jsx",
+        "*.test.mjs",
+        "*.test.cjs",
         "*.spec.ts",
         "*.spec.tsx",
         "*.spec.js",
+        "*.spec.jsx",
+        "*.spec.mjs",
+        "*.spec.cjs",
         "test_*.py",
         "*_test.py",
     )
@@ -35,7 +41,7 @@ class NpmTestDiscoverer:
         package_name = package.manifest.name
         if package_name is None:
             raise ValueError(f"workspace package missing name: {package.manifest.path}")
-        test_command = package.manifest.scripts.get("test")
+        script_name, test_command = self._resolve_test_script(package)
         if test_command is None:
             return None
         framework = self._infer_framework(test_command)
@@ -55,12 +61,22 @@ class NpmTestDiscoverer:
         return NpmTestAnalysis(
             package_name=package_name,
             package_path=package.repository_rel_path,
+            script_name=script_name,
             framework=framework,
             test_files=test_files,
             discovery_method=discovery_method,
             discovery_tool=discovery_tool,
             evidence_paths=(f"{package.repository_rel_path}/package.json", *test_files),
         )
+
+    def _resolve_test_script(self, package: PackageJsonWorkspacePackage) -> tuple[str, str | None]:
+        exact = package.manifest.scripts.get("test")
+        if exact is not None:
+            return "test", exact
+        for script_name, command in package.manifest.scripts.items():
+            if script_name.startswith("test:"):
+                return script_name, command
+        return "test", None
 
     def _infer_framework(self, command: str) -> TestFramework:
         lowered = command.lower()

@@ -103,7 +103,7 @@ def test_real_multi_module_repo_support_if_available() -> None:
         pytest.skip('local MyGamesAnywhere server repo is unavailable')
 
     support = Repository.support_for_path(repo_root)
-    assert support.provider_ids == ('go',)
+    assert support.provider_ids == ('go', 'npm')
 
     repository = Workspace(repo_root).repositories[0]
     package_manager_ids = [item.id for item in repository.arch.get_package_managers() if item.id.startswith('pkgmgr:go:')]

@@ -326,6 +326,7 @@ class ChangeImpactService:
         return self._related_runners_for_component(primary_component, runner_preview_limit)
 
     def _quality_gates_for_path(self, repository_rel_path: str) -> tuple[QualityGateInfo, ...]:
+        provider_ids = self._repository.quality.provider_ids_for_files((repository_rel_path,))
         return tuple(
             QualityGateInfo(
                 provider_id=provider_id,
@@ -341,13 +342,14 @@ class ChangeImpactService:
                     ),
                 ),
             )
-            for provider_id in self._repository.quality.provider_ids
+            for provider_id in provider_ids
         )
 
     def _quality_gates_for_owner(self, owner_id: str) -> tuple[QualityGateInfo, ...]:
         owned_files = self._ownership_index.files_for_owner(owner_id)
         evidence_paths = tuple(file_info.repository_rel_path for file_info in owned_files[:10])
         applies = bool(owned_files)
+        provider_ids = self._repository.quality.provider_ids_for_owner(owner_id)
         reason = (
             "quality provider applies through files owned by the target owner"
             if applies
@@ -368,7 +370,7 @@ class ChangeImpactService:
                     ),
                 ),
             )
-            for provider_id in self._repository.quality.provider_ids
+            for provider_id in provider_ids
         )
 
     def _change_provenance(

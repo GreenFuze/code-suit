@@ -44,6 +44,7 @@ class NpmRunnerAnalysis:
 class NpmTestAnalysis:
     package_name: str
     package_path: str
+    script_name: str
     framework: TestFramework
     test_files: tuple[str, ...]
     discovery_method: TestDiscoveryMethod

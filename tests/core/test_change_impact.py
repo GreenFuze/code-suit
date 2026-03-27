@@ -6,6 +6,41 @@ from suitcode.core.provenance_builders import dependency_graph_provenance
 from suitcode.core.workspace import Workspace
 
 
+def _make_mixed_go_npm_repo(repo_root):
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "server" / "internal" / "db").mkdir(parents=True)
+    (repo_root / "server" / "go.mod").write_text(
+        "module example.com/mixed/server\n\ngo 1.22\n",
+        encoding="utf-8",
+    )
+    (repo_root / "server" / "internal" / "db" / "repo.go").write_text(
+        "package db\n\nfunc Name() string { return \"db\" }\n",
+        encoding="utf-8",
+    )
+    (repo_root / "server" / "internal" / "db" / "repo_test.go").write_text(
+        "package db\n\nimport \"testing\"\n\nfunc TestName(t *testing.T) { _ = Name() }\n",
+        encoding="utf-8",
+    )
+    (repo_root / "server" / "frontend" / "src").mkdir(parents=True)
+    (repo_root / "server" / "frontend" / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true,
+          "scripts": {
+            "build": "vite build"
+          }
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "server" / "frontend" / "src" / "index.tsx").write_text(
+        "export const App = () => null;\n",
+        encoding="utf-8",
+    )
+    return repo_root
+
+
 def test_change_impact_for_npm_file_target(npm_repo_root) -> None:
     repository = Workspace(npm_repo_root).repositories[0]
     provider = repository.get_provider("npm")
@@ -178,3 +213,15 @@ def test_change_impact_rejects_unknown_target(npm_repo_root) -> None:
         assert "unknown owner id" in str(exc)
     else:
         raise AssertionError("expected analyze_change to fail for unknown owner")
+
+
+def test_change_impact_routes_quality_gates_to_owning_provider_in_mixed_repo(tmp_path) -> None:
+    repository = Workspace(_make_mixed_go_npm_repo(tmp_path / "mixed")).repositories[0]
+
+    impact = repository.analyze_change(ChangeTarget(repository_rel_path="server/internal/db/repo.go"))
+
+    assert impact.owner.id == "component:go:example.com/mixed/server/internal/db"
+    assert [item.related_test.test_definition.id for item in impact.related_tests] == [
+        "test:go:example.com/mixed/server/internal/db"
+    ]
+    assert impact.quality_gates == tuple()
