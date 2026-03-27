@@ -25,7 +25,7 @@ from scripts import analyze_claude_usage
 
 
 class _FakeService:
-    def repository_summary(self, repository_root):
+    def repository_summary(self, repository_root, session_filter=None):
         return NativeRepositoryAnalyticsSummary(
             repository_root=(str(repository_root) if repository_root is not None else None),
             session_count=1,
@@ -58,7 +58,7 @@ class _FakeService:
             native_reported_cache_read_tokens=3,
         )
 
-    def session_analytics(self, repository_root=None, session_id=None):
+    def session_analytics(self, repository_root=None, session_id=None, session_filter=None):
         sid = session_id or "claude-session-1"
         repo_root = str(repository_root) if repository_root is not None else None
         return (
@@ -118,8 +118,8 @@ class _FakeService:
             ),
         )
 
-    def latest_repository_session(self, repository_root):
-        return self.session_analytics(repository_root=repository_root)[0]
+    def latest_repository_session(self, repository_root, session_filter=None):
+        return self.session_analytics(repository_root=repository_root, session_filter=session_filter)[0]
 
 
 def test_script_outputs_json(monkeypatch, capsys, tmp_path) -> None:

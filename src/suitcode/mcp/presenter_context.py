@@ -24,6 +24,7 @@ from suitcode.mcp.models import (
     DependencyRefView,
     ExcludedMinimumVerifiedItemView,
     FileContextView,
+    FileRelationshipView,
     ImpactSummaryView,
     MinimumVerifiedBuildTargetView,
     MinimumVerifiedCommandSummaryView,
@@ -117,12 +118,23 @@ class IntelligencePresenter:
             provenance=provenance_views(context.provenance),
         )
 
+    @staticmethod
+    def file_relationship_view(relationship) -> FileRelationshipView:
+        return FileRelationshipView(
+            path=relationship.repository_rel_path,
+            provenance=provenance_views(relationship.provenance),
+        )
+
     def file_context_view(self, context: FileContext) -> FileContextView:
         return FileContextView(
             file=self._architecture_presenter.file_view(context.file_info),
             owner=self._ownership_presenter.owner_view(context.owner),
             symbol_count=context.symbol_count,
             symbols_preview=tuple(self._code_presenter.symbol_view(item) for item in context.symbols_preview),
+            dependency_file_count=context.dependency_file_count,
+            dependency_files_preview=tuple(self.file_relationship_view(item) for item in context.dependency_files_preview),
+            dependent_file_count=context.dependent_file_count,
+            dependent_files_preview=tuple(self.file_relationship_view(item) for item in context.dependent_files_preview),
             related_test_count=context.related_test_count,
             related_tests_preview=tuple(self._test_presenter.related_test_view(item) for item in context.related_tests_preview),
             quality_provider_ids=context.quality_provider_ids,
@@ -368,6 +380,12 @@ class ChangeImpactPresenter:
             component_context=None,
             file_context=None,
             symbol_context=None,
+            dependency_files=tuple(
+                self._intelligence_presenter.file_relationship_view(item) for item in impact.dependency_files
+            ),
+            dependent_files=tuple(
+                self._intelligence_presenter.file_relationship_view(item) for item in impact.dependent_files
+            ),
             dependent_components=tuple(
                 self._architecture_presenter.component_view(item) for item in impact.dependent_components
             ),
@@ -429,6 +447,7 @@ class RepositorySummaryPresenter:
                 provider_id: sorted_role_values(roles)
                 for provider_id, roles in repository.provider_roles.items()
             },
+            provider_attachment_roots=repository.provider_attachment_roots,
             quality_provider_ids=repository.quality.provider_ids,
             component_count=len(components),
             runner_count=len(runners),

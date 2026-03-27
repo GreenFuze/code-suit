@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+from dataclasses import replace
 from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING
@@ -20,6 +21,7 @@ from suitcode.providers.architecture_provider_base import ArchitectureProviderBa
 from suitcode.providers.go.action_service import GoActionService
 from suitcode.providers.go.models import GoPackageAnalysis, GoPackageManagerAnalysis, GoTestAnalysis
 from suitcode.providers.go.workspace_analyzer import GoWorkspaceAnalyzer
+from suitcode.providers.provider_metadata import ProviderAttachmentCandidate, ProviderAttachmentContext
 from suitcode.providers.provider_roles import ProviderRole
 from suitcode.providers.runtime_capability_models import (
     ActionRuntimeCapabilities,
@@ -54,19 +56,34 @@ class GoProvider(
     PROGRAMMING_LANGUAGES = ('go',)
 
     @classmethod
-    def detect_roles(cls, repository_root: Path) -> frozenset[ProviderRole]:
-        if GoWorkspaceAnalyzer.detect_supported_workspace(repository_root):
-            return frozenset({ProviderRole.ARCHITECTURE, ProviderRole.TEST})
-        return frozenset()
+    def discover_attachments(cls, repository_root: Path) -> tuple[ProviderAttachmentCandidate, ...]:
+        root = repository_root.expanduser().resolve()
+        module_roots = GoWorkspaceAnalyzer.discover_module_roots(root)
+        if not module_roots:
+            return tuple()
+        attachment_roots = tuple(
+            module_root
+            for module_root in module_roots
+            if not any(parent != module_root and module_root.is_relative_to(parent) for parent in module_roots)
+        )
+        return tuple(
+            ProviderAttachmentCandidate(
+                provider_id=cls.PROVIDER_ID,
+                attachment_root=attachment_root,
+                detected_roles=frozenset({ProviderRole.ARCHITECTURE, ProviderRole.TEST}),
+            )
+            for attachment_root in attachment_roots
+        )
 
-    def __init__(self, repository: Repository) -> None:
-        super().__init__(repository)
-        self._module_roots = GoWorkspaceAnalyzer.discover_module_roots(repository.root)
+    def __init__(self, repository: Repository, attachment: ProviderAttachmentContext) -> None:
+        super().__init__(repository, attachment)
+        self._module_roots = GoWorkspaceAnalyzer.discover_module_roots(self.attachment_root)
         if not self._module_roots:
-            raise ValueError(f'go provider requires one or more go.mod files and no go.work under `{repository.root}`')
-        self._analyzer = GoWorkspaceAnalyzer(repository.root)
+            raise ValueError(f'go provider requires one or more go.mod files and no go.work under `{self.attachment_root}`')
+        self._analyzer = GoWorkspaceAnalyzer(self.attachment_root)
         self._action_service = GoActionService()
         self._action_translator = ProviderActionTranslator(provider_id='go', default_test_tool='go test')
+        self._analysis_cache = None
         self._component_id_index: dict[str, GoPackageAnalysis] | None = None
         self._dependency_edges_cache: tuple[ComponentDependencyEdge, ...] | None = None
         self._test_execution_service: TestExecutionService | None = None
@@ -208,7 +225,9 @@ class GoProvider(
         )
 
     def _analysis(self):
-        return self._analyzer.analyze()
+        if self._analysis_cache is None:
+            self._analysis_cache = self._rebase_workspace_analysis(self._analyzer.analyze())
+        return self._analysis_cache
 
     def _build_test_execution_service(self) -> TestExecutionService:
         if self._test_execution_service is None:
@@ -402,6 +421,96 @@ class GoProvider(
     @staticmethod
     def _component_id(import_path: str) -> str:
         return f'component:go:{import_path}'
+
+    def _rebase_workspace_analysis(self, analysis):
+        modules = tuple(self._rebase_module(item) for item in analysis.modules)
+        return replace(
+            analysis,
+            module_roots_rel_path=tuple(item.module_root_rel_path for item in modules),
+            modules=modules,
+            components=tuple(item for module in modules for item in module.components),
+            package_managers=tuple(module.package_manager for module in modules),
+            external_packages=tuple(item for module in modules for item in module.external_packages),
+            files=tuple(sorted({item.repository_rel_path: item for module in modules for item in module.files}.values(), key=lambda item: item.repository_rel_path)),
+        )
+
+    def _rebase_module(self, analysis):
+        rebased_rel_path = self._rebase_rel_path(analysis.module_root_rel_path)
+        rebased_manager_id = self._package_manager_id(rebased_rel_path)
+        components = tuple(self._rebase_component(item, rebased_rel_path) for item in analysis.components)
+        package_manager = replace(
+            analysis.package_manager,
+            node_id=rebased_manager_id,
+            module_root_rel_path=rebased_rel_path,
+            config_path=self._rebase_optional_path(analysis.package_manager.config_path),
+            owned_files=self._rebase_paths(analysis.package_manager.owned_files),
+        )
+        external_packages = tuple(
+            replace(
+                item,
+                external_package_id=self._external_package_id(rebased_manager_id, item.package_name),
+                manager_id=rebased_manager_id,
+                evidence_paths=self._rebase_paths(item.evidence_paths),
+            )
+            for item in analysis.external_packages
+        )
+        files = tuple(
+            replace(
+                item,
+                repository_rel_path=self._rebase_rel_path(item.repository_rel_path),
+                owner_id=(
+                    rebased_manager_id
+                    if item.owner_id == analysis.package_manager.node_id
+                    else item.owner_id
+                ),
+            )
+            for item in analysis.files
+        )
+        return replace(
+            analysis,
+            module_root_rel_path=rebased_rel_path,
+            components=components,
+            package_manager=package_manager,
+            external_packages=external_packages,
+            files=files,
+        )
+
+    def _rebase_component(self, analysis: GoPackageAnalysis, rebased_module_root_rel_path: str) -> GoPackageAnalysis:
+        return replace(
+            analysis,
+            module_root_rel_path=rebased_module_root_rel_path,
+            directory_rel_path=self._rebase_rel_path(analysis.directory_rel_path),
+            source_roots=self._rebase_paths(analysis.source_roots),
+            artifact_paths=self._rebase_paths(analysis.artifact_paths),
+            go_files=self._rebase_paths(analysis.go_files),
+            test_files=self._rebase_paths(analysis.test_files),
+        )
+
+    def _rebase_paths(self, values: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(self._rebase_rel_path(item) for item in values)
+
+    def _rebase_optional_path(self, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return self._rebase_rel_path(value)
+
+    def _rebase_rel_path(self, value: str) -> str:
+        normalized = value.replace("\\", "/").strip().removeprefix("./")
+        attachment_root_rel_path = self.attachment_root_rel_path.strip().removesuffix("/")
+        if not attachment_root_rel_path or attachment_root_rel_path == ".":
+            return normalized
+        if not normalized:
+            return attachment_root_rel_path
+        return f"{attachment_root_rel_path}/{normalized}"
+
+    @staticmethod
+    def _package_manager_id(module_root_rel_path: str) -> str:
+        return "pkgmgr:go:root" if not module_root_rel_path else f"pkgmgr:go:{module_root_rel_path}"
+
+    @staticmethod
+    def _external_package_id(manager_id: str, package_name: str) -> str:
+        normalized_manager = manager_id.replace(":", "/")
+        return f"pkgext:go:{normalized_manager}:{package_name}"
 
     def _test_id_for_component(self, component_id: str) -> str:
         component = self.repository.resolve_owner(component_id)

@@ -7,6 +7,11 @@ SERVER_INSTRUCTIONS = (
     "SuitCode provides deterministic repository intelligence for supported repositories. "
     "Prefer these tools over generic repository exploration when the repository is supported."
 )
+CORE_SERVER_NAME = "SuitCode Core"
+CORE_SERVER_INSTRUCTIONS = (
+    "SuitCode Core provides a small intent-based deterministic interface. "
+    "Use it when you need grounded answers about repository structure, file ownership, change impact, what to run, or whether an action is supported."
+)
 
 TOOL_DESCRIPTIONS = {item.name: item.description for item in TOOL_CATALOG}
 

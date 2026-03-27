@@ -9,6 +9,7 @@ from suitcode.mcp.models import (
     FileOwnerView,
     OpenWorkspaceResult,
     OwnerView,
+    ProviderAttachmentView,
     ProviderDescriptorView,
     RepositorySnapshotView,
     RepositorySupportView,
@@ -18,12 +19,26 @@ from suitcode.mcp.models import (
     WorkspaceView,
     WorkspacesResourceView,
 )
-from suitcode.providers.provider_metadata import DetectedProviderSupport, ProviderDescriptor, RepositorySupportResult
+from suitcode.providers.provider_metadata import (
+    DetectedProviderAttachment,
+    DetectedProviderSupport,
+    ProviderDescriptor,
+    RepositorySupportResult,
+)
 
 from suitcode.mcp.presenter_common import sorted_role_values
 
 
 class ProviderPresenter:
+    def attachment_view(self, attachment: DetectedProviderAttachment) -> ProviderAttachmentView:
+        return ProviderAttachmentView(
+            provider_id=attachment.provider_id,
+            attachment_root=str(attachment.attachment_root),
+            attachment_root_rel_path=attachment.attachment_root_rel_path,
+            detected_roles=sorted_role_values(attachment.detected_roles),
+            discovery_notes=attachment.discovery_notes,
+        )
+
     def descriptor_view(self, descriptor: ProviderDescriptor) -> ProviderDescriptorView:
         return ProviderDescriptorView(
             provider_id=descriptor.provider_id,
@@ -41,6 +56,7 @@ class ProviderPresenter:
             detected_roles=sorted_role_values(detected.detected_roles),
             build_systems=descriptor.build_systems,
             programming_languages=descriptor.programming_languages,
+            attachments=tuple(self.attachment_view(item) for item in detected.attachments),
         )
 
     def support_view(self, support: RepositorySupportResult) -> RepositorySupportView:
@@ -63,6 +79,7 @@ class RepositoryPresenter:
                 provider_id: sorted_role_values(roles)
                 for provider_id, roles in repository.provider_roles.items()
             },
+            provider_attachment_roots=repository.provider_attachment_roots,
         )
 
     def repository_snapshot(self, repository: Repository) -> RepositorySnapshotView:

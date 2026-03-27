@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from suitcode.analytics.native_agent_models import (
     NativeRepositoryAnalyticsSummary,
@@ -36,19 +36,36 @@ class NativeAnalyticsService:
         self,
         repository_root: Path | None = None,
         session_id: str | None = None,
+        session_filter: Callable[[NativeSessionAnalytics], bool] | None = None,
     ) -> tuple[NativeSessionAnalytics, ...]:
         normalized_root = repository_root.expanduser().resolve() if repository_root is not None else None
         sessions, _, _ = self._scan_sessions(normalized_root, session_id=session_id)
-        return sessions
+        if session_filter is None:
+            return sessions
+        return tuple(item for item in sessions if session_filter(item))
 
-    def repository_summary(self, repository_root: Path | None = None) -> NativeRepositoryAnalyticsSummary:
+    def repository_summary(
+        self,
+        repository_root: Path | None = None,
+        *,
+        session_filter: Callable[[NativeSessionAnalytics], bool] | None = None,
+    ) -> NativeRepositoryAnalyticsSummary:
         normalized_root = repository_root.expanduser().resolve() if repository_root is not None else None
         sessions, skipped, notes = self._scan_sessions(normalized_root)
+        if session_filter is not None:
+            sessions = tuple(item for item in sessions if session_filter(item))
         return self._build_summary(list(sessions), repository_root=normalized_root, skipped=skipped, notes=notes)
 
-    def latest_repository_session(self, repository_root: Path) -> NativeSessionAnalytics | None:
+    def latest_repository_session(
+        self,
+        repository_root: Path,
+        *,
+        session_filter: Callable[[NativeSessionAnalytics], bool] | None = None,
+    ) -> NativeSessionAnalytics | None:
         normalized_root = repository_root.expanduser().resolve()
         sessions, _, _ = self._scan_sessions(normalized_root)
+        if session_filter is not None:
+            sessions = tuple(item for item in sessions if session_filter(item))
         if not sessions:
             return None
         return sessions[0]

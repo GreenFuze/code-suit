@@ -119,6 +119,20 @@ def derived_summary_provenance(
     )
 
 
+def dependency_graph_provenance(
+    source_tool: str,
+    evidence_summary: str,
+    evidence_paths: tuple[str, ...],
+) -> ProvenanceEntry:
+    return ProvenanceEntry(
+        confidence_mode=ConfidenceMode.AUTHORITATIVE,
+        source_kind=SourceKind.DEPENDENCY_GRAPH,
+        source_tool=source_tool,
+        evidence_summary=evidence_summary,
+        evidence_paths=evidence_paths,
+    )
+
+
 def quality_tool_provenance(
     source_tool: str,
     evidence_summary: str,

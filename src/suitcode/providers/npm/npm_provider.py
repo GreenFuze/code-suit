@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import os
 import shutil
+from dataclasses import replace
 from suitcode.core.intelligence_models import ComponentDependencyEdge
+from suitcode.core.intelligence_models import FileRelationshipRef
 from suitcode.core.action_models import RepositoryAction
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
 from suitcode.core.models import (
@@ -40,11 +43,13 @@ from suitcode.providers.npm.models import (
     NpmTestAnalysis,
 )
 from suitcode.providers.npm.location_translation import NpmLocationTranslator
+from suitcode.providers.npm.file_relationship_service import NpmFileRelationshipService
 from suitcode.providers.npm.symbol_models import NpmWorkspaceSymbol
 from suitcode.providers.npm.symbol_service import NpmFileSymbolService, NpmSymbolService
 from suitcode.providers.npm.symbol_translation import NpmSymbolTranslator
 from suitcode.providers.npm.translation import NpmModelTranslator
 from suitcode.providers.npm.workspace_analyzer import NpmWorkspaceAnalyzer
+from suitcode.providers.provider_metadata import ProviderAttachmentCandidate, ProviderAttachmentContext
 from suitcode.providers.provider_roles import ProviderRole
 from suitcode.providers.shared.code_facade import CodeFacadeMixin
 from suitcode.providers.shared.component_index import ComponentIndexBuilder
@@ -87,25 +92,64 @@ class NPMProvider(
     PROGRAMMING_LANGUAGES = ("javascript", "typescript")
 
     @classmethod
-    def detect_roles(cls, repository_root: Path) -> frozenset[ProviderRole]:
+    def discover_attachments(cls, repository_root: Path) -> tuple[ProviderAttachmentCandidate, ...]:
         root = repository_root.expanduser().resolve()
-        manifest_path = root / "package.json"
-        if not manifest_path.exists():
-            return frozenset()
-
+        manifests: dict[Path, object] = {}
         loader = PackageJsonWorkspaceLoader()
-        loader.load(root)
-        return frozenset(
-            {
-                ProviderRole.ARCHITECTURE,
-                ProviderRole.CODE,
-                ProviderRole.TEST,
-                ProviderRole.QUALITY,
-            }
-        )
+        manifest_loader = loader._manifest_loader  # type: ignore[attr-defined]
+        for manifest_path in sorted(root.rglob("package.json")):
+            rel_parts = {part.lower() for part in manifest_path.relative_to(root).parts[:-1]}
+            if rel_parts.intersection({"node_modules", ".git", ".suit", "dist", "build", ".next"}):
+                continue
+            try:
+                manifest = manifest_loader.load(manifest_path)
+            except ValueError:
+                continue
+            manifests[manifest_path.parent.resolve()] = manifest
+        if not manifests:
+            return tuple()
+        attachments: list[ProviderAttachmentCandidate] = []
+        for package_root, manifest in sorted(manifests.items()):
+            if cls._covered_by_workspace(package_root, manifests):
+                continue
+            try:
+                loader.load(package_root)
+            except ValueError:
+                continue
+            attachments.append(
+                ProviderAttachmentCandidate(
+                    provider_id=cls.PROVIDER_ID,
+                    attachment_root=package_root,
+                    detected_roles=frozenset(
+                        {
+                            ProviderRole.ARCHITECTURE,
+                            ProviderRole.CODE,
+                            ProviderRole.TEST,
+                            ProviderRole.QUALITY,
+                        }
+                    ),
+                )
+            )
+        return tuple(attachments)
 
-    def __init__(self, repository: Repository) -> None:
-        super().__init__(repository)
+    @classmethod
+    def _covered_by_workspace(cls, package_root: Path, manifests: dict[Path, object]) -> bool:
+        for candidate_root, candidate_manifest in manifests.items():
+            if candidate_root == package_root:
+                continue
+            try:
+                relative = package_root.relative_to(candidate_root).as_posix()
+            except ValueError:
+                continue
+            workspaces = getattr(candidate_manifest, "workspaces", tuple())
+            if not workspaces:
+                continue
+            if any(PurePosixPath(relative).match(pattern) for pattern in workspaces):
+                return True
+        return False
+
+    def __init__(self, repository: Repository, attachment: ProviderAttachmentContext) -> None:
+        super().__init__(repository, attachment)
         self._workspace_loader = PackageJsonWorkspaceLoader()
         self._translator = NpmModelTranslator()
         self._action_translator = ProviderActionTranslator(provider_id="npm", default_test_tool="jest")
@@ -119,6 +163,7 @@ class NPMProvider(
         self._dependency_edges_cache: tuple[ComponentDependencyEdge, ...] | None = None
         self._symbol_service: NpmSymbolService | None = None
         self._file_symbol_service: NpmFileSymbolService | None = None
+        self._file_relationship_service: NpmFileRelationshipService | None = None
         self._quality_service: NpmQualityService | None = None
         self._test_execution_service: TestExecutionService | None = None
 
@@ -165,9 +210,9 @@ class NPMProvider(
 
     def get_code_runtime_capabilities(self) -> CodeRuntimeCapabilities:
         resolver = TypeScriptLanguageServerResolver()
-        local_server_available = any(candidate.exists() for candidate in resolver._local_language_server_candidates(self.repository.root))
-        local_tsserver_available = any(candidate.exists() for candidate in resolver._local_tsserver_candidates(self.repository.root))
-        if local_server_available and local_tsserver_available:
+        try:
+            resolver.resolve(self.attachment_root)
+            resolver.resolve_initialization_options(self.attachment_root)
             capability = self._runtime_capability(
                 capability_id="npm.code.lsp",
                 availability=RuntimeCapabilityAvailability.AVAILABLE,
@@ -175,14 +220,14 @@ class NPMProvider(
                 source_tool="typescript-language-server",
                 summary="repository-local TypeScript language-server tooling is available for npm code intelligence",
             )
-        else:
+        except ValueError as exc:
             capability = self._runtime_capability(
                 capability_id="npm.code.lsp",
                 availability=RuntimeCapabilityAvailability.DEGRADED,
                 source_kind=SourceKind.LSP,
                 source_tool="typescript-language-server",
-                summary="repository-local TypeScript language-server tooling is unavailable for npm code intelligence",
-                reason="typescript-language-server and/or tsserver was not found in repository-local node_modules",
+                summary="TypeScript language-server tooling is unavailable for npm code intelligence",
+                reason=str(exc),
             )
         return CodeRuntimeCapabilities(
             symbol_search=capability,
@@ -228,7 +273,7 @@ class NPMProvider(
                 source_kind=SourceKind.MANIFEST,
                 source_tool="npm",
                 summary="npm command is unavailable for deterministic npm test execution",
-                reason=f"npm executable was not found for repository `{self.repository.root}`",
+                reason=f"npm executable was not found for repository `{self.attachment_root}`",
             )
         return TestRuntimeCapabilities(discovery=discovery, execution=execution)
 
@@ -354,7 +399,7 @@ class NPMProvider(
 
     def _load_workspace(self) -> PackageJsonWorkspace:
         if self._workspace is None:
-            self._workspace = self._workspace_loader.load(self.repository.root)
+            self._workspace = self._workspace_loader.load(self.attachment_root)
         return self._workspace
 
     def _build_analyzer(self) -> NpmWorkspaceAnalyzer:
@@ -363,25 +408,25 @@ class NPMProvider(
         return self._analyzer
 
     def _get_components(self) -> tuple[NpmPackageAnalysis, ...]:
-        return self._build_analyzer().analyze_components()
+        return tuple(self._rebase_component(item) for item in self._build_analyzer().analyze_components())
 
     def _get_aggregators(self) -> tuple[NpmAggregatorAnalysis, ...]:
-        return self._build_analyzer().analyze_aggregators()
+        return tuple(self._rebase_aggregator(item) for item in self._build_analyzer().analyze_aggregators())
 
     def _get_runners(self) -> tuple[NpmRunnerAnalysis, ...]:
-        return self._build_analyzer().analyze_runners()
+        return tuple(self._rebase_runner(item) for item in self._build_analyzer().analyze_runners())
 
     def _get_tests(self) -> tuple[NpmTestAnalysis, ...]:
-        return self._build_analyzer().analyze_tests()
+        return tuple(self._rebase_test(item) for item in self._build_analyzer().analyze_tests())
 
     def _get_package_managers(self) -> tuple[NpmPackageManagerAnalysis, ...]:
-        return self._build_analyzer().analyze_package_managers()
+        return tuple(self._rebase_package_manager(item) for item in self._build_analyzer().analyze_package_managers())
 
     def _get_external_packages(self) -> tuple[NpmExternalPackageAnalysis, ...]:
-        return self._build_analyzer().analyze_external_packages()
+        return tuple(self._rebase_external_package(item) for item in self._build_analyzer().analyze_external_packages())
 
     def _get_files(self) -> tuple[NpmOwnedFileAnalysis, ...]:
-        return self._build_analyzer().analyze_files()
+        return tuple(self._rebase_file(item) for item in self._build_analyzer().analyze_files())
 
     def _get_actions(self) -> tuple[ProviderActionSpec, ...]:
         return self._action_service.discover(
@@ -399,6 +444,14 @@ class NPMProvider(
         if self._file_symbol_service is None:
             self._file_symbol_service = NpmFileSymbolService(self.repository, workspace_loader=self._workspace_loader)
         return self._file_symbol_service
+
+    def _build_file_relationship_service(self) -> NpmFileRelationshipService:
+        if self._file_relationship_service is None:
+            self._file_relationship_service = NpmFileRelationshipService(
+                repository_root=self.repository.root,
+                attachment_root=self.attachment_root,
+            )
+        return self._file_relationship_service
 
     def _get_symbols(self, query: str, is_case_sensitive: bool = False) -> tuple[NpmWorkspaceSymbol, ...]:
         return self._build_symbol_service().get_symbols(query, is_case_sensitive=is_case_sensitive)
@@ -425,7 +478,9 @@ class NPMProvider(
     def _package_root_for_file(self, repository_rel_path: str) -> str | None:
         normalized = repository_rel_path.strip().replace("\\", "/").removeprefix("./")
         for package in self._load_workspace().packages:
-            package_root = package.repository_rel_path
+            package_root = self._rebase_path(package.repository_rel_path)
+            if not package_root:
+                return package_root
             if normalized == package_root or normalized.startswith(f"{package_root}/"):
                 return package_root
         return None
@@ -453,7 +508,9 @@ class NPMProvider(
             )
             for discovered_test in discovered_tests
             if any(
-                test_file.startswith(f"{package_root}/") or test_file == package_root
+                (not package_root and bool(test_file))
+                or test_file.startswith(f"{package_root}/")
+                or test_file == package_root
                 for test_file in discovered_test.test_definition.test_files
             )
         )
@@ -568,6 +625,12 @@ class NPMProvider(
             include_definition=include_definition,
         )
 
+    def get_file_relationships(self, repository_rel_path: str) -> tuple[FileRelationshipRef, ...]:
+        try:
+            return self._build_file_relationship_service().get_file_relationships(repository_rel_path)
+        except ValueError:
+            return tuple()
+
     def _to_entity_info(self, symbol: object) -> EntityInfo:
         return self._symbol_translator.to_entity_info(symbol)
 
@@ -645,3 +708,77 @@ class NPMProvider(
     def _npm_command_available() -> bool:
         candidates = ("npm.cmd", "npm.exe", "npm") if os.name == "nt" else ("npm",)
         return any(shutil.which(candidate) is not None for candidate in candidates)
+
+    def _rebase_component(self, analysis: NpmPackageAnalysis) -> NpmPackageAnalysis:
+        return replace(
+            analysis,
+            package_path=self._rebase_path(analysis.package_path),
+            manifest_path=self._rebase_path(analysis.manifest_path),
+            source_roots=self._rebase_paths(analysis.source_roots),
+            artifact_paths=self._rebase_paths(analysis.artifact_paths),
+        )
+
+    def _rebase_aggregator(self, analysis: NpmAggregatorAnalysis) -> NpmAggregatorAnalysis:
+        return replace(
+            analysis,
+            package_path=self._rebase_path(analysis.package_path),
+            manifest_path=self._rebase_path(analysis.manifest_path),
+        )
+
+    def _rebase_runner(self, analysis: NpmRunnerAnalysis) -> NpmRunnerAnalysis:
+        return replace(
+            analysis,
+            package_path=self._rebase_path(analysis.package_path),
+            cwd=self._rebase_path(analysis.cwd),
+            referenced_files=self._rebase_paths(analysis.referenced_files),
+        )
+
+    def _rebase_test(self, analysis: NpmTestAnalysis) -> NpmTestAnalysis:
+        return replace(
+            analysis,
+            package_path=self._rebase_path(analysis.package_path),
+            test_files=self._rebase_paths(analysis.test_files),
+            evidence_paths=self._rebase_paths(analysis.evidence_paths),
+        )
+
+    def _rebase_package_manager(self, analysis: NpmPackageManagerAnalysis) -> NpmPackageManagerAnalysis:
+        return replace(
+            analysis,
+            node_id=self._rebase_manager_id(analysis.node_id),
+            config_path=self._rebase_optional_path(analysis.config_path),
+            owned_files=self._rebase_paths(analysis.owned_files),
+        )
+
+    def _rebase_external_package(self, analysis: NpmExternalPackageAnalysis) -> NpmExternalPackageAnalysis:
+        return replace(
+            analysis,
+            manager_id=self._rebase_manager_id(analysis.manager_id),
+            evidence_paths=self._rebase_paths(analysis.evidence_paths),
+        )
+
+    def _rebase_file(self, analysis: NpmOwnedFileAnalysis) -> NpmOwnedFileAnalysis:
+        return replace(analysis, repository_rel_path=self._rebase_path(analysis.repository_rel_path))
+
+    def _rebase_paths(self, values: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(self._rebase_path(item) for item in values)
+
+    def _rebase_optional_path(self, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return self._rebase_path(value)
+
+    def _rebase_manager_id(self, manager_id: str) -> str:
+        if not self.attachment_root_rel_path or self.attachment_root_rel_path == ".":
+            return manager_id
+        return f"{manager_id}:{self.attachment_root_rel_path}"
+
+    def _rebase_path(self, value: str) -> str:
+        normalized = value.replace("\\", "/").strip().removeprefix("./")
+        if normalized == ".":
+            normalized = ""
+        attachment_root_rel_path = self.attachment_root_rel_path.strip().removesuffix("/")
+        if not attachment_root_rel_path or attachment_root_rel_path == ".":
+            return normalized
+        if not normalized:
+            return attachment_root_rel_path
+        return f"{attachment_root_rel_path}/{normalized}"

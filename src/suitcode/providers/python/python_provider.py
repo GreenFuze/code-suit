@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -35,6 +36,7 @@ from suitcode.providers.python.tool_resolution import PythonQualityToolResolver
 from suitcode.providers.python.test_translation import PythonTestTranslator
 from suitcode.providers.python.translation import PythonModelTranslator
 from suitcode.providers.python.workspace_analyzer import PythonWorkspaceAnalyzer
+from suitcode.providers.provider_metadata import ProviderAttachmentCandidate, ProviderAttachmentContext
 from suitcode.providers.quality_models import QualityFileResult
 from suitcode.providers.quality_provider_base import QualityProviderBase
 from suitcode.providers.runtime_capability_models import (
@@ -76,19 +78,41 @@ class PythonProvider(
     PROGRAMMING_LANGUAGES = ('python',)
 
     @classmethod
-    def detect_roles(cls, repository_root: Path) -> frozenset[ProviderRole]:
+    def discover_attachments(cls, repository_root: Path) -> tuple[ProviderAttachmentCandidate, ...]:
         root = repository_root.expanduser().resolve()
-        manifest_path = root / 'pyproject.toml'
-        if not manifest_path.exists():
-            return frozenset()
+        attachments: list[ProviderAttachmentCandidate] = []
+        loader = PyProjectWorkspaceLoader()
+        for manifest_path in sorted(root.rglob("pyproject.toml")):
+            rel_parts = {part.lower() for part in manifest_path.relative_to(root).parts[:-1]}
+            if rel_parts.intersection({".git", ".suit", "node_modules", ".venv", "venv", "__pycache__"}):
+                continue
+            attachment_root = manifest_path.parent.resolve()
+            try:
+                manifest = loader.load(attachment_root)
+            except ValueError:
+                if attachment_root == root:
+                    raise
+                continue
+            if manifest.project is None and manifest.build_system is None:
+                continue
+            attachments.append(
+                ProviderAttachmentCandidate(
+                    provider_id=cls.PROVIDER_ID,
+                    attachment_root=attachment_root,
+                    detected_roles=frozenset(
+                        {
+                            ProviderRole.ARCHITECTURE,
+                            ProviderRole.CODE,
+                            ProviderRole.TEST,
+                            ProviderRole.QUALITY,
+                        }
+                    ),
+                )
+            )
+        return tuple(attachments)
 
-        manifest = PyProjectWorkspaceLoader().load(root)
-        if manifest.project is None and manifest.build_system is None:
-            return frozenset()
-        return frozenset({ProviderRole.ARCHITECTURE, ProviderRole.CODE, ProviderRole.TEST, ProviderRole.QUALITY})
-
-    def __init__(self, repository: Repository) -> None:
-        super().__init__(repository)
+    def __init__(self, repository: Repository, attachment: ProviderAttachmentContext) -> None:
+        super().__init__(repository, attachment)
         self._manifest_loader = PyProjectWorkspaceLoader()
         self._translator = PythonModelTranslator()
         self._action_service = PythonActionService()
@@ -193,7 +217,7 @@ class PythonProvider(
 
     def get_code_runtime_capabilities(self) -> CodeRuntimeCapabilities:
         resolver = BasedPyrightResolver()
-        if any(candidate.exists() for candidate in resolver._local_candidates(self.repository.root)):
+        if any(candidate.exists() for candidate in resolver._local_candidates(self.attachment_root)):
             capability = self._runtime_capability(
                 capability_id="python.code.lsp",
                 availability=RuntimeCapabilityAvailability.AVAILABLE,
@@ -303,7 +327,7 @@ class PythonProvider(
                 format=unavailable.model_copy(update={"capability_id": "python.quality.format"}),
             )
         resolver = PythonQualityToolResolver(self.repository)
-        if any(candidate.exists() for candidate in resolver._local_candidates(self.repository.root)):
+        if any(candidate.exists() for candidate in resolver._local_candidates(self.attachment_root)):
             available = self._runtime_capability(
                 capability_id="python.quality.lint",
                 availability=RuntimeCapabilityAvailability.AVAILABLE,
@@ -361,12 +385,12 @@ class PythonProvider(
 
     def _load_manifest(self) -> PyProjectManifest:
         if self._manifest is None:
-            self._manifest = self._manifest_loader.load(self.repository.root)
+            self._manifest = self._manifest_loader.load(self.attachment_root)
         return self._manifest
 
     def _build_analyzer(self) -> PythonWorkspaceAnalyzer:
         if self._analyzer is None:
-            self._analyzer = PythonWorkspaceAnalyzer(self.repository.root, self._load_manifest())
+            self._analyzer = PythonWorkspaceAnalyzer(self.attachment_root, self._load_manifest())
         return self._analyzer
 
     def _build_symbol_service(self) -> PythonSymbolService:
@@ -381,7 +405,7 @@ class PythonProvider(
 
     def _build_test_discoverer(self) -> PythonTestDiscoverer:
         if self._test_discoverer is None:
-            self._test_discoverer = PythonTestDiscoverer(self.repository.root, self._load_manifest())
+            self._test_discoverer = PythonTestDiscoverer(self.attachment_root, self._load_manifest())
         return self._test_discoverer
 
     def _build_quality_service(self) -> PythonQualityService:
@@ -398,7 +422,7 @@ class PythonProvider(
         return self._test_execution_service
 
     def _get_components(self) -> tuple[PythonPackageComponentAnalysis, ...]:
-        return self._build_analyzer().analyze_components()
+        return tuple(self._rebase_component(item) for item in self._build_analyzer().analyze_components())
 
     def _component_analysis_by_id(self) -> dict[str, PythonPackageComponentAnalysis]:
         if self._component_id_index is None:
@@ -446,16 +470,16 @@ class PythonProvider(
         return self._dependency_edges_cache
 
     def _get_runners(self) -> tuple[PythonRunnerAnalysis, ...]:
-        return self._build_analyzer().analyze_runners()
+        return tuple(self._rebase_runner(item) for item in self._build_analyzer().analyze_runners())
 
     def _get_package_managers(self) -> tuple[PythonPackageManagerAnalysis, ...]:
-        return self._build_analyzer().analyze_package_managers()
+        return tuple(self._rebase_package_manager(item) for item in self._build_analyzer().analyze_package_managers())
 
     def _get_external_packages(self) -> tuple[PythonExternalPackageAnalysis, ...]:
-        return self._build_analyzer().analyze_external_packages()
+        return tuple(self._rebase_external_package(item) for item in self._build_analyzer().analyze_external_packages())
 
     def _get_files(self) -> tuple[PythonOwnedFileAnalysis, ...]:
-        return self._build_analyzer().analyze_files()
+        return tuple(self._rebase_file(item) for item in self._build_analyzer().analyze_files())
 
     def _get_symbols(self, query: str, is_case_sensitive: bool = False) -> tuple[PythonWorkspaceSymbol, ...]:
         return self._build_symbol_service().get_symbols(query, is_case_sensitive=is_case_sensitive)
@@ -501,7 +525,7 @@ class PythonProvider(
         return self._location_translator.to_code_location(location, operation=operation)
 
     def _get_tests_internal(self) -> tuple[PythonTestAnalysis, ...]:
-        return self._build_test_discoverer().discover()
+        return tuple(self._rebase_test(item) for item in self._build_test_discoverer().discover())
 
     def _to_discovered_test_definition(self, test_analysis: object):
         return self._test_translator.to_discovered_test_definition(test_analysis)
@@ -532,7 +556,7 @@ class PythonProvider(
         source_tool: str | None,
         summary: str,
         reason: str | None = None,
-    ) -> RuntimeCapability:
+        ) -> RuntimeCapability:
         return RuntimeCapability(
             capability_id=capability_id,
             availability=availability,
@@ -548,3 +572,76 @@ class PythonProvider(
                 ),
             ),
         )
+
+    def _rebase_component(self, analysis: PythonPackageComponentAnalysis) -> PythonPackageComponentAnalysis:
+        return replace(
+            analysis,
+            package_path=self._rebase_path(analysis.package_path),
+            source_roots=self._rebase_paths(analysis.source_roots),
+            artifact_paths=self._rebase_paths(analysis.artifact_paths),
+        )
+
+    def _rebase_runner(self, analysis: PythonRunnerAnalysis) -> PythonRunnerAnalysis:
+        script_name = analysis.script_name
+        if self.attachment_root_rel_path not in ("", "."):
+            script_name = f"{self.attachment_root_rel_path}:{script_name}"
+        return replace(
+            analysis,
+            script_name=script_name,
+            cwd=self._rebase_optional_path(analysis.cwd),
+            referenced_files=self._rebase_paths(analysis.referenced_files),
+        )
+
+    def _rebase_package_manager(self, analysis: PythonPackageManagerAnalysis) -> PythonPackageManagerAnalysis:
+        return replace(
+            analysis,
+            node_id=self._rebase_manager_id(analysis.node_id),
+            config_path=self._rebase_optional_path(analysis.config_path),
+            owned_files=self._rebase_paths(analysis.owned_files),
+        )
+
+    def _rebase_external_package(self, analysis: PythonExternalPackageAnalysis) -> PythonExternalPackageAnalysis:
+        return replace(analysis, manager_id=self._rebase_manager_id(analysis.manager_id))
+
+    def _rebase_file(self, analysis: PythonOwnedFileAnalysis) -> PythonOwnedFileAnalysis:
+        owner_id = analysis.owner_id
+        if owner_id == "pkgmgr:python:root":
+            owner_id = self._rebase_manager_id(owner_id)
+        return replace(
+            analysis,
+            repository_rel_path=self._rebase_path(analysis.repository_rel_path),
+            owner_id=owner_id,
+        )
+
+    def _rebase_test(self, analysis: PythonTestAnalysis) -> PythonTestAnalysis:
+        test_id = analysis.test_id
+        if self.attachment_root_rel_path not in ("", "."):
+            test_id = f"{test_id}:{self.attachment_root_rel_path}"
+        return replace(
+            analysis,
+            test_id=test_id,
+            test_files=self._rebase_paths(analysis.test_files),
+            evidence_paths=self._rebase_paths(analysis.evidence_paths),
+        )
+
+    def _rebase_paths(self, values: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(self._rebase_path(item) for item in values)
+
+    def _rebase_optional_path(self, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return self._rebase_path(value)
+
+    def _rebase_manager_id(self, manager_id: str) -> str:
+        if not self.attachment_root_rel_path or self.attachment_root_rel_path == ".":
+            return manager_id
+        return f"{manager_id}:{self.attachment_root_rel_path}"
+
+    def _rebase_path(self, value: str) -> str:
+        normalized = value.replace("\\", "/").strip().removeprefix("./")
+        attachment_root_rel_path = self.attachment_root_rel_path.strip().removesuffix("/")
+        if not attachment_root_rel_path or attachment_root_rel_path == ".":
+            return normalized
+        if not normalized:
+            return attachment_root_rel_path
+        return f"{attachment_root_rel_path}/{normalized}"

@@ -8,7 +8,7 @@ from suitcode.core.code.models import CodeLocation
 from suitcode.core.code_reference_service import CodeReferenceService
 from suitcode.core.component_context_resolver import ComponentContextResolver
 from suitcode.core.context_service import ContextService
-from suitcode.core.intelligence_models import ComponentDependencyEdge
+from suitcode.core.intelligence_models import ComponentDependencyEdge, FileRelationshipKind, FileRelationshipRef
 from suitcode.core.impact_target_resolution import ImpactTargetResolver
 from suitcode.core.intelligence_models import ComponentContext
 from suitcode.core.models import Component, Runner
@@ -101,6 +101,7 @@ class ChangeImpactService:
             test_preview_limit=test_preview_limit,
         )
         dependent_components = self._dependent_components(primary_component, dependent_preview_limit)
+        dependency_files, dependent_files = self._file_relationships(resolved.evidence_path)
         related_tests = self._test_impacts(resolved.related_tests)
         if resolved.target_kind == "owner":
             related_runners = self._related_runners_for_owner(resolved.owner.id, primary_component, runner_preview_limit)
@@ -118,6 +119,8 @@ class ChangeImpactService:
             component_context=component_context,
             file_context=resolved.file_context,
             symbol_context=resolved.symbol_context,
+            dependency_files=dependency_files,
+            dependent_files=dependent_files,
             dependent_components=dependent_components,
             reference_locations=resolved.reference_locations,
             related_tests=related_tests,
@@ -130,6 +133,8 @@ class ChangeImpactService:
                 owner=resolved.owner,
                 primary_component=primary_component,
                 reference_locations=resolved.reference_locations,
+                dependency_files=dependency_files,
+                dependent_files=dependent_files,
                 dependent_components=dependent_components,
                 dependent_edges=dependent_edges,
                 related_tests=related_tests,
@@ -144,6 +149,8 @@ class ChangeImpactService:
                 component_context=component_context,
                 file_context=resolved.file_context,
                 symbol_context=resolved.symbol_context,
+                dependency_files=dependency_files,
+                dependent_files=dependent_files,
                 dependent_components=dependent_components,
                 reference_locations=resolved.reference_locations,
                 related_tests=related_tests,
@@ -152,6 +159,8 @@ class ChangeImpactService:
             ),
             provenance=self._change_provenance(
                 owner_id=resolved.owner.id,
+                dependency_files=dependency_files,
+                dependent_files=dependent_files,
                 dependent_components=dependent_components,
                 reference_locations=resolved.reference_locations,
                 related_tests=related_tests,
@@ -193,6 +202,23 @@ class ChangeImpactService:
             except KeyError as exc:
                 raise ValueError(f"dependent component id could not be resolved: `{component_id}`") from exc
         return tuple(resolved)
+
+    def _file_relationships(
+        self,
+        evidence_path: str | None,
+    ) -> tuple[tuple[FileRelationshipRef, ...], tuple[FileRelationshipRef, ...]]:
+        if evidence_path is None:
+            return tuple(), tuple()
+        return (
+            self._repository.code.get_file_relationships(
+                evidence_path,
+                relationship_kind=FileRelationshipKind.IMPORTS,
+            ),
+            self._repository.code.get_file_relationships(
+                evidence_path,
+                relationship_kind=FileRelationshipKind.IMPORTED_BY,
+            ),
+        )
 
     def _dependent_component_edges(
         self,
@@ -348,6 +374,8 @@ class ChangeImpactService:
     def _change_provenance(
         self,
         owner_id: str,
+        dependency_files: tuple[FileRelationshipRef, ...],
+        dependent_files: tuple[FileRelationshipRef, ...],
         dependent_components: tuple[Component, ...],
         reference_locations: tuple[CodeLocation, ...],
         related_tests: tuple[TestImpact, ...],
@@ -369,6 +397,18 @@ class ChangeImpactService:
                     evidence_paths=merge_provenance_paths(
                         item for component in dependent_components for item in component.provenance
                     ),
+                )
+            )
+        if dependency_files or dependent_files:
+            relationship_paths = [item.repository_rel_path for item in (*dependency_files, *dependent_files)]
+            if evidence_path is not None and evidence_path not in relationship_paths:
+                relationship_paths.insert(0, evidence_path)
+            entries.append(
+                derived_summary_provenance(
+                    source_kind=SourceKind.DEPENDENCY_GRAPH,
+                    source_tool=self._relationship_source_tool((*dependency_files, *dependent_files), evidence_path),
+                    evidence_summary="change analysis includes deterministic file relationship evidence",
+                    evidence_paths=tuple(relationship_paths[:10]),
                 )
             )
         if reference_locations:
@@ -400,3 +440,21 @@ class ChangeImpactService:
                 )
             )
         return tuple(entries)
+
+    @staticmethod
+    def _relationship_source_tool(
+        relationships: tuple[FileRelationshipRef, ...],
+        evidence_path: str | None,
+    ) -> str | None:
+        for relationship in relationships:
+            for provenance in relationship.provenance:
+                if provenance.source_tool is not None:
+                    return provenance.source_tool
+        if evidence_path is None:
+            return None
+        lowered = evidence_path.lower()
+        if lowered.endswith(".py"):
+            return "basedpyright"
+        if lowered.endswith((".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs")):
+            return "typescript"
+        return None

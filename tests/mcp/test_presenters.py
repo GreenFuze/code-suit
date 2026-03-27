@@ -7,7 +7,8 @@ from suitcode.core.runner_service import RunnerService
 from suitcode.core.workspace import Workspace
 from suitcode.core.models import EntityInfo
 from suitcode.core.code.models import CodeLocation
-from suitcode.core.provenance_builders import derived_summary_provenance, lsp_location_provenance, lsp_provenance, ownership_provenance
+from suitcode.core.intelligence_models import FileRelationshipKind, FileRelationshipRef
+from suitcode.core.provenance_builders import dependency_graph_provenance, derived_summary_provenance, lsp_location_provenance, lsp_provenance, ownership_provenance
 from suitcode.core.provenance_builders import lsp_delta_provenance, quality_tool_provenance
 from suitcode.core.provenance import SourceKind
 from suitcode.core.tests.models import RelatedTestTarget
@@ -33,7 +34,8 @@ def test_workspace_and_repository_presenters_map_core_objects(npm_repo_root) -> 
 
     assert workspace_view.workspace_id.startswith("workspace:")
     assert repository_view.repository_id.startswith("repo:")
-    assert repository_view.provider_ids == ("go", "npm")
+    assert repository_view.provider_ids == ("go", "npm", "python")
+    assert repository_view.provider_attachment_roots["python"] == ("tools/codegen",)
 
 
 def test_test_presenter_maps_provenance(npm_repo_root) -> None:
@@ -248,6 +250,20 @@ def test_change_impact_presenter_maps_composed_artifact(npm_repo_root) -> None:
         primary_component=component,
         component_context=repository.describe_components(("component:npm:@monorepo/core",))[0],
         file_context=repository.describe_files(("packages/core/src/index.ts",))[0],
+        dependency_files=tuple(),
+        dependent_files=(
+            FileRelationshipRef(
+                repository_rel_path="packages/utils/src/index.ts",
+                relationship_kind=FileRelationshipKind.IMPORTED_BY,
+                provenance=(
+                    dependency_graph_provenance(
+                        source_tool="typescript",
+                        evidence_summary="resolved import edge",
+                        evidence_paths=("packages/core/src/index.ts", "packages/utils/src/index.ts"),
+                    ),
+                ),
+            ),
+        ),
         dependent_components=(
             next(item for item in repository.arch.get_components() if item.id == "component:npm:@monorepo/utils"),
         ),
@@ -337,6 +353,8 @@ def test_change_impact_presenter_maps_composed_artifact(npm_repo_root) -> None:
     view = ChangeImpactPresenter().change_impact_view(impact)
 
     assert view.primary_component is not None
+    assert view.dependency_files == tuple()
+    assert [item.path for item in view.dependent_files] == ["packages/utils/src/index.ts"]
     assert view.related_tests[0].provenance
     assert view.related_runners[0].provenance
     assert view.quality_gates[0].provenance

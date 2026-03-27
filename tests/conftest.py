@@ -43,7 +43,7 @@ def npm_repository(npm_workspace: Workspace) -> Repository:
 
 @pytest.fixture
 def npm_provider(npm_repository: Repository) -> NPMProvider:
-    return NPMProvider(npm_repository)
+    return npm_repository.get_provider("npm")  # type: ignore[return-value]
 
 
 @pytest.fixture
@@ -71,7 +71,7 @@ def python_repository(python_workspace: Workspace) -> Repository:
 
 @pytest.fixture
 def python_provider(python_repository: Repository) -> PythonProvider:
-    return PythonProvider(python_repository)
+    return python_repository.get_provider("python")  # type: ignore[return-value]
 
 
 @pytest.fixture
@@ -99,4 +99,4 @@ def go_repository(go_workspace: Workspace) -> Repository:
 
 @pytest.fixture
 def go_provider(go_repository: Repository) -> GoProvider:
-    return GoProvider(go_repository)
+    return go_repository.get_provider("go")  # type: ignore[return-value]

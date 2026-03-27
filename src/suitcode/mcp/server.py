@@ -14,6 +14,7 @@ from suitcode.mcp.app import create_mcp_app
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="suitcode-mcp")
     parser.add_argument("--transport", choices=("stdio", "http"), default="stdio")
+    parser.add_argument("--profile", choices=("full", "core"), default="full")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--pid-file")
@@ -97,7 +98,23 @@ def main() -> None:
     args = parser.parse_args()
 
     with managed_pid_file(args.pid_file, args.replace_existing):
-        app = create_mcp_app()
+        app = create_mcp_app(profile=args.profile)
+        if args.transport == "http":
+            app.settings.host = args.host
+            app.settings.port = args.port
+            app.settings.stateless_http = True
+            app.run(transport="streamable-http")
+            return
+
+        app.run(transport="stdio")
+
+
+def main_core() -> None:
+    parser = build_arg_parser()
+    args = parser.parse_args(["--profile", "core", *os.sys.argv[1:]])
+
+    with managed_pid_file(args.pid_file, args.replace_existing):
+        app = create_mcp_app(profile="core")
         if args.transport == "http":
             app.settings.host = args.host
             app.settings.port = args.port

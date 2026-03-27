@@ -9,19 +9,6 @@ from suitcode.providers.npm.models import NpmRunnerAnalysis
 
 class NpmRunnerScriptInspector:
     _SEPARATOR_PATTERN = re.compile(r"\s*(?:&&|\|\||;)\s*")
-    _EXECUTABLES = {
-        "python",
-        "python3",
-        "node",
-        "docker",
-        "go",
-        "cargo",
-        "bash",
-        "sh",
-        "pwsh",
-        "powershell",
-        "cmd",
-    }
 
     def has_external_runner(self, package: PackageJsonWorkspacePackage) -> bool:
         return bool(self.inspect(package))
@@ -46,25 +33,29 @@ class NpmRunnerScriptInspector:
         script_name: str,
         command: str,
     ) -> NpmRunnerAnalysis | None:
+        normalized_command = command.strip()
+        if not normalized_command:
+            return None
+        referenced_files = self._referenced_files(package_dir, normalized_command)
+        return NpmRunnerAnalysis(
+            package_name=package_name,
+            package_path=package_path,
+            script_name=script_name,
+            command=command,
+            executable="npm",
+            argv=("npm", "run", script_name),
+            cwd=package_path,
+            referenced_files=referenced_files,
+        )
+
+    def _tokenized_segments(self, command: str) -> tuple[list[str], ...]:
+        segments: list[list[str]] = []
         for segment in self._SEPARATOR_PATTERN.split(command):
             tokens = self._tokenize(segment)
             if not tokens:
                 continue
-            executable = tokens[0]
-            if not self._is_external_executable(executable):
-                continue
-            referenced_files = self._referenced_files(package_dir, tokens[1:])
-            return NpmRunnerAnalysis(
-                package_name=package_name,
-                package_path=package_path,
-                script_name=script_name,
-                command=command,
-                executable=executable,
-                argv=tuple(tokens),
-                cwd=package_path,
-                referenced_files=referenced_files,
-            )
-        return None
+            segments.append(tokens)
+        return tuple(segments)
 
     def _tokenize(self, command: str) -> list[str]:
         try:
@@ -72,15 +63,17 @@ class NpmRunnerScriptInspector:
         except ValueError:
             return command.strip().split()
 
-    def _is_external_executable(self, executable: str) -> bool:
-        return executable in self._EXECUTABLES or executable.startswith(("./", ".\\"))
-
-    def _referenced_files(self, package_dir, args: list[str]) -> tuple[str, ...]:
-        found = []
-        for arg in args:
-            if arg.startswith("-"):
-                continue
-            candidate = (package_dir / arg).resolve()
-            if candidate.exists() and candidate.is_file():
-                found.append(candidate)
-        return tuple(str(path) for path in found)
+    def _referenced_files(self, package_dir, command: str) -> tuple[str, ...]:
+        found: list[str] = []
+        seen: set[str] = set()
+        for tokens in self._tokenized_segments(command):
+            for arg in tokens[1:]:
+                if arg.startswith("-"):
+                    continue
+                candidate = (package_dir / arg).resolve()
+                if candidate.exists() and candidate.is_file():
+                    resolved = str(candidate)
+                    if resolved not in seen:
+                        seen.add(resolved)
+                        found.append(resolved)
+        return tuple(found)

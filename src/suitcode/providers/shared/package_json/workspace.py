@@ -4,7 +4,7 @@ from pathlib import Path
 
 from suitcode.providers.shared.package_json.discoverer import PackageJsonWorkspaceDiscoverer
 from suitcode.providers.shared.package_json.loader import PackageJsonLoader
-from suitcode.providers.shared.package_json.models import PackageJsonWorkspace
+from suitcode.providers.shared.package_json.models import PackageJsonWorkspace, PackageJsonWorkspacePackage
 
 
 class PackageJsonWorkspaceLoader:
@@ -19,7 +19,16 @@ class PackageJsonWorkspaceLoader:
     def load(self, repository_root: Path) -> PackageJsonWorkspace:
         root = repository_root.expanduser().resolve()
         root_manifest = self._manifest_loader.load(root / "package.json")
-        packages = self._discoverer.discover(root, root_manifest)
+        if root_manifest.workspaces:
+            packages = self._discoverer.discover(root, root_manifest)
+        else:
+            packages = (
+                PackageJsonWorkspacePackage(
+                    repository_root=root,
+                    package_dir=root,
+                    manifest=root_manifest,
+                ),
+            )
         return PackageJsonWorkspace(
             repository_root=root,
             root_manifest=root_manifest,

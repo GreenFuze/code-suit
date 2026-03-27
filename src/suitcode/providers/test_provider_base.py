@@ -12,6 +12,7 @@ from suitcode.core.tests.models import (
     TestTargetDescription,
 )
 from suitcode.providers.provider_base import ProviderBase
+from suitcode.providers.provider_metadata import ProviderAttachmentContext
 from suitcode.providers.runtime_capability_models import TestRuntimeCapabilities
 
 if TYPE_CHECKING:
@@ -19,8 +20,8 @@ if TYPE_CHECKING:
 
 
 class TestProviderBase(ProviderBase, ABC):
-    def __init__(self, repository: Repository) -> None:
-        super().__init__(repository)
+    def __init__(self, repository: Repository, attachment: ProviderAttachmentContext) -> None:
+        super().__init__(repository, attachment)
 
     @abstractmethod
     def get_tests(self) -> tuple[TestDefinition, ...]:

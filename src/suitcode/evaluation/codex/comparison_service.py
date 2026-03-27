@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
 from statistics import median
@@ -8,13 +8,22 @@ import tomllib
 from uuid import uuid4
 from typing import Any
 
+from suitcode.analytics.aggregation import AnalyticsAggregator
+from suitcode.analytics.claude_analytics_service import ClaudeAnalyticsService
+from suitcode.analytics.claude_session_store import ClaudeSessionStore
+from suitcode.analytics.claude_transcript_capture import ClaudeTranscriptCaptureBuilder
 from suitcode.analytics.codex_analytics_service import CodexAnalyticsService
 from suitcode.analytics.codex_session_store import CodexSessionStore
 from suitcode.analytics.codex_transcript_capture import CodexTranscriptCaptureBuilder
 from suitcode.analytics.correlation import AnalyticsCorrelationService
+from suitcode.analytics.cursor_analytics_service import CursorAnalyticsService
+from suitcode.analytics.cursor_session_store import CursorSessionStore
+from suitcode.analytics.cursor_transcript_capture import CursorTranscriptCaptureBuilder
+from suitcode.analytics.live_usage_filters import event_matches_live_filters, session_matches_live_filters
 from suitcode.analytics.settings import AnalyticsSettings
 from suitcode.analytics.storage import JsonlAnalyticsStore
 from suitcode.analytics.transcript_token_estimation import TranscriptTokenEstimator
+from suitcode.evaluation.metadata_models import AgentKind
 from suitcode.core.action_models import ActionKind
 from suitcode.core.workspace import Workspace
 from suitcode.evaluation.codex.figure_generation import CodexComparisonFigureBuilder
@@ -48,6 +57,7 @@ from suitcode.evaluation.protocol_models import (
     TaskTaxonomy,
 )
 from suitcode.evaluation.reporting import CodexComparisonReporter
+from suitcode.mcp.descriptions import TOOL_DESCRIPTIONS
 
 
 class CodexComparisonService:
@@ -64,17 +74,41 @@ class CodexComparisonService:
         self._comparison_reporter = comparison_reporter or CodexComparisonReporter(
             self._working_directory / ".suit" / "evaluation" / "codex" / "comparisons"
         )
+        settings = AnalyticsSettings.from_env()
+        analytics_store = JsonlAnalyticsStore(settings)
+        correlation = AnalyticsCorrelationService(analytics_store)
+        token_estimator = TranscriptTokenEstimator()
         if analytics_service is None:
-            settings = AnalyticsSettings.from_env()
-            store = CodexSessionStore()
-            correlation = AnalyticsCorrelationService(JsonlAnalyticsStore(settings))
             analytics_service = CodexAnalyticsService(
-                store,
+                CodexSessionStore(),
                 correlation_service=correlation,
                 capture_builder=CodexTranscriptCaptureBuilder(),
-                token_estimator=TranscriptTokenEstimator(),
+                token_estimator=token_estimator,
             )
         self._analytics_service = analytics_service
+        self._claude_analytics_service = ClaudeAnalyticsService(
+            ClaudeSessionStore(),
+            correlation_service=correlation,
+            capture_builder=ClaudeTranscriptCaptureBuilder(),
+            token_estimator=token_estimator,
+        )
+        cursor_store = CursorSessionStore()
+        self._cursor_analytics_service = CursorAnalyticsService(
+            cursor_store,
+            correlation_service=correlation,
+            capture_builder=CursorTranscriptCaptureBuilder(cursor_store),
+            token_estimator=token_estimator,
+        )
+        self._mcp_aggregator = AnalyticsAggregator(
+            analytics_store,
+            tool_catalog=tuple(sorted(TOOL_DESCRIPTIONS)),
+            excluded_tools=(
+                "get_analytics_summary",
+                "get_tool_usage_analytics",
+                "get_inefficient_tool_calls",
+                "get_mcp_benchmark_report",
+            ),
+        )
 
     def load_spec(self, spec_path: Path) -> CodexStandoutComparisonSpec:
         resolved = spec_path.expanduser().resolve()
@@ -205,6 +239,13 @@ class CodexComparisonService:
         if spec.include_passive_usage_summary:
             passive_root = (self._working_directory / spec.passive_repository_root).expanduser().resolve()
             passive_summary = self._analytics_service.repository_summary(passive_root).model_dump(mode="json")
+        agent_experience_summary = None
+        if spec.include_agent_experience_summary and spec.agent_experience_repository_root is not None:
+            agent_root = (self._working_directory / spec.agent_experience_repository_root).expanduser().resolve()
+            agent_experience_summary = self._agent_experience_summary(
+                repository_root=agent_root,
+                days=spec.agent_experience_days,
+            )
 
         report = self._build_report(
             report_id=comparison_id,
@@ -224,6 +265,7 @@ class CodexComparisonService:
             stress_report=stress_report,
             stress_baseline=stress_baseline,
             passive_summary=passive_summary,
+            agent_experience_summary=agent_experience_summary,
             stable_timeout_seconds=stable_timeout_seconds or spec.stable_timeout_seconds,
             stress_timeout_seconds=stress_timeout_seconds or spec.stress_timeout_seconds,
             full_auto=readonly_full_auto,
@@ -312,6 +354,13 @@ class CodexComparisonService:
         if spec.include_passive_usage_summary:
             passive_root = (self._working_directory / spec.passive_repository_root).expanduser().resolve()
             passive_summary = self._analytics_service.repository_summary(passive_root).model_dump(mode="json")
+        agent_experience_summary = None
+        if spec.include_agent_experience_summary and spec.agent_experience_repository_root is not None:
+            agent_root = (self._working_directory / spec.agent_experience_repository_root).expanduser().resolve()
+            agent_experience_summary = self._agent_experience_summary(
+                repository_root=agent_root,
+                days=spec.agent_experience_days,
+            )
         report = self._build_report(
             report_id=report_id,
             generated_at_utc=str(existing_report_payload.get("generated_at_utc", datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z"))),
@@ -330,6 +379,7 @@ class CodexComparisonService:
             stress_report=stress_report,
             stress_baseline=stress_baseline,
             passive_summary=passive_summary,
+            agent_experience_summary=agent_experience_summary,
             stable_timeout_seconds=inputs.get("stable_timeout_seconds") or spec.stable_timeout_seconds,
             stress_timeout_seconds=inputs.get("stress_timeout_seconds") or spec.stress_timeout_seconds,
             full_auto=False,
@@ -375,6 +425,7 @@ class CodexComparisonService:
         stress_report: CodexEvaluationReport | None,
         stress_baseline: CodexEvaluationReport | None,
         passive_summary: dict[str, object] | None,
+        agent_experience_summary: dict[str, object] | None,
         stable_timeout_seconds: int | None,
         stress_timeout_seconds: int | None,
         full_auto: bool,
@@ -502,6 +553,7 @@ class CodexComparisonService:
             stress_summary=(self._summary_payload(stress_report) if stress_report is not None else None),
             stress_baseline_summary=(self._summary_payload(stress_baseline) if stress_baseline is not None else None),
             passive_usage_summary=passive_summary,
+            agent_experience_summary=agent_experience_summary,
             headline_efficiency=headline_efficiency,
             provenance_coverage=provenance_coverage,
             terminology=self._terminology(),
@@ -594,6 +646,168 @@ class CodexComparisonService:
             "failure_kind_mix": report.failure_kind_mix,
             "correlation_quality_mix": report.correlation_quality_mix,
         }
+
+    def _agent_experience_summary(self, *, repository_root: Path, days: int) -> dict[str, object]:
+        now = datetime.now(UTC)
+        cutoff = now.replace(microsecond=0) - timedelta(days=days)
+        session_filter = lambda item: session_matches_live_filters(
+            item,
+            cutoff=cutoff,
+            exclude_test_artifacts=True,
+        )
+        event_filter = lambda item: event_matches_live_filters(
+            item,
+            cutoff=cutoff,
+            exclude_test_artifacts=True,
+            exclude_benchmark_events=True,
+        )
+        agents = {
+            AgentKind.CODEX.value: self._summarize_native_agent(
+                agent_kind=AgentKind.CODEX.value,
+                repository_root=repository_root,
+                session_filter=session_filter,
+            ),
+            AgentKind.CLAUDE.value: self._summarize_native_agent(
+                agent_kind=AgentKind.CLAUDE.value,
+                repository_root=repository_root,
+                session_filter=session_filter,
+            ),
+            AgentKind.CURSOR.value: self._summarize_native_agent(
+                agent_kind=AgentKind.CURSOR.value,
+                repository_root=repository_root,
+                session_filter=session_filter,
+            ),
+        }
+        mcp_summary = self._mcp_aggregator.summary(
+            repository_root=repository_root,
+            include_global=False,
+            event_filter=event_filter,
+        ).model_dump(mode="json")
+        mcp_tool_usage = self._mcp_aggregator.tool_usage(
+            repository_root=repository_root,
+            include_global=False,
+            event_filter=event_filter,
+        )
+        mcp_events = self._mcp_aggregator.load_events(
+            repository_root=repository_root,
+            include_global=False,
+            event_filter=event_filter,
+        )
+        return {
+            "repository_root": str(repository_root),
+            "window_days": days,
+            "window_start_utc": cutoff.isoformat().replace("+00:00", "Z"),
+            "window_end_utc": now.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "filter_policy": {
+                "exclude_test_artifacts": True,
+                "exclude_benchmark_events": True,
+                "include_global_mcp_stream": False,
+                "native_session_cutoff_basis": "artifact.last_event_at",
+            },
+            "mcp_analytics": {
+                **mcp_summary,
+                "top_tool_usage": tuple(
+                    {
+                        "tool_name": item.tool_name,
+                        "total_calls": item.total_calls,
+                        "success_calls": item.success_calls,
+                        "error_calls": item.error_calls,
+                        "estimated_tokens": item.estimated_tokens,
+                        "estimated_tokens_saved": item.estimated_tokens_saved,
+                        "p95_duration_ms": item.p95_duration_ms,
+                    }
+                    for item in mcp_tool_usage[:5]
+                ),
+                "error_breakdown": self._live_error_breakdown(mcp_events),
+            },
+            "agents": agents,
+            "notes": (
+                "Native agent summaries are filtered by latest artifact activity within the window.",
+                "Codex native sessions can still contain older conversation history if a long-lived session remained active during the window.",
+                "Cursor per-tool ordering remains best-effort when native transcripts omit explicit tool events.",
+            ),
+        }
+
+    @staticmethod
+    def _live_error_breakdown(events: tuple[Any, ...]) -> tuple[dict[str, object], ...]:
+        grouped: dict[tuple[str, str, str], dict[str, object]] = {}
+        for event in events:
+            if getattr(event, "status", None).value != "error":
+                continue
+            tool_name = str(getattr(event, "tool_name", "") or "-")
+            error_class = str(getattr(event, "error_class", "") or "UnknownError")
+            error_message = str(getattr(event, "error_message", "") or "-")
+            key = (tool_name, error_class, error_message)
+            current = grouped.get(key)
+            if current is None:
+                grouped[key] = {
+                    "tool_name": tool_name,
+                    "error_class": error_class,
+                    "error_message": error_message,
+                    "count": 1,
+                }
+            else:
+                current["count"] = int(current["count"]) + 1
+        ordered = sorted(
+            grouped.values(),
+            key=lambda item: (-int(item["count"]), str(item["tool_name"]), str(item["error_class"]), str(item["error_message"])),
+        )
+        return tuple(ordered[:10])
+
+    def _summarize_native_agent(
+        self,
+        *,
+        agent_kind: str,
+        repository_root: Path,
+        session_filter,
+    ) -> dict[str, object]:
+        if agent_kind == AgentKind.CODEX.value:
+            summary = self._analytics_service.repository_summary(repository_root, session_filter=session_filter)
+        elif agent_kind == AgentKind.CLAUDE.value:
+            summary = self._claude_analytics_service.repository_summary(repository_root, session_filter=session_filter)
+        elif agent_kind == AgentKind.CURSOR.value:
+            summary = self._cursor_analytics_service.repository_summary(repository_root, session_filter=session_filter)
+        else:
+            raise ValueError(f"unsupported agent_kind: `{agent_kind}`")
+        payload = summary.model_dump(mode="json")
+        payload["top_tools"] = tuple(
+            {
+                "tool_name": item["tool_name"],
+                "call_count": item["call_count"],
+            }
+            for item in payload.get("tool_usage", [])[:5]
+        )
+        notes = list(payload.get("notes", []))
+        transcript_metrics = payload.get("transcript_metrics", {})
+        if (
+            isinstance(transcript_metrics, dict)
+            and int(transcript_metrics.get("suitcode_tool_call_count") or 0) == 0
+            and int(payload.get("sessions_using_suitcode") or 0) > 0
+        ):
+            notes.append(
+                "Per-tool usage was synthesized from correlated MCP events because native transcripts did not expose explicit SuitCode tool calls."
+            )
+        payload["notes"] = tuple(dict.fromkeys(str(item).strip() for item in notes if str(item).strip()))
+        payload["adoption_label"] = self._adoption_label(payload)
+        return payload
+
+    @staticmethod
+    def _adoption_label(summary: dict[str, Any]) -> str:
+        session_count = int(summary.get("session_count") or 0)
+        sessions_using = int(summary.get("sessions_using_suitcode") or 0)
+        first_index = summary.get("avg_first_suitcode_tool_index")
+        tokens_before = summary.get("avg_tokens_before_first_suitcode_tool")
+        if session_count <= 0:
+            return "no_observed_sessions"
+        if sessions_using <= 0:
+            return "no_observed_suitcode_usage"
+        if first_index is not None and float(first_index) > 10.0:
+            return "late_adoption"
+        if tokens_before is not None and float(tokens_before) > 10000.0:
+            return "late_adoption"
+        if sessions_using < session_count:
+            return "partial_adoption"
+        return "healthy_adoption"
 
     @staticmethod
     def _metric_groups(
@@ -2385,12 +2599,285 @@ class CodexComparisonService:
             self._append_markdown_table(lines, headers=("Metric", "Value"), rows=rows)
 
         notes = summary.get("notes")
-        if isinstance(notes, list) and notes:
+        if isinstance(notes, (list, tuple)) and notes:
             lines.append("### Notes")
             lines.append("")
             for item in notes:
                 lines.append(f"- {self._format_markdown_value(item)}")
             lines.append("")
+
+    def _append_historical_passive_usage_summary(self, lines: list[str], summary: dict[str, object]) -> None:
+        lines.append("## Historical Codex Passive Analytics")
+        lines.append("")
+        lines.append(
+            "This is a compact historical Codex-only appendix for the `suit-code` repository. It is supporting context only: "
+            "not part of the controlled A/B benchmark and not part of the live multi-agent `MyGamesAnywhere` analysis."
+        )
+        lines.append("")
+        self._append_markdown_table(
+            lines,
+            headers=("Metric", "Value"),
+            rows=(
+                ("Repository root", self._summary_number(summary, "repository_root")),
+                ("Observed sessions", self._summary_number(summary, "session_count")),
+                ("Sessions using SuitCode", self._summary_number(summary, "sessions_using_suitcode")),
+                ("Sessions without SuitCode", self._summary_number(summary, "sessions_without_suitcode")),
+                ("Average first SuitCode tool index", self._summary_number(summary, "avg_first_suitcode_tool_index")),
+                (
+                    "Average tokens before first SuitCode tool",
+                    self._summary_number(summary, "avg_tokens_before_first_suitcode_tool"),
+                ),
+                ("Latest session id", self._summary_number(summary, "latest_session_id")),
+                ("Latest session time", self._summary_number(summary, "latest_session_at")),
+            ),
+        )
+        lines.append("")
+        tool_usage_rows = []
+        for item in self._summary_sequence(summary, "tool_usage")[:5]:
+            tool_usage_rows.append(
+                (
+                    self._format_markdown_value(item.get("tool_name")),
+                    self._format_markdown_value(item.get("call_count")),
+                )
+            )
+        if tool_usage_rows:
+            lines.append("### Top Historical Tools")
+            lines.append("")
+            self._append_markdown_table(
+                lines,
+                headers=("Tool", "Calls"),
+                rows=tuple(tool_usage_rows),
+            )
+            lines.append("")
+        notes = summary.get("notes")
+        if isinstance(notes, (list, tuple)) and notes:
+            lines.append("### Historical Notes")
+            lines.append("")
+            for item in notes[:5]:
+                lines.append(f"- {self._format_markdown_value(item)}")
+            lines.append("")
+
+    def _append_agent_experience_section(self, lines: list[str], summary: dict[str, object]) -> None:
+        lines.append("## Live Multi-Agent Experience")
+        lines.append("")
+        lines.append(
+            "These sections are generated from filtered live analytics rather than benchmark runs. They summarize how "
+            "Codex, Claude Code, and Cursor used SuitCode on a real repository within the configured window."
+        )
+        lines.append("")
+        lines.append("Interpretation rules:")
+        lines.append("")
+        lines.append("- `Live MCP Event Summary` is repository-level and combines all live SuitCode MCP calls on the repository in the filtered window.")
+        lines.append("- Per-agent sections are built from native agent transcripts plus correlated SuitCode MCP analytics when available.")
+        lines.append("- Per-agent token rows refer to native transcript-estimated tokens before the first SuitCode tool in that agent's own session, not to repository-wide MCP savings.")
+        lines.append("")
+        self._append_markdown_table(
+            lines,
+            headers=("Metric", "Value"),
+            rows=(
+                ("Repository root", self._summary_number(summary, "repository_root")),
+                ("Window days", self._summary_number(summary, "window_days")),
+                ("Window start", self._summary_number(summary, "window_start_utc")),
+                ("Window end", self._summary_number(summary, "window_end_utc")),
+            ),
+        )
+        lines.append("")
+
+        agents = summary.get("agents")
+        if isinstance(agents, dict):
+            lines.append("### Agent Attribution Summary")
+            lines.append("")
+            self._append_markdown_table(
+                lines,
+                headers=("Agent", "Observed SuitCode usage", "First observed tool", "Per-agent token metric", "Main issue"),
+                rows=tuple(
+                    (
+                        agent_kind.capitalize(),
+                        self._agent_usage_phrase(agent_summary),
+                        self._agent_first_tool_phrase(agent_summary),
+                        self._agent_token_phrase(agent_summary),
+                        self._agent_issue_phrase(agent_summary),
+                    )
+                    for agent_kind in (AgentKind.CODEX.value, AgentKind.CLAUDE.value, AgentKind.CURSOR.value)
+                    if isinstance((agent_summary := agents.get(agent_kind)), dict)
+                ),
+            )
+            lines.append("")
+
+        mcp_summary = self._summary_mapping(summary, "mcp_analytics")
+        if mcp_summary:
+            lines.append("### Live MCP Event Summary")
+            lines.append("")
+            self._append_markdown_table(
+                lines,
+                headers=("Metric", "Value"),
+                rows=(
+                    ("Total live calls", self._format_markdown_value(mcp_summary.get("total_calls"))),
+                    ("Successful live calls", self._format_markdown_value(mcp_summary.get("success_calls"))),
+                    ("Errored live calls", self._format_markdown_value(mcp_summary.get("error_calls"))),
+                    ("Estimated tokens", self._format_markdown_value(mcp_summary.get("estimated_tokens"))),
+                    ("Estimated tokens saved", self._format_markdown_value(mcp_summary.get("estimated_tokens_saved"))),
+                ),
+            )
+            top_usage = mcp_summary.get("top_tool_usage")
+            if isinstance(top_usage, (list, tuple)) and top_usage:
+                lines.append("")
+                lines.append("#### Most-Used Tools")
+                lines.append("")
+                self._append_markdown_table(
+                    lines,
+                    headers=("Tool", "Calls", "Success", "Error", "Estimated Tokens Saved", "P95 Duration (ms)"),
+                    rows=tuple(
+                        (
+                            self._format_markdown_value(item.get("tool_name")),
+                            self._format_markdown_value(item.get("total_calls")),
+                            self._format_markdown_value(item.get("success_calls")),
+                            self._format_markdown_value(item.get("error_calls")),
+                            self._format_markdown_value(item.get("estimated_tokens_saved")),
+                            self._format_markdown_value(item.get("p95_duration_ms")),
+                        )
+                        for item in top_usage
+                    ),
+                )
+            error_breakdown = mcp_summary.get("error_breakdown")
+            if isinstance(error_breakdown, (list, tuple)) and error_breakdown:
+                lines.append("")
+                lines.append("#### Error Breakdown")
+                lines.append("")
+                self._append_markdown_table(
+                    lines,
+                    headers=("Tool", "Error Class", "Count", "Representative Error"),
+                    rows=tuple(
+                        (
+                            self._format_markdown_value(item.get("tool_name")),
+                            self._format_markdown_value(item.get("error_class")),
+                            self._format_markdown_value(item.get("count")),
+                            self._format_markdown_value(item.get("error_message")),
+                        )
+                        for item in error_breakdown
+                    ),
+                )
+            lines.append("")
+
+        if isinstance(agents, dict):
+            for agent_kind in (AgentKind.CODEX.value, AgentKind.CLAUDE.value, AgentKind.CURSOR.value):
+                agent_summary = agents.get(agent_kind)
+                if not isinstance(agent_summary, dict):
+                    continue
+                lines.append(f"### {agent_kind.capitalize()} Live Usage")
+                lines.append("")
+                self._append_markdown_table(
+                    lines,
+                    headers=("Metric", "Value"),
+                    rows=(
+                        ("Observed SuitCode usage", self._agent_usage_phrase(agent_summary)),
+                        ("Evidence source", self._agent_evidence_phrase(agent_summary)),
+                        ("First observed SuitCode tool", self._agent_first_tool_phrase(agent_summary)),
+                        ("Adoption label", self._format_markdown_value(agent_summary.get("adoption_label"))),
+                        ("Average first SuitCode tool index", self._format_markdown_value(agent_summary.get("avg_first_suitcode_tool_index"))),
+                        (
+                            "Per-agent token metric",
+                            self._agent_token_phrase(agent_summary),
+                        ),
+                        ("Main issue", self._agent_issue_phrase(agent_summary)),
+                    ),
+                )
+                first_distribution = self._summary_mapping(agent_summary, "first_tool_distribution")
+                if first_distribution:
+                    lines.append("")
+                    lines.append("#### First Tool Distribution")
+                    lines.append("")
+                    self._append_markdown_table(
+                        lines,
+                        headers=("First SuitCode tool", "Observed sessions"),
+                        rows=tuple(
+                            (tool_name, self._format_markdown_value(count))
+                            for tool_name, count in sorted(first_distribution.items(), key=lambda item: (-int(item[1]), item[0]))
+                        ),
+                    )
+                top_tools = agent_summary.get("top_tools")
+                if isinstance(top_tools, (list, tuple)) and top_tools:
+                    lines.append("")
+                    lines.append("#### Top Tools")
+                    lines.append("")
+                    self._append_markdown_table(
+                        lines,
+                        headers=("Tool", "Calls"),
+                        rows=tuple(
+                            (
+                                self._format_markdown_value(item.get("tool_name")),
+                                self._format_markdown_value(item.get("call_count")),
+                            )
+                            for item in top_tools
+                        ),
+                    )
+                notes = agent_summary.get("notes")
+                if isinstance(notes, (list, tuple)) and notes:
+                    lines.append("")
+                    for item in notes:
+                        lines.append(f"- {self._format_markdown_value(item)}")
+                lines.append("")
+
+        notes = summary.get("notes")
+        if isinstance(notes, (list, tuple)) and notes:
+            lines.append("### Live Analytics Notes")
+            lines.append("")
+            for item in notes:
+                lines.append(f"- {self._format_markdown_value(item)}")
+            lines.append("")
+
+    @staticmethod
+    def _agent_usage_phrase(agent_summary: dict[str, object]) -> str:
+        session_count = int(agent_summary.get("session_count") or 0)
+        sessions_using = int(agent_summary.get("sessions_using_suitcode") or 0)
+        if session_count <= 0:
+            return "no observed live sessions"
+        if sessions_using <= 0:
+            return "no observed SuitCode usage"
+        return f"{sessions_using}/{session_count} observed sessions used SuitCode"
+
+    @staticmethod
+    def _agent_first_tool_phrase(agent_summary: dict[str, object]) -> str:
+        distribution = agent_summary.get("first_tool_distribution")
+        if not isinstance(distribution, dict) or not distribution:
+            return "-"
+        tool_name, count = max(
+            ((str(tool), int(value)) for tool, value in distribution.items()),
+            key=lambda item: (item[1], item[0]),
+        )
+        return f"{tool_name} ({count})"
+
+    @staticmethod
+    def _agent_token_phrase(agent_summary: dict[str, object]) -> str:
+        tokens = agent_summary.get("avg_tokens_before_first_suitcode_tool")
+        if tokens is None:
+            return "unavailable or not reliable in current artifacts"
+        return f"{tokens} transcript-estimated tokens before first SuitCode tool"
+
+    @staticmethod
+    def _agent_evidence_phrase(agent_summary: dict[str, object]) -> str:
+        notes = agent_summary.get("notes")
+        note_text = " ".join(str(item) for item in notes) if isinstance(notes, (list, tuple)) else ""
+        if "synthesized from correlated MCP events" in note_text:
+            return "native transcript plus correlated MCP events"
+        return "native transcript analytics"
+
+    @staticmethod
+    def _agent_issue_phrase(agent_summary: dict[str, object]) -> str:
+        adoption_label = str(agent_summary.get("adoption_label") or "-")
+        if adoption_label == "no_observed_sessions":
+            return "no live usage available in the current filtered window"
+        if adoption_label == "no_observed_suitcode_usage":
+            return "SuitCode was not observed in the filtered live window"
+        if adoption_label == "late_adoption":
+            return "SuitCode appears late in the trajectory"
+        if adoption_label == "partial_adoption":
+            notes = agent_summary.get("notes")
+            note_text = " ".join(str(item) for item in notes) if isinstance(notes, (list, tuple)) else ""
+            if "synthesized from correlated MCP events" in note_text:
+                return "partial adoption and native tool visibility is incomplete"
+            return "partial adoption across observed sessions"
+        return "no dominant issue observed"
 
     def _markdown_report(self, report: CodexStandoutReport) -> str:
         comparison_dir_name = self._comparison_reporter.report_directory_name(report)
@@ -2402,6 +2889,23 @@ class CodexComparisonService:
         lines.append(f"- Model: `{report.model or 'default'}`")
         lines.append("- Report role: `canonical reviewer-facing report`")
         lines.append("- Reader guidance: This markdown is self-contained. Supporting files under `docs/evaluation/` and `scripts/EVALUATION.md` are internal protocol/operator references and are not required to interpret the benchmark result.")
+        lines.append("")
+        lines.append("## Table of Contents")
+        lines.append("")
+        lines.append("- [Chapter 1. Controlled A/B Benchmark (Codex Only)](#chapter-1-controlled-ab-benchmark-codex-only)")
+        lines.append("- [Benchmark Figures](#benchmark-figures)")
+        lines.append("- [Chapter 2. Live Usage Analytics](#chapter-2-live-usage-analytics)")
+        lines.append("- [Live Multi-Agent Experience](#live-multi-agent-experience)")
+        lines.append("- [Live Analytics Figures](#live-analytics-figures)")
+        lines.append("- [Chapter 3. Detailed Benchmark Results and Appendices](#chapter-3-detailed-benchmark-results-and-appendices)")
+        lines.append("- [Historical Codex Passive Analytics](#historical-codex-passive-analytics)")
+        lines.append("- [Chapter 4. Methodology and Reproducibility](#chapter-4-methodology-and-reproducibility)")
+        lines.append("")
+        lines.append("## Chapter 1. Controlled A/B Benchmark (Codex Only)")
+        lines.append("")
+        lines.append(
+            "This chapter contains the controlled Codex-only benchmark: prompt-neutral A/B evaluation, deterministic scoring, and benchmark-backed figures."
+        )
         lines.append("")
         lines.append("## Evaluation Scope and Status")
         lines.append("")
@@ -2681,22 +3185,65 @@ class CodexComparisonService:
         )
         lines.append("")
         if report.figures:
-            lines.append("## Figures")
-            lines.append("")
-            lines.append("All figures below are generated from the comparison artifacts. The plotted values are exported alongside them under `figures/data/*.csv`.")
-            lines.append("")
-            main_figures = tuple(item for item in report.figures if item.section.value == 'main')
-            supporting_figures = tuple(item for item in report.figures if item.section.value == 'supporting')
-            if main_figures:
-                lines.append("### Main Figures")
+            benchmark_figures = tuple(
+                item for item in report.figures if item.source_scope not in {"agent_experience", "passive_usage"}
+            )
+            analytics_figures = tuple(
+                item for item in report.figures if item.source_scope in {"agent_experience", "passive_usage"}
+            )
+            if benchmark_figures:
+                lines.append("## Benchmark Figures")
                 lines.append("")
-                for figure in main_figures:
-                    self._append_figure_block(lines, figure)
-            if supporting_figures:
-                lines.append("### Supporting Figures")
+                lines.append("These figures are generated from the controlled Codex comparison artifacts. The plotted values are exported alongside them under `figures/data/*.csv`.")
                 lines.append("")
-                for figure in supporting_figures:
-                    self._append_figure_block(lines, figure)
+                main_figures = tuple(item for item in benchmark_figures if item.section.value == 'main')
+                supporting_figures = tuple(item for item in benchmark_figures if item.section.value == 'supporting')
+                if main_figures:
+                    lines.append("### Main Benchmark Figures")
+                    lines.append("")
+                    for figure in main_figures:
+                        self._append_figure_block(lines, figure)
+                if supporting_figures:
+                    lines.append("### Supporting Benchmark Figures")
+                    lines.append("")
+                    for figure in supporting_figures:
+                        self._append_figure_block(lines, figure)
+        if report.agent_experience_summary is not None:
+            lines.append("## Chapter 2. Live Usage Analytics")
+            lines.append("")
+            lines.append(
+                "This chapter is separate from the controlled benchmark. It reports filtered live SuitCode usage on real repositories across Codex, Claude Code, and Cursor."
+            )
+            lines.append("")
+            if report.agent_experience_summary is not None:
+                self._append_agent_experience_section(lines, report.agent_experience_summary)
+            if report.figures:
+                analytics_figures = tuple(
+                    item for item in report.figures if item.source_scope == "agent_experience"
+                )
+                if analytics_figures:
+                    lines.append("## Live Analytics Figures")
+                    lines.append("")
+                    lines.append("These figures are generated from filtered live analytics rather than benchmark tasks.")
+                    lines.append("")
+                    main_figures = tuple(item for item in analytics_figures if item.section.value == 'main')
+                    supporting_figures = tuple(item for item in analytics_figures if item.section.value == 'supporting')
+                    if main_figures:
+                        lines.append("### Main Live Figures")
+                        lines.append("")
+                        for figure in main_figures:
+                            self._append_figure_block(lines, figure)
+                    if supporting_figures:
+                        lines.append("### Supporting Live Figures")
+                        lines.append("")
+                        for figure in supporting_figures:
+                            self._append_figure_block(lines, figure)
+        lines.append("## Chapter 3. Detailed Benchmark Results and Appendices")
+        lines.append("")
+        lines.append(
+            "This chapter expands the controlled Codex benchmark with execution, calibration, stress, failure analysis, ground truth, and task-level details."
+        )
+        lines.append("")
         if report.stable_execution_summary is not None:
             lines.append("## Stable Execution A/B")
             lines.append("")
@@ -2757,6 +3304,17 @@ class CodexComparisonService:
                 for key, value in self._summary_rows(report.stress_summary):
                     lines.append(f"| {key} | {value} |")
             lines.append("")
+        if report.passive_usage_summary is not None:
+            self._append_historical_passive_usage_summary(lines, report.passive_usage_summary)
+            if report.figures:
+                passive_figures = tuple(item for item in report.figures if item.source_scope == "passive_usage")
+                if passive_figures:
+                    lines.append("## Historical Passive Figures")
+                    lines.append("")
+                    lines.append("These figures are generated from the historical Codex passive analytics summary for the `suit-code` repository.")
+                    lines.append("")
+                    for figure in passive_figures:
+                        self._append_figure_block(lines, figure)
         lines.append("## Failure Taxonomy Summary")
         lines.append("")
         lines.append("Failure counts below are aggregated across the tasks included in this report. They distinguish substantive task failures from harness or account-state failures and explain where extra turns came from.")
@@ -2871,6 +3429,12 @@ class CodexComparisonService:
             lines.append(f"- Final answer artifact: `{item.output_last_message_path}`")
             lines.append("")
         lines.append("")
+        lines.append("## Chapter 4. Methodology and Reproducibility")
+        lines.append("")
+        lines.append(
+            "This chapter records the deterministic generation inputs, methodological constraints, and artifact paths needed to interpret or reproduce the report."
+        )
+        lines.append("")
         lines.append("## Methodology")
         lines.append("")
         self._append_markdown_table(
@@ -2898,8 +3462,6 @@ class CodexComparisonService:
         lines.append("- Stable execution is now A/B, but it remains fixture-backed in this revision for deterministic stability.")
         lines.append("- Passive analytics are supporting evidence and are not used as the primary benchmark source.")
         lines.append("")
-        if report.passive_usage_summary is not None:
-            self._append_passive_usage_section(lines, report.passive_usage_summary)
         lines.append("## Artifact Map")
         lines.append("")
         lines.append(f"- comparison json: `.suit/evaluation/codex/comparisons/{comparison_dir_name}/comparison.json`")

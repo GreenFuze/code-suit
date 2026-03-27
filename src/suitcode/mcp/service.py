@@ -8,9 +8,11 @@ from suitcode.core.change_models import ChangeTarget
 from suitcode.core.repository import Repository
 from suitcode.core.tests.models import RelatedTestTarget
 from suitcode.core.validation import validate_preview_limit
+from suitcode.core.validation import validate_change_preview_limit
 from suitcode.core.workspace import Workspace
 from suitcode.mcp.errors import McpNotFoundError, McpUnsupportedRepositoryError, McpValidationError
 from suitcode.mcp.models import (
+    ActionAvailabilityView,
     AddRepositoryResult,
     AggregatorView,
     ActionView,
@@ -29,6 +31,7 @@ from suitcode.mcp.models import (
     ExternalPackageView,
     FileContextView,
     FileOwnerView,
+    FileUnderstandingView,
     FileView,
     ImpactSummaryView,
     InefficientToolCallView,
@@ -41,6 +44,7 @@ from suitcode.mcp.models import (
     QualityProvidersView,
     QualitySnapshotView,
     RelatedTestView,
+    RepositoryUnderstandingView,
     RunTestTargetsView,
     RepositorySnapshotView,
     RepositorySummaryView,
@@ -162,10 +166,84 @@ class SuitMcpService:
         repository_path: str,
         preview_limit: int = 10,
     ) -> RepositorySummaryView:
-        validate_preview_limit(preview_limit, "preview_limit", max_value=25, error_cls=McpValidationError)
+        validate_preview_limit(preview_limit, "preview_limit", max_value=50, error_cls=McpValidationError)
 
         def _callback(repository: Repository) -> RepositorySummaryView:
             return self._repository_summary_presenter.summary_view(repository, preview_limit)
+
+        return self._with_read_only_repository(repository_path, _callback)
+
+    def understand_repository(
+        self,
+        repository_path: str,
+        preview_limit: int = 10,
+    ) -> RepositoryUnderstandingView:
+        validate_preview_limit(preview_limit, "preview_limit", max_value=50, error_cls=McpValidationError)
+
+        def _callback(repository: Repository) -> RepositoryUnderstandingView:
+            summary = self._repository_summary_presenter.summary_view(repository, preview_limit)
+            truth_coverage = self._intelligence_presenter.truth_coverage_summary_view(repository.get_truth_coverage())
+            return RepositoryUnderstandingView(
+                repository=summary,
+                truth_coverage=truth_coverage,
+                recommended_next_questions=(
+                    "who_owns_this",
+                    "what_changes_if_i_edit_this",
+                    "what_should_i_run",
+                    "can_i_do_this",
+                ),
+                provenance=self._merge_view_provenance(summary.provenance, truth_coverage.provenance),
+            )
+
+        return self._with_read_only_repository(repository_path, _callback)
+
+    def understand_file(
+        self,
+        repository_path: str,
+        repository_rel_path: str,
+        related_test_limit: int = 10,
+    ) -> FileUnderstandingView:
+        validate_preview_limit(related_test_limit, "related_test_limit", max_value=25, error_cls=McpValidationError)
+
+        def _callback(repository: Repository) -> FileUnderstandingView:
+            try:
+                context = repository.describe_files((repository_rel_path,), symbol_preview_limit=20, test_preview_limit=related_test_limit)[0]
+                owner = self._ownership_presenter.file_owner_view(repository.get_file_owner(repository_rel_path))
+                dependency_files_preview = tuple(
+                    self._intelligence_presenter.file_relationship_view(item) for item in context.dependency_files_preview
+                )
+                dependent_files_preview = tuple(
+                    self._intelligence_presenter.file_relationship_view(item) for item in context.dependent_files_preview
+                )
+                related_tests = tuple(
+                    self._test_presenter.related_test_view(item)
+                    for item in repository.tests.get_related_tests(
+                        RelatedTestTarget(repository_rel_path=repository_rel_path)
+                    )[:related_test_limit]
+                )
+            except ValueError as exc:
+                raise McpValidationError(
+                    self._explain_unowned_file_error(repository, repository_rel_path, str(exc), tool_name="understand_file")
+                ) from exc
+            return FileUnderstandingView(
+                file_owner=owner,
+                dependency_file_count=context.dependency_file_count,
+                dependency_files_preview=dependency_files_preview,
+                dependent_file_count=context.dependent_file_count,
+                dependent_files_preview=dependent_files_preview,
+                related_tests=related_tests,
+                suggested_follow_ups=(
+                    "what_changes_if_i_edit_this",
+                    "what_should_i_run",
+                    "can_i_do_this",
+                ),
+                provenance=self._merge_view_provenance(
+                    owner.file.provenance,
+                    *(item.provenance for item in dependency_files_preview),
+                    *(item.provenance for item in dependent_files_preview),
+                    *(item.provenance for item in related_tests),
+                ),
+            )
 
         return self._with_read_only_repository(repository_path, _callback)
 
@@ -174,7 +252,14 @@ class SuitMcpService:
             try:
                 return self._ownership_presenter.file_owner_view(repository.get_file_owner(repository_rel_path))
             except ValueError as exc:
-                raise McpNotFoundError(str(exc)) from exc
+                raise McpNotFoundError(
+                    self._explain_unowned_file_error(
+                        repository,
+                        repository_rel_path,
+                        str(exc),
+                        tool_name="get_file_owner_by_path",
+                    )
+                ) from exc
 
         return self._with_read_only_repository(repository_path, _callback)
 
@@ -200,6 +285,35 @@ class SuitMcpService:
 
         return self._with_read_only_repository(repository_path, _callback)
 
+    def what_changes_if_i_edit_this(
+        self,
+        repository_path: str,
+        repository_rel_path: str,
+        reference_preview_limit: int = 50,
+        dependent_preview_limit: int = 50,
+        test_preview_limit: int = 25,
+        runner_preview_limit: int = 25,
+    ) -> ChangeImpactView:
+        validate_change_preview_limit(reference_preview_limit, "reference_preview_limit", error_cls=McpValidationError)
+        validate_change_preview_limit(dependent_preview_limit, "dependent_preview_limit", error_cls=McpValidationError)
+        validate_change_preview_limit(test_preview_limit, "test_preview_limit", error_cls=McpValidationError)
+        validate_change_preview_limit(runner_preview_limit, "runner_preview_limit", error_cls=McpValidationError)
+
+        def _callback(repository: Repository) -> ChangeImpactView:
+            try:
+                impact = repository.analyze_change(
+                    ChangeTarget(repository_rel_path=repository_rel_path),
+                    reference_preview_limit=reference_preview_limit,
+                    dependent_preview_limit=dependent_preview_limit,
+                    test_preview_limit=test_preview_limit,
+                    runner_preview_limit=runner_preview_limit,
+                )
+                return self._change_impact_presenter.change_impact_view(impact)
+            except ValueError as exc:
+                raise McpValidationError(str(exc)) from exc
+
+        return self._with_read_only_repository(repository_path, _callback)
+
     def get_minimum_verified_change_set_by_path(
         self,
         repository_path: str,
@@ -218,6 +332,102 @@ class SuitMcpService:
                 return self._change_impact_presenter.minimum_verified_change_set_view(change_set)
             except ValueError as exc:
                 raise McpValidationError(str(exc)) from exc
+
+        return self._with_read_only_repository(repository_path, _callback)
+
+    def what_should_i_run(
+        self,
+        repository_path: str,
+        repository_rel_path: str,
+    ) -> MinimumVerifiedChangeSetView:
+        return self.get_minimum_verified_change_set_by_path(
+            repository_path,
+            repository_rel_path=repository_rel_path,
+        )
+
+    def can_i_do_this(
+        self,
+        repository_path: str,
+        repository_rel_path: str,
+        requested_action_kind: str,
+    ) -> ActionAvailabilityView:
+        allowed_action_kinds = {
+            "test",
+            "build",
+            "runner",
+            "quality_validation",
+            "quality_hygiene",
+        }
+        normalized_action_kind = requested_action_kind.strip().lower()
+        if normalized_action_kind not in allowed_action_kinds:
+            raise McpValidationError(
+                "requested_action_kind must be one of: build, quality_hygiene, quality_validation, runner, test"
+            )
+
+        def _callback(repository: Repository) -> ActionAvailabilityView:
+            target = ChangeTarget(repository_rel_path=repository_rel_path)
+            truth_coverage = self._intelligence_presenter.truth_coverage_summary_view(
+                repository.get_change_truth_coverage(target)
+            )
+            owner = self._ownership_presenter.owner_view(repository.get_file_owner(repository_rel_path).owner)
+            primary_component = None
+            minimum_verified = None
+            available_action_kinds: tuple[str, ...] = tuple()
+            try:
+                change_set = repository.get_minimum_verified_change_set(target)
+                minimum_verified = self._change_impact_presenter.minimum_verified_change_set_view(change_set)
+                primary_component = minimum_verified.primary_component
+                kinds: list[str] = []
+                if minimum_verified.tests:
+                    kinds.append("test")
+                if minimum_verified.build_targets:
+                    kinds.append("build")
+                if minimum_verified.runner_actions:
+                    kinds.append("runner")
+                if minimum_verified.quality_validation_operations:
+                    kinds.append("quality_validation")
+                if minimum_verified.quality_hygiene_operations:
+                    kinds.append("quality_hygiene")
+                available_action_kinds = tuple(sorted(kinds))
+            except ValueError as exc:
+                if "no deterministic validation surfaces were found" not in str(exc):
+                    raise McpValidationError(str(exc)) from exc
+
+            actions_domain = next((item for item in truth_coverage.domains if item.domain == "actions"), None)
+            actions_available = actions_domain is not None and actions_domain.availability == "available"
+            supported = normalized_action_kind in available_action_kinds
+            if supported:
+                reason_code = "available"
+            elif not actions_available:
+                reason_code = "actions_truth_unavailable"
+            elif available_action_kinds:
+                reason_code = "requested_kind_not_in_minimum_verified_set"
+            else:
+                reason_code = "no_deterministic_actions_available"
+
+            provenance_groups = [truth_coverage.provenance]
+            if minimum_verified is not None:
+                provenance_groups.append(minimum_verified.provenance)
+
+            return ActionAvailabilityView(
+                requested_action_kind=normalized_action_kind,
+                supported=supported,
+                reason_code=reason_code,
+                available_action_kinds=available_action_kinds,
+                owner=owner,
+                primary_component=primary_component,
+                recommended_tests=(minimum_verified.tests if minimum_verified is not None else tuple()),
+                recommended_build_targets=(minimum_verified.build_targets if minimum_verified is not None else tuple()),
+                recommended_runner_actions=(minimum_verified.runner_actions if minimum_verified is not None else tuple()),
+                recommended_quality_validation_operations=(
+                    minimum_verified.quality_validation_operations if minimum_verified is not None else tuple()
+                ),
+                recommended_quality_hygiene_operations=(
+                    minimum_verified.quality_hygiene_operations if minimum_verified is not None else tuple()
+                ),
+                truth_coverage=truth_coverage,
+                provenance=self._merge_view_provenance(*provenance_groups),
+            )
 
         return self._with_read_only_repository(repository_path, _callback)
 
@@ -360,7 +570,9 @@ class SuitMcpService:
         try:
             return self._ownership_presenter.file_owner_view(repository.get_file_owner(repository_rel_path))
         except ValueError as exc:
-            raise McpNotFoundError(str(exc)) from exc
+            raise McpNotFoundError(
+                self._explain_unowned_file_error(repository, repository_rel_path, str(exc), tool_name="get_file_owner")
+            ) from exc
 
     def list_files_by_owner(
         self,
@@ -792,3 +1004,39 @@ class SuitMcpService:
             if "does not exist" in message or "is not a directory" in message:
                 raise McpValidationError(message) from exc
             raise McpValidationError(message) from exc
+
+    @staticmethod
+    def _merge_view_provenance(*groups) -> tuple:
+        merged = []
+        seen: set[str] = set()
+        for group in groups:
+            for entry in group:
+                key = entry.model_dump_json()
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(entry)
+        return tuple(merged)
+
+    @staticmethod
+    def _explain_unowned_file_error(
+        repository: Repository,
+        repository_rel_path: str,
+        message: str,
+        *,
+        tool_name: str,
+    ) -> str:
+        if "unknown repository file owner" not in message:
+            return message
+        candidate = (repository.root / repository_rel_path.strip().replace("\\", "/").removeprefix("./")).resolve()
+        try:
+            candidate.relative_to(repository.root)
+        except ValueError:
+            return message
+        if not candidate.exists() or not candidate.is_file():
+            return message
+        return (
+            f"{message}. `{tool_name}` currently supports only provider-owned files. "
+            "Files that exist in the repository but are not deterministically owned by a registered provider, "
+            "including markdown/docs-style artifacts, are not supported by this tool."
+        )

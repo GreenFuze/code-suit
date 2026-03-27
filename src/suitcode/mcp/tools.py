@@ -4,13 +4,13 @@ from mcp.server.fastmcp import FastMCP
 
 from suitcode.mcp.instrumentation import McpToolInstrumentation
 from suitcode.mcp.service import SuitMcpService
-from suitcode.mcp.tool_catalog import TOOL_CATALOG
+from suitcode.mcp.tool_catalog import TOOL_CATALOG, ToolBinding
 
 
-def register_tools(app: FastMCP, service: SuitMcpService) -> None:
+def register_tools(app: FastMCP, service: SuitMcpService, *, catalog: tuple[ToolBinding, ...] = TOOL_CATALOG) -> None:
     restore_tool = McpToolInstrumentation(service).install(app)
     try:
-        for binding in TOOL_CATALOG:
+        for binding in catalog:
             handler = getattr(service, binding.handler_name, None)
             if handler is None or not callable(handler):
                 raise ValueError(

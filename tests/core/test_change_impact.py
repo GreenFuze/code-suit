@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from suitcode.core.change_models import ChangeTarget
+from suitcode.core.intelligence_models import FileRelationshipKind, FileRelationshipRef
+from suitcode.core.provenance_builders import dependency_graph_provenance
 from suitcode.core.workspace import Workspace
 
 
@@ -37,7 +39,25 @@ def test_change_impact_for_npm_file_target(npm_repo_root) -> None:
                 ("packages/utils/src/index.ts", 7, 9, 1, 2),
             )
 
+    class _FakeRelationshipService:
+        def get_file_relationships(self, repository_rel_path: str) -> tuple[FileRelationshipRef, ...]:
+            assert repository_rel_path == "packages/core/src/index.ts"
+            return (
+                FileRelationshipRef(
+                    repository_rel_path="packages/utils/src/index.ts",
+                    relationship_kind=FileRelationshipKind.IMPORTED_BY,
+                    provenance=(
+                        dependency_graph_provenance(
+                            source_tool="typescript",
+                            evidence_summary="resolved import edge",
+                            evidence_paths=("packages/core/src/index.ts", "packages/utils/src/index.ts"),
+                        ),
+                    ),
+                ),
+            )
+
     provider._file_symbol_service = _FakeFileSymbolService()  # type: ignore[attr-defined]
+    provider._file_relationship_service = _FakeRelationshipService()  # type: ignore[attr-defined]
 
     impact = repository.analyze_change(ChangeTarget(repository_rel_path="packages/core/src/index.ts"))
 
@@ -46,6 +66,8 @@ def test_change_impact_for_npm_file_target(npm_repo_root) -> None:
     assert impact.primary_component is not None
     assert impact.primary_component.id == "component:npm:@monorepo/core"
     assert impact.component_context is not None
+    assert impact.dependency_files == tuple()
+    assert [item.repository_rel_path for item in impact.dependent_files] == ["packages/utils/src/index.ts"]
     assert any(component.id == "component:npm:@monorepo/utils" for component in impact.dependent_components)
     assert any(test.related_test.test_definition.id == "test:npm:@monorepo/core" for test in impact.related_tests)
     assert impact.quality_gates

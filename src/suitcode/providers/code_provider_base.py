@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from suitcode.core.code.models import CodeLocation
+from suitcode.core.intelligence_models import FileRelationshipRef
 from suitcode.core.models import EntityInfo
 from suitcode.providers.provider_base import ProviderBase
+from suitcode.providers.provider_metadata import ProviderAttachmentContext
 from suitcode.providers.runtime_capability_models import CodeRuntimeCapabilities
 
 if TYPE_CHECKING:
@@ -13,8 +16,8 @@ if TYPE_CHECKING:
 
 
 class CodeProviderBase(ProviderBase, ABC):
-    def __init__(self, repository: Repository) -> None:
-        super().__init__(repository)
+    def __init__(self, repository: Repository, attachment: ProviderAttachmentContext) -> None:
+        super().__init__(repository, attachment)
 
     @abstractmethod
     def get_symbol(self, query: str, is_case_sensitive: bool = False) -> tuple[EntityInfo, ...]:
@@ -46,3 +49,6 @@ class CodeProviderBase(ProviderBase, ABC):
     @abstractmethod
     def get_code_runtime_capabilities(self) -> CodeRuntimeCapabilities:
         raise NotImplementedError
+
+    def get_file_relationships(self, repository_rel_path: str) -> Sequence[FileRelationshipRef]:
+        return tuple()

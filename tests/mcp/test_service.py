@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 from suitcode.core.build_service import BuildService
+from suitcode.core.intelligence_models import FileRelationshipKind, FileRelationshipRef
+from suitcode.core.provenance_builders import dependency_graph_provenance
 from suitcode.core.runner_service import RunnerService
 from suitcode.mcp.errors import McpNotFoundError, McpUnsupportedRepositoryError, McpValidationError
 from suitcode.mcp.service import SuitMcpService
@@ -19,12 +21,49 @@ def test_service_open_workspace_and_list_repositories(service: SuitMcpService, n
     assert opened.reused is False
     assert opened.workspace.repository_count == 1
     assert opened.initial_repository.root_path == str(npm_repo_root)
-    assert opened.initial_repository.provider_ids == ("go", "npm")
+    assert opened.initial_repository.provider_ids == ("go", "npm", "python")
+    assert opened.initial_repository.provider_attachment_roots["npm"] == (".",)
+    assert opened.initial_repository.provider_attachment_roots["python"] == ("tools/codegen",)
     assert opened.guidance.session_scope == "process_local"
     assert "process" in opened.guidance.message.lower()
     assert "repository_summary" in opened.guidance.recommended_next_calls
     assert "repository_summary_by_path" in opened.guidance.read_only_alternatives
     assert repositories.total == 1
+
+
+def test_service_core_tools_reuse_existing_repository_intelligence(service: SuitMcpService, npm_repo_root: Path) -> None:
+    understanding = service.understand_repository(str(npm_repo_root), preview_limit=5)
+    file_understanding = service.understand_file(
+        str(npm_repo_root),
+        "packages/core/src/index.ts",
+        related_test_limit=5,
+    )
+    impact = service.what_changes_if_i_edit_this(
+        str(npm_repo_root),
+        "packages/core/src/index.ts",
+    )
+    minimum = service.what_should_i_run(
+        str(npm_repo_root),
+        "packages/core/src/index.ts",
+    )
+    availability = service.can_i_do_this(
+        str(npm_repo_root),
+        "packages/core/src/index.ts",
+        "test",
+    )
+
+    assert understanding.repository.component_count >= 1
+    assert understanding.truth_coverage.domains
+    assert understanding.provenance
+    assert file_understanding.file_owner.owner.id == "component:npm:@monorepo/core"
+    assert file_understanding.related_tests
+    assert file_understanding.provenance
+    assert impact.target_kind == "file"
+    assert impact.provenance
+    assert minimum.owner.id == "component:npm:@monorepo/core"
+    assert availability.supported is True
+    assert "test" in availability.available_action_kinds
+    assert availability.provenance
 
 
 def test_read_only_by_path_tools_match_workspace_tools_without_registry_mutation(service: SuitMcpService, npm_repo_root: Path) -> None:
@@ -92,6 +131,84 @@ def test_read_only_by_path_tools_validate_and_map_errors(service: SuitMcpService
 
     with pytest.raises(McpUnsupportedRepositoryError):
         service.repository_summary_by_path(str(unsupported_root))
+
+
+def test_understand_file_supports_standalone_npm_package_root(service: SuitMcpService, tmp_path: Path) -> None:
+    repo_root = tmp_path / "frontend"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src" / "pages").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true,
+          "scripts": {
+            "build": "vite build"
+          }
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "pages" / "LibraryPage.tsx").write_text("export const LibraryPage = () => null;\n", encoding="utf-8")
+
+    understanding = service.understand_file(
+        str(repo_root),
+        "src/pages/LibraryPage.tsx",
+        related_test_limit=5,
+    )
+
+    assert understanding.file_owner.owner.id == "component:npm:frontend"
+
+
+def test_understand_repository_accepts_larger_preview_limit(service: SuitMcpService, npm_repo_root: Path) -> None:
+    understanding = service.understand_repository(str(npm_repo_root), preview_limit=50)
+
+    assert understanding.repository.preview_limit == 50
+
+
+def test_understand_file_reports_unowned_artifacts_clearly(service: SuitMcpService, npm_repo_root: Path) -> None:
+    (npm_repo_root / "roadmap.md").write_text("# roadmap\n", encoding="utf-8")
+
+    with pytest.raises(McpValidationError, match="provider-owned files"):
+        service.understand_file(
+            str(npm_repo_root),
+            "roadmap.md",
+        )
+
+
+def test_frontend_standalone_package_surfaces_build_script_as_action(service: SuitMcpService, tmp_path: Path) -> None:
+    repo_root = tmp_path / "frontend"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src" / "pages").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true,
+          "scripts": {
+            "build": "tsc --noEmit && vite build",
+            "dev": "vite"
+          }
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "pages" / "LibraryPage.tsx").write_text("export const LibraryPage = () => null;\n", encoding="utf-8")
+
+    minimum = service.what_should_i_run(
+        str(repo_root),
+        repository_rel_path="src/pages/LibraryPage.tsx",
+    )
+    availability = service.can_i_do_this(
+        str(repo_root),
+        repository_rel_path="src/pages/LibraryPage.tsx",
+        requested_action_kind="build",
+    )
+
+    assert [item.action_id for item in minimum.build_targets] == ["action:npm:build:frontend"]
+    assert minimum.build_targets[0].invocation.argv_preview == ("npm", "run", "build")
+    assert availability.supported is True
+    assert "build" in availability.available_action_kinds
 
 
 def test_read_only_by_path_minimum_verified_change_set_returns_clear_empty_surface_error(
@@ -618,7 +735,25 @@ def test_service_exposes_component_file_and_impact_context(service: SuitMcpServi
                 ("packages/utils/src/index.ts", 7, 9, 1, 2),
             )
 
+    class _FakeRelationshipService:
+        def get_file_relationships(self, repository_rel_path: str) -> tuple[FileRelationshipRef, ...]:
+            assert repository_rel_path == "packages/core/src/index.ts"
+            return (
+                FileRelationshipRef(
+                    repository_rel_path="packages/utils/src/index.ts",
+                    relationship_kind=FileRelationshipKind.IMPORTED_BY,
+                    provenance=(
+                        dependency_graph_provenance(
+                            source_tool="typescript",
+                            evidence_summary="resolved import edge",
+                            evidence_paths=("packages/core/src/index.ts", "packages/utils/src/index.ts"),
+                        ),
+                    ),
+                ),
+            )
+
     provider._file_symbol_service = _FakeFileSymbolService()  # type: ignore[attr-defined]
+    provider._file_relationship_service = _FakeRelationshipService()  # type: ignore[attr-defined]
 
     component_contexts = service.describe_components(
         workspace_id,
@@ -670,6 +805,8 @@ def test_service_exposes_component_file_and_impact_context(service: SuitMcpServi
     assert component_contexts[0].component.id == "component:npm:@monorepo/core"
     assert component_contexts[0].component.provenance
     assert file_contexts[0].owner.id == "component:npm:@monorepo/core"
+    assert file_contexts[0].dependency_file_count == 0
+    assert [item.path for item in file_contexts[0].dependent_files_preview] == ["packages/utils/src/index.ts"]
     assert file_contexts[0].file.provenance
     assert symbol_context.symbol.name == "Core"
     assert symbol_context.symbol.provenance
@@ -683,6 +820,7 @@ def test_service_exposes_component_file_and_impact_context(service: SuitMcpServi
     assert change.target_kind == "file"
     assert change.primary_component is not None
     assert change.primary_component.id == "component:npm:@monorepo/core"
+    assert [item.path for item in change.dependent_files] == ["packages/utils/src/index.ts"]
     assert change.reference_locations
     assert change.related_tests
     assert isinstance(change.related_runners, tuple)

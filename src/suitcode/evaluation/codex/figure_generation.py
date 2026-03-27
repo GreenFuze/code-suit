@@ -92,6 +92,7 @@ class CodexComparisonFigureBuilder:
         passive_figure = self._build_passive_adoption(report, figures_dir, data_dir)
         if passive_figure is not None:
             figures.append(passive_figure)
+        figures.extend(self._build_live_usage_figures(report, figures_dir, data_dir))
         return tuple(figures)
 
     def _build_headline_outcomes(self, report: CodexStandoutReport, figures_dir: Path, data_dir: Path) -> ComparisonFigure:
@@ -412,6 +413,253 @@ class CodexComparisonFigureBuilder:
             source_scope='passive_usage',
             metric_kinds=(MetricKind.DERIVED,),
             depends_on_sections=('Passive Codex Usage',),
+        )
+
+    def _build_live_usage_figures(
+        self,
+        report: CodexStandoutReport,
+        figures_dir: Path,
+        data_dir: Path,
+    ) -> tuple[ComparisonFigure, ...]:
+        summary = report.agent_experience_summary
+        if summary is None:
+            return tuple()
+        figures: list[ComparisonFigure] = []
+        tool_token_savings = self._build_live_tool_token_savings(summary, figures_dir, data_dir)
+        if tool_token_savings is not None:
+            figures.append(tool_token_savings)
+        first_tool = self._build_live_first_tool_distribution(summary, figures_dir, data_dir)
+        if first_tool is not None:
+            figures.append(first_tool)
+        top_tools = self._build_live_top_tools(summary, figures_dir, data_dir)
+        if top_tools is not None:
+            figures.append(top_tools)
+        success_error = self._build_live_tool_success_error(summary, figures_dir, data_dir)
+        if success_error is not None:
+            figures.append(success_error)
+        token_savings = self._build_live_token_savings(summary, figures_dir, data_dir)
+        if token_savings is not None:
+            figures.append(token_savings)
+        return tuple(figures)
+
+    def _build_live_tool_token_savings(self, summary: dict[str, object], figures_dir: Path, data_dir: Path) -> ComparisonFigure | None:
+        mcp_summary = summary.get('mcp_analytics')
+        if not isinstance(mcp_summary, dict):
+            return None
+        top_usage = mcp_summary.get('top_tool_usage')
+        if not isinstance(top_usage, (list, tuple)) or not top_usage:
+            return None
+        tool_names = [str(item.get('tool_name')) for item in top_usage]
+        saved_tokens = [int(item.get('estimated_tokens_saved') or 0) for item in top_usage]
+        fig, ax = plt.subplots(figsize=(10, 4.8))
+        ax.bar(tool_names, saved_tokens, color=self._SUITCODE_COLOR)
+        ax.set_title('Estimated tokens saved by live SuitCode tool')
+        ax.set_ylabel('Estimated tokens saved')
+        ax.tick_params(axis='x', rotation=30)
+        ax.grid(axis='y', alpha=0.25)
+        svg_path = figures_dir / '08-live-tool-token-savings.svg'
+        csv_path = data_dir / '08-live-tool-token-savings.csv'
+        fig.tight_layout()
+        fig.savefig(svg_path, format='svg')
+        plt.close(fig)
+        self._write_csv(
+            csv_path,
+            ('tool_name', 'estimated_tokens_saved', 'total_calls'),
+            tuple(
+                (
+                    str(item.get('tool_name')),
+                    str(int(item.get('estimated_tokens_saved') or 0)),
+                    str(int(item.get('total_calls') or 0)),
+                )
+                for item in top_usage
+            ),
+        )
+        return ComparisonFigure(
+            figure_id='figure-08-live-tool-token-savings',
+            title='Figure 8. Estimated Token Savings by Live Tool',
+            section=ComparisonFigureSection.SUPPORTING,
+            caption='Estimated tokens saved by the most-used live SuitCode tools during the filtered analytics window.',
+            interpretation='This figure focuses the live contribution story on concrete tool use and estimated efficiency impact rather than on session counts.',
+            svg_relative_path='figures/08-live-tool-token-savings.svg',
+            csv_relative_path='figures/data/08-live-tool-token-savings.csv',
+            source_scope='agent_experience',
+            metric_kinds=(MetricKind.ESTIMATED,),
+            depends_on_sections=('Live Multi-Agent Experience',),
+        )
+
+    def _build_live_first_tool_distribution(self, summary: dict[str, object], figures_dir: Path, data_dir: Path) -> ComparisonFigure | None:
+        agents = summary.get('agents')
+        if not isinstance(agents, dict):
+            return None
+        labels: list[str] = []
+        values: list[int] = []
+        csv_rows: list[tuple[str, str, str]] = []
+        for agent_name in ('codex', 'claude', 'cursor'):
+            agent_summary = agents.get(agent_name)
+            if not isinstance(agent_summary, dict):
+                continue
+            distribution = agent_summary.get('first_tool_distribution')
+            if not isinstance(distribution, dict):
+                continue
+            for tool_name, count in sorted(distribution.items(), key=lambda item: (-int(item[1]), item[0])):
+                labels.append(f'{agent_name}: {tool_name}')
+                values.append(int(count))
+                csv_rows.append((agent_name, str(tool_name), str(int(count))))
+        if not values:
+            return None
+        fig, ax = plt.subplots(figsize=(10, max(4.5, 1.4 + len(labels) * 0.45)))
+        y_positions = list(range(len(labels)))
+        ax.barh(y_positions, values, color=self._SUITCODE_COLOR)
+        ax.set_yticks(y_positions, labels)
+        ax.set_xlabel('Sessions')
+        ax.set_title('First SuitCode tool observed in live sessions')
+        ax.grid(axis='x', alpha=0.25)
+        svg_path = figures_dir / '09-live-first-tool-distribution.svg'
+        csv_path = data_dir / '09-live-first-tool-distribution.csv'
+        fig.tight_layout()
+        fig.savefig(svg_path, format='svg')
+        plt.close(fig)
+        self._write_csv(csv_path, ('agent', 'tool_name', 'sessions'), csv_rows)
+        return ComparisonFigure(
+            figure_id='figure-09-live-first-tool-distribution',
+            title='Figure 9. First SuitCode Tool in Live Sessions',
+            section=ComparisonFigureSection.SUPPORTING,
+            caption='Distribution of the first observed SuitCode tool by agent in the filtered live window.',
+            interpretation='This figure shows whether agents enter SuitCode through the intended repository-understanding surface or through weaker support-check paths.',
+            svg_relative_path='figures/09-live-first-tool-distribution.svg',
+            csv_relative_path='figures/data/09-live-first-tool-distribution.csv',
+            source_scope='agent_experience',
+            metric_kinds=(MetricKind.DERIVED,),
+            depends_on_sections=('Live Multi-Agent Experience',),
+        )
+
+    def _build_live_top_tools(self, summary: dict[str, object], figures_dir: Path, data_dir: Path) -> ComparisonFigure | None:
+        mcp_summary = summary.get('mcp_analytics')
+        if not isinstance(mcp_summary, dict):
+            return None
+        top_usage = mcp_summary.get('top_tool_usage')
+        if not isinstance(top_usage, (list, tuple)) or not top_usage:
+            return None
+        tool_names = [str(item.get('tool_name')) for item in top_usage]
+        call_counts = [int(item.get('total_calls') or 0) for item in top_usage]
+        fig, ax = plt.subplots(figsize=(10, 4.8))
+        ax.bar(tool_names, call_counts, color=self._SUITCODE_COLOR)
+        ax.set_title('Most-used live SuitCode tools')
+        ax.set_ylabel('Calls')
+        ax.tick_params(axis='x', rotation=30)
+        ax.grid(axis='y', alpha=0.25)
+        svg_path = figures_dir / '10-live-top-tools.svg'
+        csv_path = data_dir / '10-live-top-tools.csv'
+        fig.tight_layout()
+        fig.savefig(svg_path, format='svg')
+        plt.close(fig)
+        self._write_csv(
+            csv_path,
+            ('tool_name', 'total_calls', 'success_calls', 'error_calls'),
+            tuple(
+                (
+                    str(item.get('tool_name')),
+                    str(int(item.get('total_calls') or 0)),
+                    str(int(item.get('success_calls') or 0)),
+                    str(int(item.get('error_calls') or 0)),
+                )
+                for item in top_usage
+            ),
+        )
+        return ComparisonFigure(
+            figure_id='figure-10-live-top-tools',
+            title='Figure 10. Most-Used Live SuitCode Tools',
+            section=ComparisonFigureSection.SUPPORTING,
+            caption='Top live SuitCode tools on the real repository during the filtered analytics window.',
+            interpretation='This figure shows which product surfaces contributed most in real usage, rather than in benchmark tasks.',
+            svg_relative_path='figures/10-live-top-tools.svg',
+            csv_relative_path='figures/data/10-live-top-tools.csv',
+            source_scope='agent_experience',
+            metric_kinds=(MetricKind.MEASURED,),
+            depends_on_sections=('Live Multi-Agent Experience',),
+        )
+
+    def _build_live_tool_success_error(self, summary: dict[str, object], figures_dir: Path, data_dir: Path) -> ComparisonFigure | None:
+        mcp_summary = summary.get('mcp_analytics')
+        if not isinstance(mcp_summary, dict):
+            return None
+        top_usage = mcp_summary.get('top_tool_usage')
+        if not isinstance(top_usage, (list, tuple)) or not top_usage:
+            return None
+        tool_names = [str(item.get('tool_name')) for item in top_usage]
+        success_counts = [int(item.get('success_calls') or 0) for item in top_usage]
+        error_counts = [int(item.get('error_calls') or 0) for item in top_usage]
+        fig, ax = plt.subplots(figsize=(10, 4.8))
+        positions = list(range(len(tool_names)))
+        ax.bar(positions, success_counts, color=self._PASS_COLOR, label='Success')
+        ax.bar(positions, error_counts, bottom=success_counts, color=self._FAIL_COLOR, label='Error')
+        ax.set_xticks(positions, tool_names, rotation=30, ha='right')
+        ax.set_ylabel('Calls')
+        ax.set_title('Live SuitCode tool success vs error')
+        ax.legend()
+        ax.grid(axis='y', alpha=0.25)
+        svg_path = figures_dir / '11-live-tool-success-error.svg'
+        csv_path = data_dir / '11-live-tool-success-error.csv'
+        fig.tight_layout()
+        fig.savefig(svg_path, format='svg')
+        plt.close(fig)
+        self._write_csv(
+            csv_path,
+            ('tool_name', 'success_calls', 'error_calls'),
+            tuple((tool_name, str(success), str(error)) for tool_name, success, error in zip(tool_names, success_counts, error_counts)),
+        )
+        return ComparisonFigure(
+            figure_id='figure-11-live-tool-success-error',
+            title='Figure 11. Live Tool Success and Error Breakdown',
+            section=ComparisonFigureSection.SUPPORTING,
+            caption='Success and error counts for the most-used live SuitCode tools during the filtered window.',
+            interpretation='This figure makes real product friction visible: contribution is not only what gets used, but also which frequently used tools still fail in practice.',
+            svg_relative_path='figures/11-live-tool-success-error.svg',
+            csv_relative_path='figures/data/11-live-tool-success-error.csv',
+            source_scope='agent_experience',
+            metric_kinds=(MetricKind.MEASURED,),
+            depends_on_sections=('Live Multi-Agent Experience',),
+        )
+
+    def _build_live_token_savings(self, summary: dict[str, object], figures_dir: Path, data_dir: Path) -> ComparisonFigure | None:
+        mcp_summary = summary.get('mcp_analytics')
+        if not isinstance(mcp_summary, dict):
+            return None
+        estimated_tokens = int(mcp_summary.get('estimated_tokens') or 0)
+        estimated_saved = int(mcp_summary.get('estimated_tokens_saved') or 0)
+        if estimated_tokens <= 0 and estimated_saved <= 0:
+            return None
+        fig, ax = plt.subplots(figsize=(7, 4.8))
+        labels = ['Estimated tokens', 'Estimated tokens saved']
+        values = [estimated_tokens, estimated_saved]
+        ax.bar(labels, values, color=[self._NEUTRAL_COLOR, self._SUITCODE_COLOR])
+        ax.set_ylabel('Tokens')
+        ax.set_title('Live estimated token effect')
+        ax.grid(axis='y', alpha=0.25)
+        svg_path = figures_dir / '12-live-token-savings.svg'
+        csv_path = data_dir / '12-live-token-savings.csv'
+        fig.tight_layout()
+        fig.savefig(svg_path, format='svg')
+        plt.close(fig)
+        self._write_csv(
+            csv_path,
+            ('metric', 'tokens'),
+            (
+                ('estimated_tokens', str(estimated_tokens)),
+                ('estimated_tokens_saved', str(estimated_saved)),
+            ),
+        )
+        return ComparisonFigure(
+            figure_id='figure-12-live-token-savings',
+            title='Figure 12. Live Estimated Token Effect',
+            section=ComparisonFigureSection.SUPPORTING,
+            caption='Repository-level estimated token volume and estimated token savings from live SuitCode MCP calls in the filtered window.',
+            interpretation='This figure is supporting evidence only: token values are estimates derived from live MCP events, not billing totals.',
+            svg_relative_path='figures/12-live-token-savings.svg',
+            csv_relative_path='figures/data/12-live-token-savings.csv',
+            source_scope='agent_experience',
+            metric_kinds=(MetricKind.ESTIMATED,),
+            depends_on_sections=('Live Multi-Agent Experience',),
         )
 
     @staticmethod

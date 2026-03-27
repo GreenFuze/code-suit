@@ -17,4 +17,6 @@ fi
 
 export PYTHONPATH="$repo_root/src${PYTHONPATH:+:$PYTHONPATH}"
 
-exec "$python_exe" -m suitcode.mcp.server "$@"
+profile="${SUITCODE_MCP_PROFILE:-core}"
+
+exec "$python_exe" -m suitcode.mcp.server --profile "$profile" "$@"

@@ -363,6 +363,9 @@ class CodexStandoutComparisonSpec(StrictModel):
     include_stable_execution: bool = True
     include_stress_readonly: bool = True
     include_passive_usage_summary: bool = True
+    include_agent_experience_summary: bool = False
+    agent_experience_repository_root: str | None = None
+    agent_experience_days: int = 14
     stable_timeout_seconds: int | None = None
     stress_timeout_seconds: int | None = None
 
@@ -372,15 +375,18 @@ class CodexStandoutComparisonSpec(StrictModel):
         "stable_execution_tasks_file",
         "stress_readonly_tasks_file",
         "passive_repository_root",
+        "agent_experience_repository_root",
     )
     @classmethod
-    def _validate_task_file(cls, value: str) -> str:
+    def _validate_task_file(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         stripped = value.strip()
         if not stripped:
             raise ValueError("task file path must not be empty")
         return stripped
 
-    @field_validator("stable_timeout_seconds", "stress_timeout_seconds")
+    @field_validator("stable_timeout_seconds", "stress_timeout_seconds", "agent_experience_days")
     @classmethod
     def _validate_timeout(cls, value: int | None) -> int | None:
         if value is not None and value <= 0:
@@ -419,6 +425,7 @@ class CodexStandoutReport(StrictModel):
     stress_summary: dict[str, object] | None = None
     stress_baseline_summary: dict[str, object] | None = None
     passive_usage_summary: dict[str, object] | None = None
+    agent_experience_summary: dict[str, object] | None = None
     headline_efficiency: tuple[HeadlineEfficiencyMetric, ...] = Field(default_factory=tuple)
     provenance_coverage: tuple[ProvenanceCoverageSummary, ...] = Field(default_factory=tuple)
     figures: tuple[ComparisonFigure, ...] = Field(default_factory=tuple)

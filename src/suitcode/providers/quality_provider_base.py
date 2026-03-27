@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 from suitcode.providers.provider_base import ProviderBase
+from suitcode.providers.provider_metadata import ProviderAttachmentContext
 from suitcode.providers.quality_models import QualityFileResult
 from suitcode.providers.runtime_capability_models import QualityRuntimeCapabilities
 
@@ -12,8 +13,8 @@ if TYPE_CHECKING:
 
 
 class QualityProviderBase(ProviderBase, ABC):
-    def __init__(self, repository: Repository) -> None:
-        super().__init__(repository)
+    def __init__(self, repository: Repository, attachment: ProviderAttachmentContext) -> None:
+        super().__init__(repository, attachment)
 
     @abstractmethod
     def lint_file(self, repository_rel_path: str, is_fix: bool) -> QualityFileResult:

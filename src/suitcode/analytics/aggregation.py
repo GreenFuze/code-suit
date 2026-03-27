@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from pathlib import Path
 from statistics import median
+from typing import Callable
 
 from suitcode.analytics.inefficiency import InefficiencyDetector
 from suitcode.analytics.models import (
@@ -39,15 +40,20 @@ class AnalyticsAggregator:
         repository_root: Path | None = None,
         include_global: bool = True,
         session_id: str | None = None,
+        event_filter: Callable[[AnalyticsEvent], bool] | None = None,
     ) -> tuple[AnalyticsEvent, ...]:
         events = self._store.load_events(repository_root=repository_root, include_global=include_global)
         filtered = tuple(item for item in events if item.tool_name not in self._excluded_tools)
         if session_id is None:
-            return filtered
-        normalized = session_id.strip()
-        if not normalized:
-            raise ValueError("session_id must not be empty when provided")
-        return tuple(item for item in filtered if item.session_id == normalized)
+            session_filtered = filtered
+        else:
+            normalized = session_id.strip()
+            if not normalized:
+                raise ValueError("session_id must not be empty when provided")
+            session_filtered = tuple(item for item in filtered if item.session_id == normalized)
+        if event_filter is None:
+            return session_filtered
+        return tuple(item for item in session_filtered if event_filter(item))
 
     def summary(
         self,
@@ -55,11 +61,13 @@ class AnalyticsAggregator:
         repository_root: Path | None = None,
         include_global: bool = True,
         session_id: str | None = None,
+        event_filter: Callable[[AnalyticsEvent], bool] | None = None,
     ) -> AnalyticsSummary:
         events = self.load_events(
             repository_root=repository_root,
             include_global=include_global,
             session_id=session_id,
+            event_filter=event_filter,
         )
         durations = [item.duration_ms for item in events]
         p50, p95 = _latency_percentiles(durations)
@@ -87,11 +95,13 @@ class AnalyticsAggregator:
         repository_root: Path | None = None,
         include_global: bool = True,
         session_id: str | None = None,
+        event_filter: Callable[[AnalyticsEvent], bool] | None = None,
     ) -> tuple[ToolUsageStats, ...]:
         events = self.load_events(
             repository_root=repository_root,
             include_global=include_global,
             session_id=session_id,
+            event_filter=event_filter,
         )
         by_tool: dict[str, list[AnalyticsEvent]] = defaultdict(list)
         for item in events:
@@ -127,11 +137,13 @@ class AnalyticsAggregator:
         repository_root: Path | None = None,
         include_global: bool = True,
         session_id: str | None = None,
+        event_filter: Callable[[AnalyticsEvent], bool] | None = None,
     ) -> tuple[InefficiencyFinding, ...]:
         events = self.load_events(
             repository_root=repository_root,
             include_global=include_global,
             session_id=session_id,
+            event_filter=event_filter,
         )
         return self._detector.detect(events)
 

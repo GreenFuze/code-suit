@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from enum import StrEnum
+
 from pydantic import field_validator, model_validator
 
 from suitcode.core.code.models import CodeLocation
@@ -113,11 +115,42 @@ class ComponentContext(StrictModel):
         return self
 
 
+class FileRelationshipKind(StrEnum):
+    __test__ = False
+    IMPORTS = "imports"
+    IMPORTED_BY = "imported_by"
+
+
+class FileRelationshipRef(StrictModel):
+    repository_rel_path: str
+    relationship_kind: FileRelationshipKind
+    provenance: tuple[ProvenanceEntry, ...]
+
+    @field_validator("repository_rel_path")
+    @classmethod
+    def _validate_repository_rel_path(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("repository_rel_path must not be empty")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_provenance(self) -> "FileRelationshipRef":
+        if not self.provenance:
+            raise ValueError("provenance must not be empty")
+        if any(item.source_kind == SourceKind.HEURISTIC for item in self.provenance):
+            raise ValueError("file relationship provenance must not be heuristic")
+        return self
+
+
 class FileContext(StrictModel):
     file_info: FileInfo
     owner: OwnedNodeInfo
     symbol_count: int
     symbols_preview: tuple[EntityInfo, ...]
+    dependency_file_count: int
+    dependency_files_preview: tuple[FileRelationshipRef, ...]
+    dependent_file_count: int
+    dependent_files_preview: tuple[FileRelationshipRef, ...]
     related_test_count: int
     related_tests_preview: tuple[ResolvedRelatedTest, ...]
     quality_provider_ids: tuple[str, ...]

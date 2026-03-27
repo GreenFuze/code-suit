@@ -21,4 +21,8 @@ if defined PYTHONPATH (
     set "PYTHONPATH=%REPO_ROOT%src"
 )
 
-"%PYTHON_EXE%" -m suitcode.mcp.server %*
+if not defined SUITCODE_MCP_PROFILE (
+    set "SUITCODE_MCP_PROFILE=core"
+)
+
+"%PYTHON_EXE%" -m suitcode.mcp.server --profile "%SUITCODE_MCP_PROFILE%" %*

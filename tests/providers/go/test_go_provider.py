@@ -64,7 +64,7 @@ def test_mixed_npm_and_single_go_module_root_is_supported(tmp_path: Path, npm_fi
     workspace = Workspace(repo_root)
     repository = workspace.repositories[0]
 
-    assert repository.provider_ids == ('go', 'npm')
+    assert repository.provider_ids == ('go', 'npm', 'python')
     assert repository.supports_role(ProviderRole.ARCHITECTURE) is True
     go_components = [item.id for item in repository.arch.get_components() if item.id.startswith('component:go:')]
     assert go_components == ['component:go:native-addon']

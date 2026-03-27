@@ -11,6 +11,8 @@ class NpmPackageClassifier:
 
     def classify(self, package: PackageJsonWorkspacePackage) -> str:
         root_segment = self._root_segment(package)
+        if root_segment == ".":
+            return "component"
         if root_segment == "aggregators":
             return "aggregator"
         if root_segment == "tools":
@@ -22,6 +24,7 @@ class NpmPackageClassifier:
     def component_kind_for(self, package: PackageJsonWorkspacePackage) -> ComponentKind:
         root_segment = self._root_segment(package)
         mapping = {
+            ".": ComponentKind.PACKAGE,
             "apps": ComponentKind.BINARY,
             "services": ComponentKind.SERVICE,
             "packages": ComponentKind.PACKAGE,

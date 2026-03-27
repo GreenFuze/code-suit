@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from suitcode.core.code.models import CodeLocation, SymbolLookupTarget
+from suitcode.core.intelligence_models import FileRelationshipKind, FileRelationshipRef
 from suitcode.core.models import EntityInfo
 from suitcode.core.models.ids import normalize_repository_relative_path
 from suitcode.providers.code_provider_base import CodeProviderBase
@@ -25,7 +26,14 @@ class CodeIntelligence:
         )
 
     def get_symbol(self, query: str, is_case_sensitive: bool = False) -> tuple[EntityInfo, ...]:
-        items = [item for provider in self.providers for item in provider.get_symbol(query, is_case_sensitive=is_case_sensitive)]
+        if not query.strip():
+            raise ValueError("query must not be blank")
+        items: list[EntityInfo] = []
+        for provider in self.providers:
+            try:
+                items.extend(provider.get_symbol(query, is_case_sensitive=is_case_sensitive))
+            except ValueError:
+                continue
         return tuple(
             sorted(
                 items,
@@ -40,15 +48,18 @@ class CodeIntelligence:
         is_case_sensitive: bool = False,
     ) -> tuple[EntityInfo, ...]:
         normalized_path = normalize_repository_relative_path(repository_rel_path)
-        items = [
-            item
-            for provider in self.providers
-            for item in provider.list_symbols_in_file(
-                normalized_path,
-                query=query,
-                is_case_sensitive=is_case_sensitive,
-            )
-        ]
+        items: list[EntityInfo] = []
+        for provider in self.providers:
+            try:
+                items.extend(
+                    provider.list_symbols_in_file(
+                        normalized_path,
+                        query=query,
+                        is_case_sensitive=is_case_sensitive,
+                    )
+                )
+            except ValueError:
+                continue
         return tuple(
             sorted(
                 items,
@@ -58,11 +69,12 @@ class CodeIntelligence:
 
     def find_definition(self, target: SymbolLookupTarget) -> tuple[CodeLocation, ...]:
         repository_rel_path, line, column = self._resolve_lookup_target(target)
-        items = [
-            item
-            for provider in self.providers
-            for item in provider.find_definition(repository_rel_path, line, column)
-        ]
+        items: list[CodeLocation] = []
+        for provider in self.providers:
+            try:
+                items.extend(provider.find_definition(repository_rel_path, line, column))
+            except ValueError:
+                continue
         return tuple(
             sorted(
                 items,
@@ -73,6 +85,40 @@ class CodeIntelligence:
     def get_runtime_capabilities(self) -> tuple[CodeRuntimeCapabilities, ...]:
         return tuple(provider.get_code_runtime_capabilities() for provider in self.providers)
 
+    def get_file_relationships(
+        self,
+        repository_rel_path: str,
+        relationship_kind: FileRelationshipKind | None = None,
+    ) -> tuple[FileRelationshipRef, ...]:
+        normalized_path = normalize_repository_relative_path(repository_rel_path)
+        merged: dict[tuple[FileRelationshipKind, str], FileRelationshipRef] = {}
+        for provider in self.providers:
+            try:
+                items = provider.get_file_relationships(normalized_path)
+            except ValueError:
+                continue
+            for item in items:
+                if relationship_kind is not None and item.relationship_kind != relationship_kind:
+                    continue
+                key = (item.relationship_kind, item.repository_rel_path)
+                existing = merged.get(key)
+                if existing is None:
+                    merged[key] = item
+                    continue
+                merged[key] = item.model_copy(
+                    update={
+                        "provenance": tuple(
+                            dict.fromkeys((*existing.provenance, *item.provenance))
+                        )
+                    }
+                )
+        return tuple(
+            sorted(
+                merged.values(),
+                key=lambda item: (item.relationship_kind.value, item.repository_rel_path),
+            )
+        )
+
     def find_definition_by_symbol_id(self, symbol_id: str) -> tuple[CodeLocation, ...]:
         return self.find_definition(SymbolLookupTarget(symbol_id=symbol_id))
 
@@ -82,16 +128,19 @@ class CodeIntelligence:
         include_definition: bool = False,
     ) -> tuple[CodeLocation, ...]:
         repository_rel_path, line, column = self._resolve_lookup_target(target)
-        items = [
-            item
-            for provider in self.providers
-            for item in provider.find_references(
-                repository_rel_path,
-                line,
-                column,
-                include_definition=include_definition,
-            )
-        ]
+        items: list[CodeLocation] = []
+        for provider in self.providers:
+            try:
+                items.extend(
+                    provider.find_references(
+                        repository_rel_path,
+                        line,
+                        column,
+                        include_definition=include_definition,
+                    )
+                )
+            except ValueError:
+                continue
         return tuple(
             sorted(
                 items,

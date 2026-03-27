@@ -52,7 +52,7 @@ class ClaudeTranscriptCaptureBuilder:
                     block_type = block.get('type')
                     if block_type == 'text':
                         text = block.get('text')
-                        if not isinstance(text, str) or not text:
+                        if not isinstance(text, str) or not text.strip():
                             continue
                         kind = TranscriptSegmentKind.USER_MESSAGE if role == 'user' else TranscriptSegmentKind.ASSISTANT_MESSAGE
                         sequence_index += 1
@@ -101,6 +101,8 @@ class ClaudeTranscriptCaptureBuilder:
                             continue
                         tool_name, is_mcp, is_suitcode, canonical_name = call_index[call_id]
                         output_text = self._tool_result_text(block.get('content'))
+                        if not output_text.strip():
+                            continue
                         kind = TranscriptSegmentKind.MCP_TOOL_OUTPUT if is_mcp else TranscriptSegmentKind.CUSTOM_TOOL_OUTPUT
                         sequence_index += 1
                         segments.append(

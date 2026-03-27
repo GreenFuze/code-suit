@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from suitcode.core.intelligence_models import ComponentContext, FileContext, SymbolContext
+from suitcode.core.intelligence_models import ComponentContext, FileContext, FileRelationshipKind, SymbolContext
 from suitcode.core.component_context_resolver import ComponentContextResolver
 from suitcode.core.ownership_index import OwnershipIndex
 from suitcode.core.code_reference_service import CodeReferenceService
@@ -80,6 +80,14 @@ class ContextService:
         for repository_rel_path in repository_rel_paths:
             file_owner = self._ownership_index.owner_for_file(repository_rel_path)
             symbols = self._repository.code.list_symbols_in_file(repository_rel_path)
+            dependency_files = self._repository.code.get_file_relationships(
+                repository_rel_path,
+                relationship_kind=FileRelationshipKind.IMPORTS,
+            )
+            dependent_files = self._repository.code.get_file_relationships(
+                repository_rel_path,
+                relationship_kind=FileRelationshipKind.IMPORTED_BY,
+            )
             related_tests = self._repository.tests.get_related_tests(RelatedTestTarget(repository_rel_path=repository_rel_path))
             contexts.append(
                 FileContext(
@@ -87,10 +95,20 @@ class ContextService:
                     owner=file_owner.owner,
                     symbol_count=len(symbols),
                     symbols_preview=symbols[:symbol_preview_limit],
+                    dependency_file_count=len(dependency_files),
+                    dependency_files_preview=dependency_files[:symbol_preview_limit],
+                    dependent_file_count=len(dependent_files),
+                    dependent_files_preview=dependent_files[:symbol_preview_limit],
                     related_test_count=len(related_tests),
                     related_tests_preview=related_tests[:test_preview_limit],
                     quality_provider_ids=self._repository.quality.provider_ids,
-                    provenance=self._file_context_provenance(repository_rel_path, symbols, related_tests),
+                    provenance=self._file_context_provenance(
+                        repository_rel_path,
+                        symbols,
+                        dependency_files,
+                        dependent_files,
+                        related_tests,
+                    ),
                 )
             )
         return tuple(contexts)
@@ -153,7 +171,14 @@ class ContextService:
             entries.append(self._summarized_test_provenance(related_tests, "component-related tests"))
         return tuple(entries)
 
-    def _file_context_provenance(self, repository_rel_path: str, symbols, related_tests) -> tuple[ProvenanceEntry, ...]:
+    def _file_context_provenance(
+        self,
+        repository_rel_path: str,
+        symbols,
+        dependency_files,
+        dependent_files,
+        related_tests,
+    ) -> tuple[ProvenanceEntry, ...]:
         entries: list[ProvenanceEntry] = [
             ownership_provenance(
                 evidence_summary=f"file context derived from ownership index for `{repository_rel_path}`",
@@ -166,6 +191,21 @@ class ContextService:
                     source_tool=self._lsp_tool_for_path(repository_rel_path),
                     evidence_summary=f"file symbols derived from LSP document symbols for `{repository_rel_path}`",
                     evidence_paths=(repository_rel_path,),
+                )
+            )
+        if dependency_files or dependent_files:
+            entries.append(
+                derived_summary_provenance(
+                    source_kind=SourceKind.DEPENDENCY_GRAPH,
+                    source_tool=self._lsp_tool_for_path(repository_rel_path),
+                    evidence_summary=(
+                        f"file relationships derived from deterministic dependency-graph resolution for `{repository_rel_path}`"
+                    ),
+                    evidence_paths=self._summarized_relationship_paths(
+                        repository_rel_path,
+                        dependency_files,
+                        dependent_files,
+                    ),
                 )
             )
         if related_tests:
@@ -189,6 +229,18 @@ class ContextService:
         paths: list[str] = []
         for dependency in dependencies:
             for provenance in dependency.provenance:
+                for path in provenance.evidence_paths:
+                    if path not in paths:
+                        paths.append(path)
+        return tuple(paths[:10])
+
+    @staticmethod
+    def _summarized_relationship_paths(repository_rel_path: str, dependency_files, dependent_files) -> tuple[str, ...]:
+        paths: list[str] = [repository_rel_path]
+        for item in (*dependency_files, *dependent_files):
+            if item.repository_rel_path not in paths:
+                paths.append(item.repository_rel_path)
+            for provenance in item.provenance:
                 for path in provenance.evidence_paths:
                     if path not in paths:
                         paths.append(path)

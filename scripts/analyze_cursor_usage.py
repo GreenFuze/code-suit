@@ -14,6 +14,7 @@ from suitcode.analytics.cursor_analytics_service import CursorAnalyticsService
 from suitcode.analytics.cursor_session_store import CursorSessionStore
 from suitcode.analytics.cursor_transcript_capture import CursorTranscriptCaptureBuilder
 from suitcode.analytics.correlation import AnalyticsCorrelationService
+from suitcode.analytics.live_usage_filters import parse_cutoff, session_matches_live_filters
 from suitcode.analytics.settings import AnalyticsSettings
 from suitcode.analytics.storage import JsonlAnalyticsStore
 from suitcode.analytics.transcript_token_estimation import TranscriptTokenEstimator
@@ -27,6 +28,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--include-correlation', action='store_true')
     parser.add_argument('--include-tokens', action='store_true')
     parser.add_argument('--limit', type=int, default=20)
+    parser.add_argument('--since-utc', type=str, default=None)
+    parser.add_argument('--since-hours', type=int, default=None)
+    parser.add_argument('--exclude-test-artifacts', action='store_true')
     parser.add_argument('--json', action='store_true', dest='as_json')
     return parser
 
@@ -61,17 +65,31 @@ def main() -> None:
         raise ValueError('--limit must be > 0')
 
     service = build_service(args.include_correlation, args.include_tokens)
+    cutoff = parse_cutoff(since_utc=args.since_utc, since_hours=args.since_hours)
+    session_filter = lambda item: session_matches_live_filters(
+        item,
+        cutoff=cutoff,
+        exclude_test_artifacts=args.exclude_test_artifacts,
+    )
 
     if args.latest:
-        session = service.latest_repository_session(repository_root) if repository_root is not None else None
+        session = (
+            service.latest_repository_session(repository_root, session_filter=session_filter)
+            if repository_root is not None
+            else None
+        )
         sessions = tuple([session] if session is not None else [])
-        summary = service.repository_summary(repository_root)
+        summary = service.repository_summary(repository_root, session_filter=session_filter)
     elif args.session_id is not None:
-        sessions = service.session_analytics(repository_root=repository_root, session_id=args.session_id)
-        summary = service.repository_summary(repository_root)
+        sessions = service.session_analytics(
+            repository_root=repository_root,
+            session_id=args.session_id,
+            session_filter=session_filter,
+        )
+        summary = service.repository_summary(repository_root, session_filter=session_filter)
     else:
-        sessions = service.session_analytics(repository_root=repository_root)[: args.limit]
-        summary = service.repository_summary(repository_root)
+        sessions = service.session_analytics(repository_root=repository_root, session_filter=session_filter)[: args.limit]
+        summary = service.repository_summary(repository_root, session_filter=session_filter)
 
     if args.as_json:
         payload = {
@@ -82,6 +100,9 @@ def main() -> None:
                 'include_correlation': args.include_correlation,
                 'include_tokens': args.include_tokens,
                 'limit': args.limit,
+                'since_utc': args.since_utc,
+                'since_hours': args.since_hours,
+                'exclude_test_artifacts': args.exclude_test_artifacts,
             },
             'summary': summary.model_dump(mode='json'),
             'sessions': [_session_payload(item, include_tokens=args.include_tokens) for item in sessions],

@@ -4,7 +4,7 @@ import asyncio
 import json
 
 import pytest
-from suitcode.mcp.tool_catalog import TOOL_CATALOG
+from suitcode.mcp.tool_catalog import CORE_TOOL_CATALOG, TOOL_CATALOG
 
 
 async def _call_tool(app, name: str, arguments: dict):
@@ -219,3 +219,87 @@ def test_tool_call_fails_when_analytics_persistence_fails(app, monkeypatch) -> N
 
     with pytest.raises(Exception):
         asyncio.run(_call_tool(app, "list_supported_providers", {}))
+
+
+def test_core_app_registers_only_core_tools(core_app) -> None:
+    tools = asyncio.run(_list_tools(core_app))
+    tool_names = {tool.name for tool in tools}
+
+    assert tool_names == {item.name for item in CORE_TOOL_CATALOG}
+    assert "open_workspace" not in tool_names
+    assert "repository_summary_by_path" not in tool_names
+
+    understand_repository = next(tool for tool in tools if tool.name == "understand_repository")
+    assert understand_repository.annotations is not None
+    assert understand_repository.annotations.readOnlyHint is True
+    assert understand_repository.annotations.title == "Core: Understand Repository"
+
+
+def test_core_tools_return_structured_results(core_app, npm_repo_root) -> None:
+    understanding = _payload_from_result(
+        asyncio.run(
+            _call_tool(
+                core_app,
+                "understand_repository",
+                {"repository_path": str(npm_repo_root), "preview_limit": 5},
+            )
+        )
+    )
+    file_understanding = _payload_from_result(
+        asyncio.run(
+            _call_tool(
+                core_app,
+                "understand_file",
+                {
+                    "repository_path": str(npm_repo_root),
+                    "repository_rel_path": "packages/core/src/index.ts",
+                },
+            )
+        )
+    )
+    impact = _payload_from_result(
+        asyncio.run(
+            _call_tool(
+                core_app,
+                "what_changes_if_i_edit_this",
+                {
+                    "repository_path": str(npm_repo_root),
+                    "repository_rel_path": "packages/core/src/index.ts",
+                },
+            )
+        )
+    )
+    minimum = _payload_from_result(
+        asyncio.run(
+            _call_tool(
+                core_app,
+                "what_should_i_run",
+                {
+                    "repository_path": str(npm_repo_root),
+                    "repository_rel_path": "packages/core/src/index.ts",
+                },
+            )
+        )
+    )
+    availability = _payload_from_result(
+        asyncio.run(
+            _call_tool(
+                core_app,
+                "can_i_do_this",
+                {
+                    "repository_path": str(npm_repo_root),
+                    "repository_rel_path": "packages/core/src/index.ts",
+                    "requested_action_kind": "test",
+                },
+            )
+        )
+    )
+
+    assert understanding["repository"]["provider_ids"]
+    assert understanding["truth_coverage"]["domains"]
+    assert file_understanding["file_owner"]["owner"]["id"]
+    assert isinstance(file_understanding["related_tests"], list)
+    assert impact["target_kind"] == "file"
+    assert isinstance(minimum["tests"], list)
+    assert availability["supported"] is True
+    assert "test" in availability["available_action_kinds"]

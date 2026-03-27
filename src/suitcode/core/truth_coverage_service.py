@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from suitcode.core.change_models import ChangeImpact, QualityGateInfo, RunnerImpact, TestImpact
 from suitcode.core.code.models import CodeLocation
 from suitcode.core.intelligence_models import ComponentContext, FileContext, SymbolContext
+from suitcode.core.intelligence_models import FileRelationshipRef
 from suitcode.core.models import Component, EntityInfo, ExternalPackage, FileInfo, PackageManager, Runner, TestDefinition
 from suitcode.core.provenance import ConfidenceMode, ProvenanceEntry, SourceKind
 from suitcode.core.provenance_builders import derived_summary_provenance
@@ -138,6 +139,8 @@ class TruthCoverageService:
         component_context: ComponentContext | None,
         file_context: FileContext | None,
         symbol_context: SymbolContext | None,
+        dependency_files: tuple[FileRelationshipRef, ...],
+        dependent_files: tuple[FileRelationshipRef, ...],
         dependent_components: tuple[Component, ...],
         reference_locations: tuple[CodeLocation, ...],
         related_tests: tuple[TestImpact, ...],
@@ -162,6 +165,8 @@ class TruthCoverageService:
         ):
             if item is not None:
                 code.add_provenance_item(item.provenance)
+        for relationship in (*dependency_files, *dependent_files):
+            code.add_provenance_item(relationship.provenance)
         code.availability = self._artifact_domain_availability(code)
 
         tests = _DomainAccumulator(domain=TruthCoverageDomain.TESTS)

@@ -11,7 +11,7 @@ from suitcode.core.models import (
     TestDefinition as DefinitionNode,
 )
 from suitcode.core.action_models import ActionKind
-from suitcode.core.intelligence_models import ComponentDependencyEdge, DependencyRef
+from suitcode.core.intelligence_models import ComponentDependencyEdge, DependencyRef, FileRelationshipKind, FileRelationshipRef
 from suitcode.core.runner_service import RunnerService
 from suitcode.core.provenance import SourceKind
 from suitcode.core.tests.models import (
@@ -20,6 +20,7 @@ from suitcode.core.tests.models import (
     TestExecutionStatus as CoreTestExecutionStatus,
 )
 from suitcode.core.provenance_builders import heuristic_provenance
+from suitcode.core.provenance_builders import dependency_graph_provenance
 from suitcode.core.repository import Repository
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
 from suitcode.providers.action_provider_base import ActionProviderBase
@@ -39,6 +40,7 @@ from suitcode.providers.npm.models import (
     NpmTestAnalysis,
 )
 from suitcode.providers.npm.symbol_models import NpmWorkspaceSymbol
+from suitcode.providers.runtime_capability_models import RuntimeCapabilityAvailability
 from tests.providers.npm.expected_npm_provider_data import (
     EXPECTED_AGGREGATOR_IDS,
     EXPECTED_COMPONENT_IDS,
@@ -143,7 +145,7 @@ def test_npm_provider_internal_analysis_stays_npm_specific(npm_provider: NPMProv
 
 def test_npm_provider_uses_fixture_repository_root(npm_repository: Repository) -> None:
     assert npm_repository.root.name == "npm"
-    assert npm_repository.provider_ids == ("go", "npm")
+    assert npm_repository.provider_ids == ("go", "npm", "python")
 
 
 def test_npm_provider_get_symbol_returns_entity_info(npm_provider: NPMProvider) -> None:
@@ -191,6 +193,33 @@ def test_npm_provider_definition_and_reference_locations_include_provenance(npm_
     assert definitions[0].provenance[0].source_tool == "typescript-language-server"
     assert references[0].provenance[0].source_kind.value == "lsp"
     assert references[0].provenance[0].source_tool == "typescript-language-server"
+
+
+def test_npm_provider_returns_file_relationships_from_provider_service(npm_provider: NPMProvider) -> None:
+    class _FakeRelationshipService:
+        def get_file_relationships(self, repository_rel_path: str) -> tuple[FileRelationshipRef, ...]:
+            assert repository_rel_path == "packages/core/src/index.ts"
+            return (
+                FileRelationshipRef(
+                    repository_rel_path="packages/utils/src/index.ts",
+                    relationship_kind=FileRelationshipKind.IMPORTED_BY,
+                    provenance=(
+                        dependency_graph_provenance(
+                            source_tool="typescript",
+                            evidence_summary="resolved import edge",
+                            evidence_paths=("packages/core/src/index.ts", "packages/utils/src/index.ts"),
+                        ),
+                    ),
+                ),
+            )
+
+    npm_provider._file_relationship_service = _FakeRelationshipService()  # type: ignore[assignment]
+
+    relationships = npm_provider.get_file_relationships("packages/core/src/index.ts")
+
+    assert len(relationships) == 1
+    assert relationships[0].relationship_kind == FileRelationshipKind.IMPORTED_BY
+    assert relationships[0].repository_rel_path == "packages/utils/src/index.ts"
 
 
 def test_npm_provider_internal_symbol_analysis_stays_npm_specific(npm_provider: NPMProvider) -> None:
@@ -266,8 +295,8 @@ def test_repository_intelligence_wraps_registered_npm_provider(npm_repository: R
     assert EXPECTED_COMPONENT_IDS.issubset(component_ids)
     assert "component:go:native-addon" in component_ids
     assert EXPECTED_TEST_IDS.issubset(test_ids)
-    assert npm_repository.provider_ids == ("go", "npm")
-    assert npm_repository.quality.provider_ids == ("npm",)
+    assert npm_repository.provider_ids == ("go", "npm", "python")
+    assert npm_repository.quality.provider_ids == ("npm", "python")
 
 
 def test_repository_code_intelligence_uses_registered_provider(npm_repository: Repository) -> None:
@@ -379,6 +408,25 @@ def test_npm_provider_exposes_deterministic_actions(npm_provider: NPMProvider) -
     assert any(item.kind == ActionKind.RUNNER_EXECUTION for item in actions)
     assert any(item.kind == ActionKind.TEST_EXECUTION for item in actions)
     assert any(item.kind == ActionKind.BUILD_EXECUTION for item in actions)
+
+
+def test_npm_provider_code_runtime_capabilities_use_resolver(npm_provider: NPMProvider, monkeypatch) -> None:
+    class _FakeResolver:
+        def resolve(self, repository_root):
+            return ("node", "managed-cli.mjs", "--stdio")
+
+        def resolve_initialization_options(self, repository_root):
+            return {"tsserver": {"path": "managed-tsserver.js"}}
+
+    monkeypatch.setattr(
+        "suitcode.providers.npm.npm_provider.TypeScriptLanguageServerResolver",
+        lambda: _FakeResolver(),
+    )
+
+    capabilities = npm_provider.get_code_runtime_capabilities()
+
+    assert capabilities.symbol_search.availability == RuntimeCapabilityAvailability.AVAILABLE
+    assert capabilities.definitions.availability == RuntimeCapabilityAvailability.AVAILABLE
 
 
 def test_npm_provider_describe_and_run_test_targets(npm_provider: NPMProvider) -> None:

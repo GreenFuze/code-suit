@@ -30,7 +30,11 @@ from suitcode.core.runner_service import RunnerService
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
 from suitcode.providers.code_provider_base import CodeProviderBase
 from suitcode.providers.provider_base import ProviderBase
-from suitcode.providers.provider_metadata import RepositorySupportResult
+from suitcode.providers.provider_metadata import (
+    DetectedProviderAttachment,
+    ProviderAttachmentContext,
+    RepositorySupportResult,
+)
 from suitcode.providers.provider_roles import ProviderRole
 from suitcode.providers.quality_provider_base import QualityProviderBase
 from suitcode.providers.registry import BUILTIN_PROVIDER_CLASSES, detect_support_for_root, get_provider_descriptors
@@ -61,25 +65,34 @@ class Repository:
             raise ValueError(f"repository path is not a directory: {repository_path}")
 
         ancestors = [path, *path.parents]
+        boundary_index = next(
+            (
+                index
+                for index, candidate in enumerate(ancestors)
+                if any((candidate / marker).exists() for marker in (*cls._VC_MARKERS, *cls._IDE_MARKERS, ".suit"))
+            ),
+            len(ancestors) - 1,
+        )
+        probe_ancestors = ancestors[: boundary_index + 1]
 
         # Prefer the nearest provider-supported directory over generic VCS roots.
         # This keeps nested supported repositories addressable inside a larger checkout.
-        for candidate in ancestors:
+        for candidate in probe_ancestors:
             try:
                 if detect_support_for_root(candidate).is_supported:
                     return candidate
             except ValueError:
                 continue
 
-        for candidate in ancestors:
+        for candidate in probe_ancestors:
             if any((candidate / marker).exists() for marker in cls._VC_MARKERS):
                 return candidate
 
-        for candidate in ancestors:
+        for candidate in probe_ancestors:
             if (candidate / ".suit").is_dir():
                 return candidate
 
-        for candidate in ancestors:
+        for candidate in probe_ancestors:
             if any((candidate / marker).exists() for marker in cls._IDE_MARKERS):
                 return candidate
 
@@ -126,7 +139,10 @@ class Repository:
             )
 
         self._suit_dir = self.ensure_suit_layout(self._root) if materialize_suit_dir else (self._root / ".suit")
-        self._providers_by_id: dict[str, ProviderBase] = {}
+        self._providers: tuple[ProviderBase, ...] = tuple()
+        self._provider_attachments: tuple[ProviderAttachmentContext, ...] = tuple()
+        self._providers_by_id: dict[str, tuple[ProviderBase, ...]] = {}
+        self._provider_attachments_by_id: dict[str, tuple[ProviderAttachmentContext, ...]] = {}
         self._provider_roles_by_id: dict[str, frozenset[ProviderRole]] = {}
         self._ownership_index_service: OwnershipIndex | None = None
         self._component_context_resolver: ComponentContextResolver | None = None
@@ -141,6 +157,7 @@ class Repository:
         self._truth_coverage_cache: TruthCoverageSummary | None = None
         self._truth_coverage_lock = Lock()
         self._initialize_providers(support)
+        self._validate_unique_file_ownership()
 
         from suitcode.core.architecture.architecture_intelligence import ArchitectureIntelligence
         from suitcode.core.code.code_intelligence import CodeIntelligence
@@ -154,17 +171,58 @@ class Repository:
         self._actions = ActionIntelligence(self)
 
     def _initialize_providers(self, support: RepositorySupportResult) -> None:
-        support_by_id = {item.provider_id: item for item in support.detected_providers}
+        provider_classes_by_id = {
+            provider_cls.descriptor().provider_id: provider_cls for provider_cls in BUILTIN_PROVIDER_CLASSES
+        }
+        providers: list[ProviderBase] = []
+        attachments_by_id: dict[str, list[ProviderAttachmentContext]] = {}
+        providers_by_id: dict[str, list[ProviderBase]] = {}
         for provider_cls in BUILTIN_PROVIDER_CLASSES:
             descriptor = provider_cls.descriptor()
-            detected = support_by_id.get(descriptor.provider_id)
+            detected = next((item for item in support.detected_providers if item.provider_id == descriptor.provider_id), None)
             if detected is None:
                 continue
-
-            provider = provider_cls(self)
-            self._validate_provider_roles(provider, detected.detected_roles)
-            self._providers_by_id[descriptor.provider_id] = provider
+            for attachment in detected.attachments:
+                context = self._attachment_context(attachment)
+                provider = provider_classes_by_id[descriptor.provider_id](self, context)
+                self._validate_provider_roles(provider, attachment.detected_roles)
+                providers.append(provider)
+                providers_by_id.setdefault(descriptor.provider_id, []).append(provider)
+                attachments_by_id.setdefault(descriptor.provider_id, []).append(context)
             self._provider_roles_by_id[descriptor.provider_id] = detected.detected_roles
+        self._providers = tuple(
+            sorted(
+                providers,
+                key=lambda item: (
+                    item.attachment.provider_id,
+                    item.attachment.attachment_root_rel_path,
+                ),
+            )
+        )
+        self._provider_attachments = tuple(
+            item.attachment
+            for item in self._providers
+        )
+        self._providers_by_id = {
+            provider_id: tuple(
+                sorted(items, key=lambda item: item.attachment.attachment_root_rel_path)
+            )
+            for provider_id, items in providers_by_id.items()
+        }
+        self._provider_attachments_by_id = {
+            provider_id: tuple(
+                sorted(items, key=lambda item: item.attachment_root_rel_path)
+            )
+            for provider_id, items in attachments_by_id.items()
+        }
+
+    def _attachment_context(self, attachment: DetectedProviderAttachment) -> ProviderAttachmentContext:
+        return ProviderAttachmentContext(
+            provider_id=attachment.provider_id,
+            repository_root=self._root,
+            attachment_root=attachment.attachment_root,
+            attachment_root_rel_path=attachment.attachment_root_rel_path,
+        )
 
     @staticmethod
     def _validate_provider_roles(provider: ProviderBase, roles: frozenset[ProviderRole]) -> None:
@@ -204,27 +262,49 @@ class Repository:
 
     @property
     def providers(self) -> tuple[ProviderBase, ...]:
-        return tuple(self._providers_by_id.values())
+        return self._providers
 
     @property
     def provider_ids(self) -> tuple[str, ...]:
-        return tuple(self._providers_by_id.keys())
+        return tuple(sorted(self._providers_by_id))
 
     @property
     def provider_roles(self) -> Mapping[str, frozenset[ProviderRole]]:
         return self._provider_roles_by_id
 
+    @property
+    def provider_attachments(self) -> tuple[ProviderAttachmentContext, ...]:
+        return self._provider_attachments
+
+    @property
+    def provider_attachment_roots(self) -> Mapping[str, tuple[str, ...]]:
+        return {
+            provider_id: tuple(item.attachment_root_rel_path for item in attachments)
+            for provider_id, attachments in self._provider_attachments_by_id.items()
+        }
+
     def get_provider(self, provider_id: str) -> ProviderBase:
-        provider = self._providers_by_id.get(provider_id)
-        if provider is None:
+        providers = self._providers_by_id.get(provider_id)
+        if not providers:
             raise ValueError(f"unknown provider id for repository `{self._root}`: `{provider_id}`")
-        return provider
+        if len(providers) > 1:
+            attachment_roots = ", ".join(item.attachment.attachment_root_rel_path for item in providers)
+            raise ValueError(
+                f"provider id `{provider_id}` is attached multiple times in repository `{self._root}`: {attachment_roots}"
+            )
+        return providers[0]
+
+    def get_provider_instances(self, provider_id: str) -> tuple[ProviderBase, ...]:
+        providers = self._providers_by_id.get(provider_id)
+        if not providers:
+            raise ValueError(f"unknown provider id for repository `{self._root}`: `{provider_id}`")
+        return providers
 
     def get_providers_for_role(self, role: ProviderRole) -> tuple[ProviderBase, ...]:
         return tuple(
             provider
-            for provider_id, provider in self._providers_by_id.items()
-            if role in self._provider_roles_by_id[provider_id]
+            for provider in self._providers
+            if role in self._provider_roles_by_id[provider.attachment.provider_id]
         )
 
     def has_provider(self, provider_id: str) -> bool:
@@ -468,3 +548,22 @@ class Repository:
         if self._truth_coverage_service is None:
             self._truth_coverage_service = TruthCoverageService(self)
         return self._truth_coverage_service
+
+    def _validate_unique_file_ownership(self) -> None:
+        file_owners: dict[str, tuple[str, str, str]] = {}
+        for provider in self.get_providers_for_role(ProviderRole.ARCHITECTURE):
+            for file_info in provider.get_files():
+                existing = file_owners.get(file_info.repository_rel_path)
+                current = (
+                    provider.attachment.provider_id,
+                    provider.attachment.attachment_root_rel_path,
+                    file_info.owner_id,
+                )
+                if existing is not None and existing != current:
+                    raise ValueError(
+                        "duplicate file ownership detected for "
+                        f"`{file_info.repository_rel_path}` between "
+                        f"`{existing[2]}` ({existing[0]} @ {existing[1]}) and "
+                        f"`{current[2]}` ({current[0]} @ {current[1]})"
+                    )
+                file_owners[file_info.repository_rel_path] = current

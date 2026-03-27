@@ -13,6 +13,7 @@ from suitcode.core.models import (
 )
 from suitcode.core.dependency_projection import DependencyProjection
 from suitcode.core.intelligence_models import ComponentDependencyEdge, DependencyRef
+from suitcode.providers.provider_metadata import ProviderAttachmentContext
 from suitcode.providers.provider_base import ProviderBase
 
 if TYPE_CHECKING:
@@ -20,8 +21,8 @@ if TYPE_CHECKING:
 
 
 class ArchitectureProviderBase(ProviderBase, ABC):
-    def __init__(self, repository: Repository) -> None:
-        super().__init__(repository)
+    def __init__(self, repository: Repository, attachment: ProviderAttachmentContext) -> None:
+        super().__init__(repository, attachment)
 
     @abstractmethod
     def get_components(self) -> tuple[Component, ...]:

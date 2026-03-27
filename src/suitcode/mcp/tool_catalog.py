@@ -72,7 +72,36 @@ def _mutating(name: str, description: str, *, service_method: str | None = None,
     )
 
 
-TOOL_CATALOG: tuple[ToolBinding, ...] = (
+CORE_TOOL_CATALOG: tuple[ToolBinding, ...] = (
+    _read_only(
+        "understand_repository",
+        "Start here for a supported repository when you need a deterministic summary, truth coverage, and the next high-value questions by repository path.",
+        title="Core: Understand Repository",
+    ),
+    _read_only(
+        "understand_file",
+        "Start here when you need to know what owns a file and which related tests are closest to it by repository path.",
+        title="Core: Understand File",
+    ),
+    _read_only(
+        "what_changes_if_i_edit_this",
+        "Use this when a file change may have blast radius. Returns dependents, references, related tests, runners, and evidence by repository path.",
+        title="Core: What Changes If I Edit This?",
+    ),
+    _read_only(
+        "what_should_i_run",
+        "Use this when you need the minimum deterministic validation set after changing a file by repository path.",
+        title="Core: What Should I Run?",
+    ),
+    _read_only(
+        "can_i_do_this",
+        "Use this when you want a deterministic yes or no for a requested action kind on a file, plus the nearest supported alternative.",
+        title="Core: Can I Do This?",
+    ),
+)
+
+
+FULL_TOOL_CATALOG: tuple[ToolBinding, ...] = (
     _read_only("list_supported_providers", "List supported provider capabilities and ecosystems."),
     _read_only("inspect_repository_support", "Check whether a repository path is supported before opening a workspace."),
     _stateful(
@@ -210,3 +239,6 @@ TOOL_CATALOG: tuple[ToolBinding, ...] = (
         "Workspace-based answer to what should run after a change. Use this after open_workspace when you already have workspace_id and repository_id and need the smallest exact set of tests, builds, runner actions, and quality operations.",
     ),
 )
+
+
+TOOL_CATALOG = FULL_TOOL_CATALOG

@@ -35,6 +35,15 @@ class DetectedProviderView(StrictModel):
     detected_roles: tuple[str, ...]
     build_systems: tuple[str, ...]
     programming_languages: tuple[str, ...]
+    attachments: tuple["ProviderAttachmentView", ...] = Field(default_factory=tuple)
+
+
+class ProviderAttachmentView(StrictModel):
+    provider_id: str
+    attachment_root: str
+    attachment_root_rel_path: str
+    detected_roles: tuple[str, ...]
+    discovery_notes: tuple[str, ...] = Field(default_factory=tuple)
 
 
 class RepositorySupportView(StrictModel):
@@ -56,6 +65,7 @@ class RepositoryView(StrictModel):
     suit_dir: str
     provider_ids: tuple[str, ...]
     provider_roles: dict[str, tuple[str, ...]]
+    provider_attachment_roots: dict[str, tuple[str, ...]]
 
 
 class WorkspaceUsageGuidanceView(StrictModel):
@@ -212,6 +222,11 @@ class FileView(StrictModel):
     provenance: tuple[ProvenanceView, ...]
 
 
+class FileRelationshipView(StrictModel):
+    path: str
+    provenance: tuple[ProvenanceView, ...]
+
+
 class SymbolView(StrictModel):
     id: str
     name: str
@@ -354,6 +369,10 @@ class FileContextView(StrictModel):
     owner: OwnerView
     symbol_count: int
     symbols_preview: tuple[SymbolView, ...]
+    dependency_file_count: int
+    dependency_files_preview: tuple[FileRelationshipView, ...]
+    dependent_file_count: int
+    dependent_files_preview: tuple[FileRelationshipView, ...]
     related_test_count: int
     related_tests_preview: tuple[RelatedTestView, ...]
     quality_provider_ids: tuple[str, ...]
@@ -429,6 +448,8 @@ class ChangeImpactView(StrictModel):
     component_context: ComponentContextView | None = None
     file_context: FileContextView | None = None
     symbol_context: SymbolContextView | None = None
+    dependency_files: tuple[FileRelationshipView, ...]
+    dependent_files: tuple[FileRelationshipView, ...]
     dependent_components: tuple[ComponentView, ...]
     reference_locations: tuple[LocationView, ...]
     related_tests: tuple[TestImpactView, ...]
@@ -604,6 +625,7 @@ class RepositorySnapshotView(StrictModel):
     suit_dir: str
     provider_ids: tuple[str, ...]
     provider_roles: dict[str, tuple[str, ...]]
+    provider_attachment_roots: dict[str, tuple[str, ...]]
 
 
 class ArchitectureSnapshotView(StrictModel):
@@ -658,11 +680,19 @@ class TruthCoverageSummaryView(StrictModel):
     provenance: tuple[ProvenanceView, ...]
 
 
+class RepositoryUnderstandingView(StrictModel):
+    repository: RepositorySummaryView
+    truth_coverage: TruthCoverageSummaryView
+    recommended_next_questions: tuple[str, ...]
+    provenance: tuple[ProvenanceView, ...]
+
+
 class RepositorySummaryView(StrictModel):
     workspace_id: str
     repository_id: str
     provider_ids: tuple[str, ...]
     provider_roles: dict[str, tuple[str, ...]]
+    provider_attachment_roots: dict[str, tuple[str, ...]]
     quality_provider_ids: tuple[str, ...]
     component_count: int
     runner_count: int
@@ -676,6 +706,33 @@ class RepositorySummaryView(StrictModel):
     test_ids_preview: tuple[str, ...]
     preview_limit: int
     truth_coverage: TruthCoverageSummaryView | None = None
+    provenance: tuple[ProvenanceView, ...]
+
+
+class FileUnderstandingView(StrictModel):
+    file_owner: FileOwnerView
+    dependency_file_count: int
+    dependency_files_preview: tuple[FileRelationshipView, ...]
+    dependent_file_count: int
+    dependent_files_preview: tuple[FileRelationshipView, ...]
+    related_tests: tuple[RelatedTestView, ...]
+    suggested_follow_ups: tuple[str, ...]
+    provenance: tuple[ProvenanceView, ...]
+
+
+class ActionAvailabilityView(StrictModel):
+    requested_action_kind: str
+    supported: bool
+    reason_code: str
+    available_action_kinds: tuple[str, ...]
+    owner: OwnerView
+    primary_component: ComponentView | None = None
+    recommended_tests: tuple[MinimumVerifiedTestTargetView, ...]
+    recommended_build_targets: tuple[MinimumVerifiedBuildTargetView, ...]
+    recommended_runner_actions: tuple[MinimumVerifiedRunnerActionView, ...]
+    recommended_quality_validation_operations: tuple[MinimumVerifiedQualityOperationView, ...]
+    recommended_quality_hygiene_operations: tuple[MinimumVerifiedQualityOperationView, ...]
+    truth_coverage: TruthCoverageSummaryView
     provenance: tuple[ProvenanceView, ...]
 
 

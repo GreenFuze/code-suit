@@ -10,6 +10,9 @@ def test_run_mcp_bat_contains_expected_defaults() -> None:
     content = Path("run_mcp.bat").read_text(encoding="utf-8")
 
     assert "suitcode.mcp.server" in content
+    assert "SUITCODE_MCP_PROFILE" in content
+    assert "core" in content
+    assert "--profile" in content
     assert "--transport" not in content
     assert "--host" not in content
     assert "--port 8000" not in content
@@ -21,6 +24,9 @@ def test_run_mcp_sh_contains_expected_defaults() -> None:
     content = Path("run_mcp.sh").read_text(encoding="utf-8")
 
     assert "suitcode.mcp.server" in content
+    assert "SUITCODE_MCP_PROFILE" in content
+    assert "core" in content
+    assert "--profile" in content
     assert "--transport" not in content
     assert "--host" not in content
     assert "--port 8000" not in content

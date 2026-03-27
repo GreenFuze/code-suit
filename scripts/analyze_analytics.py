@@ -11,6 +11,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from suitcode.analytics.aggregation import AnalyticsAggregator
+from suitcode.analytics.live_usage_filters import event_matches_live_filters, parse_cutoff
 from suitcode.analytics.settings import AnalyticsSettings
 from suitcode.analytics.storage import JsonlAnalyticsStore
 from suitcode.mcp.descriptions import TOOL_DESCRIPTIONS
@@ -29,6 +30,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--include-events", action="store_true")
     parser.add_argument("--event-limit", type=int, default=50)
+    parser.add_argument("--since-utc", type=str, default=None)
+    parser.add_argument("--since-hours", type=int, default=None)
+    parser.add_argument("--exclude-test-artifacts", action="store_true")
+    parser.add_argument("--exclude-benchmark-events", action="store_true")
     parser.add_argument("--json", action="store_true", dest="as_json")
     return parser
 
@@ -41,12 +46,15 @@ def _filtered_events(
     session_id: str | None,
     tool_name: str | None,
     event_limit: int,
+    event_filter,
 ):
     if event_limit <= 0:
         raise ValueError("--event-limit must be > 0")
     events = store.load_events(repository_root=repository_root, include_global=include_global)
     filtered = []
     for event in events:
+        if event_filter is not None and not event_filter(event):
+            continue
         if session_id is not None and event.session_id != session_id:
             continue
         if tool_name is not None and event.tool_name != tool_name:
@@ -72,21 +80,31 @@ def main() -> None:
     )
     repository_root = Path(args.repository_root).expanduser().resolve() if args.repository_root else None
     include_global = args.include_global if args.include_global is not None else repository_root is None
+    cutoff = parse_cutoff(since_utc=args.since_utc, since_hours=args.since_hours)
+    event_filter = lambda item: event_matches_live_filters(
+        item,
+        cutoff=cutoff,
+        exclude_test_artifacts=args.exclude_test_artifacts,
+        exclude_benchmark_events=args.exclude_benchmark_events,
+    )
 
     summary = aggregator.summary(
         repository_root=repository_root,
         include_global=include_global,
         session_id=args.session_id,
+        event_filter=event_filter,
     )
     tool_usage = aggregator.tool_usage(
         repository_root=repository_root,
         include_global=include_global,
         session_id=args.session_id,
+        event_filter=event_filter,
     )
     inefficiencies = aggregator.inefficient_calls(
         repository_root=repository_root,
         include_global=include_global,
         session_id=args.session_id,
+        event_filter=event_filter,
     )
     events = (
         _filtered_events(
@@ -96,6 +114,7 @@ def main() -> None:
             session_id=args.session_id,
             tool_name=args.tool_name,
             event_limit=args.event_limit,
+            event_filter=event_filter,
         )
         if args.include_events
         else tuple()
@@ -108,6 +127,10 @@ def main() -> None:
                 "include_global": include_global,
                 "session_id": args.session_id,
                 "tool_name": args.tool_name,
+                "since_utc": args.since_utc,
+                "since_hours": args.since_hours,
+                "exclude_test_artifacts": args.exclude_test_artifacts,
+                "exclude_benchmark_events": args.exclude_benchmark_events,
             },
             "summary": summary.model_dump(mode="json"),
             "tool_usage": [item.model_dump(mode="json") for item in tool_usage],
@@ -124,6 +147,10 @@ def main() -> None:
     print(f"Include global stream: {include_global}")
     print(f"Session filter: {args.session_id or '(none)'}")
     print(f"Tool filter: {args.tool_name or '(none)'}")
+    print(f"Since UTC: {args.since_utc or '(none)'}")
+    print(f"Since hours: {args.since_hours if args.since_hours is not None else '(none)'}")
+    print(f"Exclude test artifacts: {args.exclude_test_artifacts}")
+    print(f"Exclude benchmark events: {args.exclude_benchmark_events}")
     print()
     print(f"Total calls: {summary.total_calls}")
     print(f"Success calls: {summary.success_calls}")

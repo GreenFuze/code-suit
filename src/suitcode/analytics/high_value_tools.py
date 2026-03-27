@@ -2,6 +2,11 @@ from __future__ import annotations
 
 
 HIGH_VALUE_TOOLS = (
+    "understand_repository",
+    "understand_file",
+    "what_changes_if_i_edit_this",
+    "what_should_i_run",
+    "can_i_do_this",
     "repository_summary",
     "repository_summary_by_path",
     "describe_components",

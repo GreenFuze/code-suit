@@ -11,7 +11,7 @@ from suitcode.core.change_models import (
     TestImpact,
 )
 from suitcode.core.code.models import CodeLocation
-from suitcode.core.intelligence_models import ComponentDependencyEdge
+from suitcode.core.intelligence_models import ComponentDependencyEdge, FileRelationshipKind, FileRelationshipRef
 from suitcode.core.models import Component
 from suitcode.core.repository_models import OwnedNodeInfo
 
@@ -22,6 +22,8 @@ class ChangeEvidenceAssembler:
         ChangeEvidenceEdgeKind.TARGET_OWNER,
         ChangeEvidenceEdgeKind.OWNER_PRIMARY_COMPONENT,
         ChangeEvidenceEdgeKind.TARGET_REFERENCE,
+        ChangeEvidenceEdgeKind.TARGET_DEPENDENCY_FILE,
+        ChangeEvidenceEdgeKind.TARGET_DEPENDENT_FILE,
         ChangeEvidenceEdgeKind.COMPONENT_DEPENDENT_COMPONENT,
         ChangeEvidenceEdgeKind.TARGET_RELATED_TEST,
         ChangeEvidenceEdgeKind.TARGET_RELATED_RUNNER,
@@ -37,6 +39,8 @@ class ChangeEvidenceAssembler:
         owner: OwnedNodeInfo,
         primary_component: Component | None,
         reference_locations: tuple[CodeLocation, ...],
+        dependency_files: tuple[FileRelationshipRef, ...],
+        dependent_files: tuple[FileRelationshipRef, ...],
         dependent_components: tuple[Component, ...],
         dependent_edges: tuple[ComponentDependencyEdge, ...],
         related_tests: tuple[TestImpact, ...],
@@ -48,6 +52,8 @@ class ChangeEvidenceAssembler:
             self._target_owner_edge(target_kind, target_node_id, owner, evidence_path),
             *self._owner_primary_component_edges(owner, primary_component),
             *self._reference_edges(target_kind, target_node_id, reference_locations),
+            *self._relationship_edges(target_node_id, dependency_files),
+            *self._relationship_edges(target_node_id, dependent_files),
             *self._dependent_component_edges(primary_component, dependent_components, dependent_edges),
             *self._related_test_edges(target_kind, target_node_id, related_tests),
             *self._related_runner_edges(target_kind, target_node_id, related_runners),
@@ -129,6 +135,32 @@ class ChangeEvidenceAssembler:
             )
             for location in reference_locations
         )
+
+    def _relationship_edges(
+        self,
+        target_node_id: str,
+        relationships: tuple[FileRelationshipRef, ...],
+    ) -> tuple[ChangeEvidenceEdge, ...]:
+        impacts: list[ChangeEvidenceEdge] = []
+        for item in relationships:
+            if item.relationship_kind == FileRelationshipKind.IMPORTS:
+                edge_kind = ChangeEvidenceEdgeKind.TARGET_DEPENDENCY_FILE
+                reason = "dependency file discovered from deterministic import resolution"
+            else:
+                edge_kind = ChangeEvidenceEdgeKind.TARGET_DEPENDENT_FILE
+                reason = "dependent file discovered from deterministic import resolution"
+            impacts.append(
+                ChangeEvidenceEdge(
+                    source_node_kind="change_target",
+                    source_node_id=target_node_id,
+                    target_node_kind="file",
+                    target_node_id=f"file:{item.repository_rel_path}",
+                    edge_kind=edge_kind,
+                    reason=reason,
+                    provenance=item.provenance,
+                )
+            )
+        return tuple(impacts)
 
     def _dependent_component_edges(
         self,

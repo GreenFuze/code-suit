@@ -16,9 +16,35 @@ class ProviderDescriptor:
 
 
 @dataclass(frozen=True)
+class ProviderAttachmentContext:
+    provider_id: str
+    repository_root: Path
+    attachment_root: Path
+    attachment_root_rel_path: str
+
+
+@dataclass(frozen=True)
+class ProviderAttachmentCandidate:
+    provider_id: str
+    attachment_root: Path
+    detected_roles: frozenset[ProviderRole]
+    discovery_notes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DetectedProviderAttachment:
+    provider_id: str
+    attachment_root: Path
+    attachment_root_rel_path: str
+    detected_roles: frozenset[ProviderRole]
+    discovery_notes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class DetectedProviderSupport:
     descriptor: ProviderDescriptor
     detected_roles: frozenset[ProviderRole]
+    attachments: tuple[DetectedProviderAttachment, ...]
 
     @property
     def provider_id(self) -> str:

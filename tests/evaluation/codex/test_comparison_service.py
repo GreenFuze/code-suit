@@ -200,7 +200,7 @@ class _FakeEvaluationService:
 
 
 class _FakeAnalyticsService:
-    def repository_summary(self, repository_root: Path):
+    def repository_summary(self, repository_root: Path, session_filter=None):
         class _Summary:
             def model_dump(self, mode: str = "json"):
                 return {
@@ -236,6 +236,101 @@ class _FakeAnalyticsService:
         return _Summary()
 
 
+class _FakeNativeSummaryService:
+    def __init__(self, *, first_tool: str, session_count: int, sessions_using: int, avg_first_index: float | None) -> None:
+        self._first_tool = first_tool
+        self._session_count = session_count
+        self._sessions_using = sessions_using
+        self._avg_first_index = avg_first_index
+
+    def repository_summary(self, repository_root: Path, session_filter=None):
+        class _Summary:
+            def __init__(self, payload: dict[str, object]) -> None:
+                self._payload = payload
+
+            def model_dump(self, mode: str = "json"):
+                return self._payload
+
+        return _Summary(
+            {
+                "repository_root": str(repository_root),
+                "session_count": self._session_count,
+                "sessions_using_suitcode": self._sessions_using,
+                "sessions_without_suitcode": self._session_count - self._sessions_using,
+                "sessions_without_high_value_suitcode": 0,
+                "sessions_with_late_suitcode_adoption": 0,
+                "sessions_with_late_high_value_adoption": 0,
+                "sessions_with_shell_heavy_pre_suitcode": 0,
+                "skipped_artifacts": 0,
+                "tool_usage": [
+                    {"tool_name": self._first_tool, "call_count": self._sessions_using, "first_seen_at": None, "last_seen_at": None}
+                ]
+                if self._sessions_using
+                else [],
+                "first_tool_distribution": ({self._first_tool: self._sessions_using} if self._sessions_using else {}),
+                "first_high_value_tool_distribution": {},
+                "correlation_quality_mix": {"strong": self._sessions_using} if self._sessions_using else {},
+                "transcript_metrics": {"event_count": 10, "mcp_tool_call_count": self._sessions_using},
+                "avg_first_suitcode_tool_index": self._avg_first_index,
+                "avg_first_high_value_tool_index": None,
+                "total_tokens": 1000,
+                "avg_tokens_per_session": 250.0,
+                "avg_tokens_before_first_suitcode_tool": 120.0 if self._sessions_using else None,
+                "avg_tokens_before_first_high_value_suitcode_tool": None,
+                "token_breakdowns_by_kind": {"assistant_message_tokens": 200},
+                "latest_session_id": "session-x",
+                "latest_session_at": "2026-03-24T00:00:00Z",
+                "notes": [],
+            }
+        )
+
+
+class _FakeMcpAggregator:
+    def summary(self, **kwargs):
+        class _Summary:
+            def model_dump(self, mode: str = "json"):
+                return {
+                    "total_calls": 7,
+                    "success_calls": 6,
+                    "error_calls": 1,
+                    "estimated_tokens": 420,
+                    "estimated_tokens_saved": 280,
+                    "confidence_mix": {"high": 7},
+                    "top_tools": ("repository_summary_by_path",),
+                }
+
+        return _Summary()
+
+    def tool_usage(self, **kwargs):
+        class _Item:
+            def __init__(self, tool_name: str, total_calls: int, success_calls: int, error_calls: int) -> None:
+                self.tool_name = tool_name
+                self.total_calls = total_calls
+                self.success_calls = success_calls
+                self.error_calls = error_calls
+                self.estimated_tokens = 100
+                self.estimated_tokens_saved = 200
+                self.p95_duration_ms = 1234
+
+        return (
+            _Item("repository_summary_by_path", 3, 3, 0),
+            _Item("get_file_owner_by_path", 2, 2, 0),
+        )
+
+    def load_events(self, **kwargs):
+        class _Status:
+            value = "error"
+
+        class _Event:
+            def __init__(self) -> None:
+                self.status = _Status()
+                self.tool_name = "get_minimum_verified_change_set_by_path"
+                self.error_class = "McpValidationError"
+                self.error_message = "unknown repository file owner"
+
+        return (_Event(),)
+
+
 def test_comparison_service_runs_arms_and_writes_report(tmp_path: Path) -> None:
     comparison_root = tmp_path / ".suit" / "evaluation" / "codex" / "comparisons"
     reporter = CodexComparisonReporter(comparison_root)
@@ -252,6 +347,19 @@ def test_comparison_service_runs_arms_and_writes_report(tmp_path: Path) -> None:
         comparison_reporter=reporter,
         analytics_service=_FakeAnalyticsService(),
     )
+    service._claude_analytics_service = _FakeNativeSummaryService(
+        first_tool="inspect_repository_support",
+        session_count=2,
+        sessions_using=1,
+        avg_first_index=13.0,
+    )
+    service._cursor_analytics_service = _FakeNativeSummaryService(
+        first_tool="repository_summary_by_path",
+        session_count=3,
+        sessions_using=2,
+        avg_first_index=None,
+    )
+    service._mcp_aggregator = _FakeMcpAggregator()
 
     benchmarks_dir = tmp_path / "benchmarks" / "codex"
     (benchmarks_dir / "tasks").mkdir(parents=True)
@@ -347,6 +455,9 @@ def test_comparison_service_runs_arms_and_writes_report(tmp_path: Path) -> None:
                 "stable_execution_tasks_file": "benchmarks/codex/tasks/execution.json",
                 "stress_readonly_tasks_file": "benchmarks/codex/tasks/stress.json",
                 "passive_repository_root": ".",
+                "include_agent_experience_summary": True,
+                "agent_experience_repository_root": ".",
+                "agent_experience_days": 7,
             }
         ),
         encoding="utf-8",
@@ -365,6 +476,7 @@ def test_comparison_service_runs_arms_and_writes_report(tmp_path: Path) -> None:
     assert report.stable_readonly_baseline_metadata is not None
     assert any(item.metric_name == "task_success_rate" for item in report.headline_deltas)
     assert report.passive_usage_summary is not None
+    assert report.agent_experience_summary is not None
     assert report.figures
     assert report.protocol.protocol_name
     assert report.measured_metrics
@@ -407,8 +519,15 @@ def test_comparison_service_runs_arms_and_writes_report(tmp_path: Path) -> None:
     report_dir = comparison_root / reporter.report_directory_name(report)
     assert (report_dir / "comparison.json").exists()
     assert (report_dir / "comparison.md").exists()
+    markdown = (report_dir / "comparison.md").read_text(encoding="utf-8")
+    assert "## Live Multi-Agent Experience" in markdown
+    assert "### Claude Live Usage" in markdown
+    assert "### Cursor Live Usage" in markdown
+    assert "## Table of Contents" in markdown
     assert (report_dir / "figures" / "01-headline-outcomes.svg").exists()
     assert (report_dir / "figures" / "data" / "01-headline-outcomes.csv").exists()
+    assert (report_dir / "figures" / "08-live-tool-token-savings.svg").exists()
+    assert (report_dir / "figures" / "data" / "08-live-tool-token-savings.csv").exists()
     baseline_call = next(call for call in eval_service.calls if call["prompt_arm"] == EvaluationArm.BASELINE)
     assert len(baseline_call["config_overrides"]) == 1
     assert "mcp_servers.suitcode={" in baseline_call["config_overrides"][0]
