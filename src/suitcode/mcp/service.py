@@ -239,9 +239,13 @@ class SuitMcpService:
                     key=lambda item: item.id,
                 ),
                 suggested_follow_ups=(
-                    "what_changes_if_i_edit_this",
-                    "what_should_i_run",
-                    "can_i_do_this",
+                    tuple()
+                    if targets and all(target.structured_artifact is not None for target in targets)
+                    else (
+                        "what_changes_if_i_edit_this",
+                        "what_should_i_run",
+                        "can_i_do_this",
+                    )
                 ),
                 provenance=self._merge_view_provenance(
                     *(target.provenance for target in targets),
@@ -1095,6 +1099,12 @@ class SuitMcpService:
                     RelatedTestTarget(repository_rel_path=repository_rel_path)
                 )[:related_test_limit]
             )
+            structured_artifact = repository.describe_structured_artifact(repository_rel_path)
+            structured_artifact_view = (
+                self._intelligence_presenter.structured_artifact_view(structured_artifact)
+                if structured_artifact is not None
+                else None
+            )
         except ValueError as exc:
             raise McpValidationError(
                 self._explain_unowned_file_error(repository, repository_rel_path, str(exc), tool_name="understand_file")
@@ -1107,11 +1117,13 @@ class SuitMcpService:
             dependent_file_count=context.dependent_file_count,
             dependent_files_preview=dependent_files_preview,
             related_tests=related_tests,
+            structured_artifact=structured_artifact_view,
             provenance=self._merge_view_provenance(
                 owner.file.provenance,
                 *(item.provenance for item in dependency_files_preview),
                 *(item.provenance for item in dependent_files_preview),
                 *(item.provenance for item in related_tests),
+                structured_artifact_view.provenance if structured_artifact_view is not None else tuple(),
             ),
         )
 
@@ -1196,5 +1208,5 @@ class SuitMcpService:
         return (
             f"{message}. `{tool_name}` currently supports only provider-owned files. "
             "Files that exist in the repository but are not deterministically owned by a registered provider, "
-            "including markdown/docs-style artifacts, are not supported by this tool."
+            "including unsupported plain-text or documentation artifacts, are not supported by this tool."
         )

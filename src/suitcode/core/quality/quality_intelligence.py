@@ -28,11 +28,10 @@ class QualityIntelligence:
 
     def provider_ids_for_files(self, repository_rel_paths: tuple[str, ...]) -> tuple[str, ...]:
         provider_ids: list[str] = []
-        for repository_rel_path in repository_rel_paths:
-            for provider in self._repository.get_providers_for_file_role(repository_rel_path, ProviderRole.QUALITY):
-                provider_id = provider.__class__.descriptor().provider_id
-                if provider_id not in provider_ids:
-                    provider_ids.append(provider_id)
+        for provider in self._quality_providers_for_files(repository_rel_paths):
+            provider_id = provider.__class__.descriptor().provider_id
+            if provider_id not in provider_ids:
+                provider_ids.append(provider_id)
         return tuple(provider_ids)
 
     def provider_ids_for_owner(self, owner_id: str) -> tuple[str, ...]:
@@ -42,34 +41,47 @@ class QualityIntelligence:
         return self.provider_ids_for_files(tuple(file_info.repository_rel_path for file_info in owned_files))
 
     def lint_file(self, repository_rel_path: str, is_fix: bool, provider_id: str) -> QualityFileResult:
-        provider = self._get_quality_provider(provider_id)
+        provider = self._quality_provider_for_file(repository_rel_path, provider_id)
         return provider.lint_file(repository_rel_path, is_fix)
 
     def format_file(self, repository_rel_path: str, provider_id: str) -> QualityFileResult:
-        provider = self._get_quality_provider(provider_id)
+        provider = self._quality_provider_for_file(repository_rel_path, provider_id)
         return provider.format_file(repository_rel_path)
 
     def get_runtime_capabilities(
         self,
         repository_rel_paths: tuple[str, ...] | None = None,
     ) -> tuple[QualityRuntimeCapabilities, ...]:
-        if repository_rel_paths is None:
-            providers = self.providers
-        else:
-            providers = tuple(
-                provider
-                for provider_id in self.provider_ids_for_files(repository_rel_paths)
-                for provider in (self._get_quality_provider(provider_id),)
-            )
+        providers = self.providers if repository_rel_paths is None else self._quality_providers_for_files(repository_rel_paths)
         return tuple(provider.get_quality_runtime_capabilities(repository_rel_paths) for provider in providers)
 
-    def _get_quality_provider(self, provider_id: str) -> QualityProviderBase:
-        provider = self._repository.get_provider(provider_id)
-        if ProviderRole.QUALITY not in self._repository.provider_roles.get(provider_id, frozenset()):
-            raise ValueError(f"provider `{provider_id}` does not support quality for repository `{self._repository.root}`")
-        if not isinstance(provider, QualityProviderBase):
-            raise ValueError(f"provider `{provider_id}` does not implement quality operations")
-        return provider
+    def _quality_providers_for_files(self, repository_rel_paths: tuple[str, ...]) -> tuple[QualityProviderBase, ...]:
+        provider_ids: list[str] = []
+        providers: list[QualityProviderBase] = []
+        for repository_rel_path in repository_rel_paths:
+            for provider in self._repository.get_providers_for_file_role(repository_rel_path, ProviderRole.QUALITY):
+                key = (provider.__class__.descriptor().provider_id, provider.attachment.attachment_root_rel_path)
+                if key in provider_ids:
+                    continue
+                provider_ids.append(key)
+                if not isinstance(provider, QualityProviderBase):
+                    raise ValueError(
+                        f"provider `{provider.__class__.descriptor().provider_id}` does not implement quality operations"
+                    )
+                providers.append(provider)
+        return tuple(providers)
+
+    def _quality_provider_for_file(self, repository_rel_path: str, provider_id: str) -> QualityProviderBase:
+        matches = tuple(
+            provider
+            for provider in self._quality_providers_for_files((repository_rel_path,))
+            if provider.__class__.descriptor().provider_id == provider_id
+        )
+        if not matches:
+            raise ValueError(
+                f"provider `{provider_id}` does not support quality for `{repository_rel_path}` in repository `{self._repository.root}`"
+            )
+        return matches[0]
 
 
 from typing import TYPE_CHECKING

@@ -199,13 +199,55 @@ def test_understand_repository_accepts_larger_preview_limit(service: SuitMcpServ
 
 
 def test_understand_file_reports_unowned_artifacts_clearly(service: SuitMcpService, npm_repo_root: Path) -> None:
-    (npm_repo_root / "roadmap.md").write_text("# roadmap\n", encoding="utf-8")
+    (npm_repo_root / "notes.txt").write_text("plain text\n", encoding="utf-8")
 
     with pytest.raises(McpValidationError, match="provider-owned files"):
         service.understand_file(
             str(npm_repo_root),
-            ("roadmap.md",),
+            ("notes.txt",),
         )
+
+
+def test_understand_file_returns_markdown_structure(service: SuitMcpService, tmp_path: Path) -> None:
+    repo_root = tmp_path / "docs-repo"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "roadmap.md").write_text(
+        "---\n"
+        "title: Roadmap\n"
+        "owner: docs\n"
+        "---\n\n"
+        "# Plan\n\n"
+        "See [tracking](docs/tracking.md).\n\n"
+        "- [x] discovery\n"
+        "- [ ] rollout\n\n"
+        "## Commands\n\n"
+        "```bash\n"
+        "npm run build\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+    understanding = service.understand_file(
+        str(repo_root),
+        ("roadmap.md",),
+        related_test_limit=5,
+    )
+
+    target = understanding.targets[0]
+    assert target.file_owner.owner.id == "component:markdown:documents"
+    assert target.structured_artifact is not None
+    assert target.structured_artifact.artifact_kind == "markdown_document"
+    assert target.structured_artifact.markdown is not None
+    assert target.structured_artifact.markdown.section_count == 2
+    assert target.structured_artifact.markdown.sections[0].heading == "Plan"
+    assert target.structured_artifact.markdown.sections[0].line_start == 6
+    assert target.structured_artifact.markdown.sections[1].heading == "Commands"
+    assert target.structured_artifact.markdown.code_block_count == 1
+    assert target.structured_artifact.markdown.links[0].destination == "docs/tracking.md"
+    assert target.structured_artifact.markdown.frontmatter is not None
+    assert target.structured_artifact.markdown.frontmatter.keys == ("title", "owner")
+    assert target.structured_artifact.markdown.checklist_item_count == 2
+    assert understanding.suggested_follow_ups == tuple()
 
 
 def test_frontend_standalone_package_surfaces_build_script_as_action(service: SuitMcpService, tmp_path: Path) -> None:

@@ -27,6 +27,7 @@ from suitcode.core.repository_models import FileOwnerInfo, OwnedNodeInfo
 from suitcode.core.truth_coverage_models import TruthCoverageSummary
 from suitcode.core.truth_coverage_service import TruthCoverageService
 from suitcode.core.runner_service import RunnerService
+from suitcode.core.structured_artifact_models import StructuredArtifact
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
 from suitcode.providers.code_provider_base import CodeProviderBase
 from suitcode.providers.provider_base import ProviderBase
@@ -39,6 +40,7 @@ from suitcode.providers.provider_base import ProviderBase
 from suitcode.providers.provider_roles import ProviderRole
 from suitcode.providers.quality_provider_base import QualityProviderBase
 from suitcode.providers.registry import BUILTIN_PROVIDER_CLASSES, detect_support_for_root, get_provider_descriptors
+from suitcode.providers.structured_artifact_provider_base import StructuredArtifactProviderBase
 from suitcode.providers.test_provider_base import TestProviderBase
 
 if TYPE_CHECKING:
@@ -369,6 +371,29 @@ class Repository:
             )
         )
         return matched or providers
+
+    def get_owning_providers_for_file(self, repository_rel_path: str) -> tuple[ProviderBase, ...]:
+        owner = self.get_file_owner(repository_rel_path).owner
+        provider_id = self.provider_id_for_owner(owner.id)
+        providers = self._providers_by_id[provider_id]
+        matched = tuple(
+            provider
+            for provider in providers
+            if self._attachment_contains_path(
+                provider.attachment.attachment_root_rel_path,
+                repository_rel_path,
+            )
+        )
+        return matched or providers
+
+    def describe_structured_artifact(self, repository_rel_path: str) -> StructuredArtifact | None:
+        for provider in self.get_owning_providers_for_file(repository_rel_path):
+            if not isinstance(provider, StructuredArtifactProviderBase):
+                continue
+            artifact = provider.describe_structured_artifact(repository_rel_path)
+            if artifact is not None:
+                return artifact
+        return None
 
     @property
     def arch(self) -> "ArchitectureIntelligence":

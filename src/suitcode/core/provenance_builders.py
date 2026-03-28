@@ -17,6 +17,20 @@ def manifest_provenance(
     )
 
 
+def document_provenance(
+    evidence_summary: str,
+    evidence_paths: tuple[str, ...],
+    source_tool: str | None = "markdown",
+) -> ProvenanceEntry:
+    return ProvenanceEntry(
+        confidence_mode=ConfidenceMode.AUTHORITATIVE,
+        source_kind=SourceKind.DOCUMENT,
+        source_tool=source_tool,
+        evidence_summary=evidence_summary,
+        evidence_paths=evidence_paths,
+    )
+
+
 def lsp_provenance(
     source_tool: str,
     evidence_summary: str,
@@ -79,6 +93,18 @@ def manifest_node_provenance(
         source_kind=SourceKind.MANIFEST,
         evidence_summary=evidence_summary,
         evidence_paths=evidence_paths,
+    )
+
+
+def document_node_provenance(
+    evidence_summary: str,
+    evidence_paths: tuple[str, ...],
+    source_tool: str | None = "markdown",
+) -> ProvenanceEntry:
+    return document_provenance(
+        evidence_summary=evidence_summary,
+        evidence_paths=evidence_paths,
+        source_tool=source_tool,
     )
 
 

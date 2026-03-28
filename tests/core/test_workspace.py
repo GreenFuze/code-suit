@@ -74,11 +74,15 @@ def test_workspace_adds_multiple_repositories_without_active_repository() -> Non
 def test_workspace_supported_providers_returns_provider_descriptors() -> None:
     supported = Workspace.supported_providers()
 
-    assert tuple(descriptor.provider_id for descriptor in supported) == ("npm", "python")
-    assert supported[0].build_systems == ("npm",)
-    assert supported[0].programming_languages == ("javascript", "typescript")
-    assert supported[1].build_systems == ("pip",)
-    assert supported[1].programming_languages == ("python",)
+    assert tuple(descriptor.provider_id for descriptor in supported) == ("go", "markdown", "npm", "python")
+    assert supported[0].build_systems == ("go",)
+    assert supported[0].programming_languages == ("go",)
+    assert supported[1].build_systems == tuple()
+    assert supported[1].programming_languages == ("markdown",)
+    assert supported[2].build_systems == ("npm",)
+    assert supported[2].programming_languages == ("javascript", "typescript")
+    assert supported[3].build_systems == ("pip",)
+    assert supported[3].programming_languages == ("python",)
 
 
 def test_workspace_construction_fails_for_unsupported_repository() -> None:

@@ -6,6 +6,7 @@ import pytest
 
 from suitcode.core.quality.quality_intelligence import QualityIntelligence
 from suitcode.providers.provider_roles import ProviderRole
+from suitcode.providers.provider_metadata import ProviderAttachmentCandidate, ProviderAttachmentContext
 from suitcode.core.provenance_builders import lsp_delta_provenance, quality_tool_provenance
 from suitcode.providers.quality_models import QualityEntityDelta, QualityFileResult
 from suitcode.providers.quality_provider_base import QualityProviderBase
@@ -32,6 +33,9 @@ class _FakeRepository:
             raise ValueError(f"unknown provider id for repository `{self.root}`: `{provider_id}`")
         return provider
 
+    def get_providers_for_file_role(self, repository_rel_path: str, role: ProviderRole):
+        return self.get_providers_for_role(role)
+
 
 class _QualityProvider(QualityProviderBase):
     PROVIDER_ID = "fake-quality"
@@ -40,8 +44,25 @@ class _QualityProvider(QualityProviderBase):
     PROGRAMMING_LANGUAGES = ("other",)
 
     @classmethod
-    def detect_roles(cls, repository_root: Path) -> frozenset[ProviderRole]:
-        return frozenset({ProviderRole.QUALITY})
+    def discover_attachments(cls, repository_root: Path) -> tuple[ProviderAttachmentCandidate, ...]:
+        return (
+            ProviderAttachmentCandidate(
+                provider_id=cls.PROVIDER_ID,
+                attachment_root=repository_root,
+                detected_roles=frozenset({ProviderRole.QUALITY}),
+            ),
+        )
+
+    def __init__(self, repository) -> None:
+        super().__init__(
+            repository,
+            ProviderAttachmentContext(
+                provider_id=self.PROVIDER_ID,
+                repository_root=Path("/repo"),
+                attachment_root=Path("/repo"),
+                attachment_root_rel_path=".",
+            ),
+        )
 
     def lint_file(self, repository_rel_path: str, is_fix: bool) -> QualityFileResult:
         return QualityFileResult(
@@ -161,7 +182,7 @@ def test_quality_intelligence_rejects_unknown_provider() -> None:
     repo = _FakeRepository({"fake-quality": provider}, {"fake-quality": frozenset({ProviderRole.QUALITY})})
     intelligence = QualityIntelligence(repo)  # type: ignore[arg-type]
 
-    with pytest.raises(ValueError, match="unknown provider id"):
+    with pytest.raises(ValueError, match="does not support quality"):
         intelligence.lint_file("file.ts", is_fix=False, provider_id="missing")
 
 

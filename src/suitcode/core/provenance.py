@@ -21,6 +21,7 @@ class ConfidenceMode(StrEnum):
 class SourceKind(StrEnum):
     __test__ = False
     MANIFEST = "manifest"
+    DOCUMENT = "document"
     LSP = "lsp"
     TEST_TOOL = "test_tool"
     QUALITY_TOOL = "quality_tool"

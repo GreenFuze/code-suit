@@ -607,6 +607,9 @@ class PythonProvider(
         owner_id = analysis.owner_id
         if owner_id == "pkgmgr:python:root":
             owner_id = self._rebase_manager_id(owner_id)
+        elif owner_id.startswith("runner:python:") and self.attachment_root_rel_path not in ("", "."):
+            script_name = owner_id.removeprefix("runner:python:")
+            owner_id = f"runner:python:{self.attachment_root_rel_path}:{script_name}"
         return replace(
             analysis,
             repository_rel_path=self._rebase_path(analysis.repository_rel_path),

@@ -7,6 +7,7 @@ import pytest
 from suitcode.core.repository import Repository
 from suitcode.core.workspace import Workspace
 from suitcode.providers.go import GoProvider
+from suitcode.providers.markdown import MarkdownProvider
 from suitcode.providers.npm import NPMProvider
 from suitcode.providers.provider_base import ProviderBase
 from suitcode.providers.provider_metadata import ProviderAttachmentCandidate
@@ -15,14 +16,14 @@ from suitcode.providers.python import PythonProvider
 from suitcode.providers.registry import BUILTIN_PROVIDER_CLASSES, detect_support_for_root, get_provider_descriptors
 
 
-def test_provider_registry_contains_go_npm_and_python_providers() -> None:
-    assert BUILTIN_PROVIDER_CLASSES == (GoProvider, NPMProvider, PythonProvider)
+def test_provider_registry_contains_go_markdown_npm_and_python_providers() -> None:
+    assert BUILTIN_PROVIDER_CLASSES == (GoProvider, MarkdownProvider, NPMProvider, PythonProvider)
 
 
-def test_workspace_supported_providers_exposes_go_npm_and_python_descriptors() -> None:
+def test_workspace_supported_providers_exposes_go_markdown_npm_and_python_descriptors() -> None:
     descriptors = Workspace.supported_providers()
 
-    assert tuple(descriptor.provider_id for descriptor in descriptors) == ('go', 'npm', 'python')
+    assert tuple(descriptor.provider_id for descriptor in descriptors) == ('go', 'markdown', 'npm', 'python')
 
 
 def test_repository_support_for_path_detects_npm_fixture(npm_repo_root: Path) -> None:
@@ -119,6 +120,18 @@ def test_mixed_root_detects_nested_standalone_npm_attachment(tmp_path: Path) -> 
     assert tuple(item.attachment_root_rel_path for item in support.detected_providers[1].attachments) == (
         'server/frontend',
     )
+
+
+def test_markdown_provider_detects_root_markdown_files(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "roadmap.md").write_text("# Roadmap\n\n- [ ] ship docs\n", encoding="utf-8")
+
+    support = Repository.support_for_path(repo_root)
+
+    assert support.provider_ids == ("markdown",)
+    assert support.detected_providers[0].provider_id == "markdown"
+    assert tuple(item.attachment_root_rel_path for item in support.detected_providers[0].attachments) == (".",)
 
 
 def test_registry_rejects_duplicate_provider_ids() -> None:

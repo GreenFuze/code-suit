@@ -758,7 +758,14 @@ class NPMProvider(
         )
 
     def _rebase_file(self, analysis: NpmOwnedFileAnalysis) -> NpmOwnedFileAnalysis:
-        return replace(analysis, repository_rel_path=self._rebase_path(analysis.repository_rel_path))
+        owner_id = analysis.owner_id
+        if owner_id.startswith("pkgmgr:npm:"):
+            owner_id = self._rebase_manager_id(owner_id)
+        return replace(
+            analysis,
+            repository_rel_path=self._rebase_path(analysis.repository_rel_path),
+            owner_id=owner_id,
+        )
 
     def _rebase_paths(self, values: tuple[str, ...]) -> tuple[str, ...]:
         return tuple(self._rebase_path(item) for item in values)

@@ -227,6 +227,58 @@ class FileRelationshipView(StrictModel):
     provenance: tuple[ProvenanceView, ...]
 
 
+class MarkdownSectionView(StrictModel):
+    heading: str
+    depth: int
+    line_start: int
+    line_end: int
+    anchor: str
+
+
+class MarkdownCodeBlockView(StrictModel):
+    line_start: int
+    line_end: int
+    language: str | None = None
+
+
+class MarkdownLinkView(StrictModel):
+    destination: str
+    line_start: int
+    line_end: int
+    text: str | None = None
+
+
+class MarkdownFrontmatterView(StrictModel):
+    line_start: int
+    line_end: int
+    keys: tuple[str, ...]
+
+
+class MarkdownChecklistItemView(StrictModel):
+    text: str
+    checked: bool
+    line_start: int
+    line_end: int
+
+
+class MarkdownDocumentStructureView(StrictModel):
+    section_count: int
+    sections: tuple[MarkdownSectionView, ...]
+    code_block_count: int
+    code_blocks: tuple[MarkdownCodeBlockView, ...]
+    link_count: int
+    links: tuple[MarkdownLinkView, ...]
+    frontmatter: MarkdownFrontmatterView | None = None
+    checklist_item_count: int
+    checklist_items: tuple[MarkdownChecklistItemView, ...]
+
+
+class StructuredArtifactView(StrictModel):
+    artifact_kind: str
+    markdown: MarkdownDocumentStructureView | None = None
+    provenance: tuple[ProvenanceView, ...]
+
+
 class SymbolView(StrictModel):
     id: str
     name: str
@@ -717,6 +769,7 @@ class FileUnderstandingTargetView(StrictModel):
     dependent_file_count: int
     dependent_files_preview: tuple[FileRelationshipView, ...]
     related_tests: tuple[RelatedTestView, ...]
+    structured_artifact: StructuredArtifactView | None = None
     provenance: tuple[ProvenanceView, ...]
 
 

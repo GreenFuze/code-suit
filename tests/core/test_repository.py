@@ -101,6 +101,23 @@ def test_repository_root_candidate_falls_back_to_vcs_root_when_no_supported_nest
         assert Repository.root_candidate(nested) == repo_root
 
 
+def test_repository_rebases_nested_npm_package_manager_owner_ids() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        repo_root = Path(td) / "repo"
+        (repo_root / ".git").mkdir(parents=True)
+        frontend_root = repo_root / "frontend"
+        frontend_root.mkdir(parents=True)
+        (frontend_root / "package.json").write_text(
+            '{"name":"frontend","private":true,"scripts":{"build":"vite build"}}\n',
+            encoding="utf-8",
+        )
+
+        repository = Workspace(repo_root).repositories[0]
+        owner = repository.resolve_owner("pkgmgr:npm:root:frontend")
+
+        assert owner.id == "pkgmgr:npm:root:frontend"
+
+
 def test_repository_ids_are_collision_safe_with_same_basename() -> None:
     with tempfile.TemporaryDirectory() as td:
         base = Path(td)

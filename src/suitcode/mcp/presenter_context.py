@@ -14,6 +14,7 @@ from suitcode.core.minimum_verified_change_set_models import (
 from suitcode.core.provenance import ProvenanceEntry, SourceKind
 from suitcode.core.provenance_builders import derived_summary_provenance
 from suitcode.core.repository import Repository
+from suitcode.core.structured_artifact_models import StructuredArtifact, StructuredArtifactKind
 from suitcode.core.truth_coverage_models import TruthCoverageByDomain, TruthCoverageSummary
 from suitcode.mcp.models import (
     ChangeImpactView,
@@ -26,6 +27,12 @@ from suitcode.mcp.models import (
     FileContextView,
     FileRelationshipView,
     ImpactSummaryView,
+    MarkdownChecklistItemView,
+    MarkdownCodeBlockView,
+    MarkdownDocumentStructureView,
+    MarkdownFrontmatterView,
+    MarkdownLinkView,
+    MarkdownSectionView,
     MinimumVerifiedBuildTargetView,
     MinimumVerifiedCommandSummaryView,
     MinimumVerifiedChangeSetView,
@@ -36,6 +43,7 @@ from suitcode.mcp.models import (
     QualityGateView,
     RepositorySummaryView,
     RunnerImpactView,
+    StructuredArtifactView,
     SymbolContextView,
     TestImpactView,
     TruthCoverageByDomainView,
@@ -139,6 +147,66 @@ class IntelligencePresenter:
             related_tests_preview=tuple(self._test_presenter.related_test_view(item) for item in context.related_tests_preview),
             quality_provider_ids=context.quality_provider_ids,
             provenance=provenance_views(context.provenance),
+        )
+
+    def structured_artifact_view(self, artifact: StructuredArtifact) -> StructuredArtifactView:
+        markdown = None
+        if artifact.artifact_kind == StructuredArtifactKind.MARKDOWN_DOCUMENT and artifact.markdown is not None:
+            markdown = MarkdownDocumentStructureView(
+                section_count=artifact.markdown.section_count,
+                sections=tuple(
+                    MarkdownSectionView(
+                        heading=item.heading,
+                        depth=item.depth,
+                        line_start=item.line_start,
+                        line_end=item.line_end,
+                        anchor=item.anchor,
+                    )
+                    for item in artifact.markdown.sections
+                ),
+                code_block_count=artifact.markdown.code_block_count,
+                code_blocks=tuple(
+                    MarkdownCodeBlockView(
+                        line_start=item.line_start,
+                        line_end=item.line_end,
+                        language=item.language,
+                    )
+                    for item in artifact.markdown.code_blocks
+                ),
+                link_count=artifact.markdown.link_count,
+                links=tuple(
+                    MarkdownLinkView(
+                        destination=item.destination,
+                        line_start=item.line_start,
+                        line_end=item.line_end,
+                        text=item.text,
+                    )
+                    for item in artifact.markdown.links
+                ),
+                frontmatter=(
+                    MarkdownFrontmatterView(
+                        line_start=artifact.markdown.frontmatter.line_start,
+                        line_end=artifact.markdown.frontmatter.line_end,
+                        keys=artifact.markdown.frontmatter.keys,
+                    )
+                    if artifact.markdown.frontmatter is not None
+                    else None
+                ),
+                checklist_item_count=artifact.markdown.checklist_item_count,
+                checklist_items=tuple(
+                    MarkdownChecklistItemView(
+                        text=item.text,
+                        checked=item.checked,
+                        line_start=item.line_start,
+                        line_end=item.line_end,
+                    )
+                    for item in artifact.markdown.checklist_items
+                ),
+            )
+        return StructuredArtifactView(
+            artifact_kind=artifact.artifact_kind.value,
+            markdown=markdown,
+            provenance=provenance_views(artifact.provenance),
         )
 
     def symbol_context_view(self, context: SymbolContext) -> SymbolContextView:

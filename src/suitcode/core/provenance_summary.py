@@ -52,6 +52,7 @@ def preferred_source_kind(
         SourceKind.QUALITY_TOOL,
         SourceKind.LSP,
         SourceKind.MANIFEST,
+        SourceKind.DOCUMENT,
         SourceKind.DEPENDENCY_GRAPH,
         SourceKind.OWNERSHIP,
         SourceKind.HEURISTIC,
