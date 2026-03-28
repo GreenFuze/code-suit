@@ -29,6 +29,7 @@ class MinimumVerifiedExclusionReason(StrEnum):
     REPOSITORY_BUILD_REPLACED_BY_NARROWER_BUILD = "repository_build_replaced_by_narrower_build"
     RUNNER_NOT_DIRECTLY_VALIDATION_RELEVANT = "runner_not_directly_validation_relevant"
     DUPLICATE_QUALITY_OPERATION_COLLAPSED = "duplicate_quality_operation_collapsed"
+    NO_DETERMINISTIC_TEST_TARGETS_AVAILABLE = "no_deterministic_test_targets_available"
 
 
 class QualityOperationScope(StrEnum):

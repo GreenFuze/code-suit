@@ -709,14 +709,63 @@ class RepositorySummaryView(StrictModel):
     provenance: tuple[ProvenanceView, ...]
 
 
-class FileUnderstandingView(StrictModel):
+class FileUnderstandingTargetView(StrictModel):
+    repository_rel_path: str
     file_owner: FileOwnerView
     dependency_file_count: int
     dependency_files_preview: tuple[FileRelationshipView, ...]
     dependent_file_count: int
     dependent_files_preview: tuple[FileRelationshipView, ...]
     related_tests: tuple[RelatedTestView, ...]
+    provenance: tuple[ProvenanceView, ...]
+
+
+class FileUnderstandingView(StrictModel):
+    target_count: int
+    targets: tuple[FileUnderstandingTargetView, ...]
+    owner_ids: tuple[str, ...]
+    aggregate_dependency_file_count: int
+    aggregate_dependency_files_preview: tuple[FileRelationshipView, ...]
+    aggregate_dependent_file_count: int
+    aggregate_dependent_files_preview: tuple[FileRelationshipView, ...]
+    aggregate_related_tests: tuple[RelatedTestView, ...]
     suggested_follow_ups: tuple[str, ...]
+    provenance: tuple[ProvenanceView, ...]
+
+
+class BatchChangeImpactTargetView(StrictModel):
+    repository_rel_path: str
+    impact: ChangeImpactView
+
+
+class BatchChangeImpactView(StrictModel):
+    target_count: int
+    targets: tuple[BatchChangeImpactTargetView, ...]
+    owner_ids: tuple[str, ...]
+    dependent_files: tuple[FileRelationshipView, ...]
+    dependent_components: tuple[ComponentView, ...]
+    reference_locations: tuple[LocationView, ...]
+    related_tests: tuple[TestImpactView, ...]
+    related_runners: tuple[RunnerImpactView, ...]
+    quality_gates: tuple[QualityGateView, ...]
+    provenance: tuple[ProvenanceView, ...]
+
+
+class BatchMinimumVerifiedChangeSetTargetView(StrictModel):
+    repository_rel_path: str
+    change_set: MinimumVerifiedChangeSetView
+
+
+class BatchMinimumVerifiedChangeSetView(StrictModel):
+    target_count: int
+    targets: tuple[BatchMinimumVerifiedChangeSetTargetView, ...]
+    owner_ids: tuple[str, ...]
+    tests: tuple[MinimumVerifiedTestTargetView, ...]
+    build_targets: tuple[MinimumVerifiedBuildTargetView, ...]
+    runner_actions: tuple[MinimumVerifiedRunnerActionView, ...]
+    quality_validation_operations: tuple[MinimumVerifiedQualityOperationView, ...]
+    quality_hygiene_operations: tuple[MinimumVerifiedQualityOperationView, ...]
+    excluded_items: tuple[ExcludedMinimumVerifiedItemView, ...]
     provenance: tuple[ProvenanceView, ...]
 
 

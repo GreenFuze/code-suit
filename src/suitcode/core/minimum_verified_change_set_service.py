@@ -791,13 +791,22 @@ class MinimumVerifiedChangeSetService:
                 relevant_files=resolved.relevant_files,
             )
 
+        availability_exclusions = self._availability_exclusions(
+            resolved=resolved,
+            tests=tests,
+            build_targets=build_targets,
+            runner_actions=runner_actions,
+            quality_validation_operations=quality_validation_operations,
+            quality_hygiene_operations=quality_hygiene_operations,
+        )
+
         provenance = self._overall_provenance(
             tests=tests,
             build_targets=build_targets,
             runner_actions=runner_actions,
             quality_validation_operations=quality_validation_operations,
             quality_hygiene_operations=quality_hygiene_operations,
-            has_exclusions=bool(test_exclusions or build_exclusions or runner_exclusions),
+            has_exclusions=bool(test_exclusions or build_exclusions or runner_exclusions or availability_exclusions),
         )
 
         self._validate_non_empty_change_set(
@@ -818,7 +827,7 @@ class MinimumVerifiedChangeSetService:
             runner_actions=runner_actions,
             quality_validation_operations=quality_validation_operations,
             quality_hygiene_operations=quality_hygiene_operations,
-            excluded_items=tuple((*test_exclusions, *build_exclusions, *runner_exclusions)),
+            excluded_items=tuple((*test_exclusions, *build_exclusions, *runner_exclusions, *availability_exclusions)),
             provenance=provenance,
         )
 
@@ -871,6 +880,53 @@ class MinimumVerifiedChangeSetService:
         raise ValueError(
             "no deterministic validation surfaces were found for "
             f"{resolved.target_kind} target `{target_descriptor}`"
+        )
+
+    def _availability_exclusions(
+        self,
+        *,
+        resolved: _ResolvedMinimumTarget,
+        tests: tuple[MinimumVerifiedTestTarget, ...],
+        build_targets: tuple[MinimumVerifiedBuildTarget, ...],
+        runner_actions: tuple[MinimumVerifiedRunnerAction, ...],
+        quality_validation_operations: tuple[MinimumVerifiedQualityOperation, ...],
+        quality_hygiene_operations: tuple[MinimumVerifiedQualityOperation, ...],
+    ) -> tuple[ExcludedMinimumVerifiedItem, ...]:
+        if tests:
+            return tuple()
+        remaining_surfaces: list[str] = []
+        if build_targets:
+            remaining_surfaces.append("build")
+        if runner_actions:
+            remaining_surfaces.append("runner")
+        if quality_validation_operations or quality_hygiene_operations:
+            remaining_surfaces.append("quality")
+        if not remaining_surfaces:
+            return tuple()
+        evidence_paths = resolved.relevant_files[:10] or ((resolved.evidence_path,) if resolved.evidence_path is not None else tuple())
+        if len(remaining_surfaces) == 1:
+            surface_label = f"{remaining_surfaces[0]} surface is"
+        elif len(remaining_surfaces) == 2:
+            surface_label = f"{remaining_surfaces[0]} and {remaining_surfaces[1]} surfaces are"
+        else:
+            surface_label = f"{', '.join(remaining_surfaces[:-1])}, and {remaining_surfaces[-1]} surfaces are"
+        return (
+            self._evidence_assembler.exclusion(
+                item_kind=MinimumVerifiedItemKind.TEST_TARGET,
+                item_id=f"test_surface:{resolved.owner.id}",
+                reason_code=MinimumVerifiedExclusionReason.NO_DETERMINISTIC_TEST_TARGETS_AVAILABLE,
+                reason=(
+                    "no deterministic test targets were discovered for this target; "
+                    f"{surface_label} the only deterministic validation available"
+                ),
+                provenance=(
+                    derived_summary_provenance(
+                        source_kind=SourceKind.OWNERSHIP,
+                        evidence_summary="absence of deterministic test targets established from provider-owned validation surfaces",
+                        evidence_paths=evidence_paths,
+                    ),
+                ),
+            ),
         )
 
 

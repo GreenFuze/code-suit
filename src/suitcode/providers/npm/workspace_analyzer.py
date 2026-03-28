@@ -25,6 +25,7 @@ from suitcode.providers.shared.package_json.models import PackageJsonManifest, P
 
 class NpmWorkspaceAnalyzer:
     _SOURCE_DIR_CANDIDATES = ("src", "lib", "app")
+    _PACKAGE_OWNED_DIR_CANDIDATES = ("public",)
     _ARTIFACT_DIR_CANDIDATES = ("dist", "build", "lib")
 
     def __init__(self, workspace: PackageJsonWorkspace) -> None:
@@ -155,6 +156,7 @@ class NpmWorkspaceAnalyzer:
             component_kind=self._classifier.component_kind_for(package),
             language=self._language_inferer.infer(package),
             source_roots=self._detect_source_roots(package),
+            package_owned_paths=self._detect_package_owned_paths(package),
             artifact_paths=self._detect_artifact_paths(package),
             local_dependencies=local_dependencies,
             external_dependencies=external_dependencies,
@@ -186,6 +188,14 @@ class NpmWorkspaceAnalyzer:
             for value in bin_value.values():
                 if isinstance(value, str):
                     self._add_existing_path(package, found, value)
+        return tuple(sorted(found))
+
+    def _detect_package_owned_paths(self, package: PackageJsonWorkspacePackage) -> tuple[str, ...]:
+        found = set()
+        for candidate in self._PACKAGE_OWNED_DIR_CANDIDATES:
+            path = package.package_dir / candidate
+            if path.is_dir():
+                found.add(normalize_repository_relative_path(path.relative_to(self._workspace.repository_root).as_posix()))
         return tuple(sorted(found))
 
     def _collect_export_paths(self, package: PackageJsonWorkspacePackage, found: set[str], exports: object) -> None:

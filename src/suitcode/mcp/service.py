@@ -20,6 +20,10 @@ from suitcode.mcp.models import (
     BuildExecutionResultView,
     BuildProjectResultView,
     BuildTargetDescriptionView,
+    BatchChangeImpactTargetView,
+    BatchChangeImpactView,
+    BatchMinimumVerifiedChangeSetTargetView,
+    BatchMinimumVerifiedChangeSetView,
     ChangeImpactView,
     CloseWorkspaceResult,
     AnalyticsSummaryView,
@@ -31,6 +35,7 @@ from suitcode.mcp.models import (
     ExternalPackageView,
     FileContextView,
     FileOwnerView,
+    FileUnderstandingTargetView,
     FileUnderstandingView,
     FileView,
     ImpactSummaryView,
@@ -200,48 +205,46 @@ class SuitMcpService:
     def understand_file(
         self,
         repository_path: str,
-        repository_rel_path: str,
+        repository_rel_paths: tuple[str, ...],
         related_test_limit: int = 10,
     ) -> FileUnderstandingView:
         validate_preview_limit(related_test_limit, "related_test_limit", max_value=25, error_cls=McpValidationError)
 
         def _callback(repository: Repository) -> FileUnderstandingView:
-            try:
-                context = repository.describe_files((repository_rel_path,), symbol_preview_limit=20, test_preview_limit=related_test_limit)[0]
-                owner = self._ownership_presenter.file_owner_view(repository.get_file_owner(repository_rel_path))
-                dependency_files_preview = tuple(
-                    self._intelligence_presenter.file_relationship_view(item) for item in context.dependency_files_preview
-                )
-                dependent_files_preview = tuple(
-                    self._intelligence_presenter.file_relationship_view(item) for item in context.dependent_files_preview
-                )
-                related_tests = tuple(
-                    self._test_presenter.related_test_view(item)
-                    for item in repository.tests.get_related_tests(
-                        RelatedTestTarget(repository_rel_path=repository_rel_path)
-                    )[:related_test_limit]
-                )
-            except ValueError as exc:
-                raise McpValidationError(
-                    self._explain_unowned_file_error(repository, repository_rel_path, str(exc), tool_name="understand_file")
-                ) from exc
+            normalized_paths = self._validate_repository_rel_paths(repository_rel_paths, field_name="repository_rel_paths")
+            targets = tuple(
+                self._understand_file_target(repository, repository_rel_path, related_test_limit=related_test_limit)
+                for repository_rel_path in normalized_paths
+            )
             return FileUnderstandingView(
-                file_owner=owner,
-                dependency_file_count=context.dependency_file_count,
-                dependency_files_preview=dependency_files_preview,
-                dependent_file_count=context.dependent_file_count,
-                dependent_files_preview=dependent_files_preview,
-                related_tests=related_tests,
+                target_count=len(targets),
+                targets=targets,
+                owner_ids=tuple(sorted({item.file_owner.owner.id for item in targets})),
+                aggregate_dependency_file_count=len(
+                    {item.path for target in targets for item in target.dependency_files_preview}
+                ),
+                aggregate_dependency_files_preview=self._dedupe_views(
+                    tuple(item for target in targets for item in target.dependency_files_preview),
+                    key=lambda item: item.path,
+                ),
+                aggregate_dependent_file_count=len(
+                    {item.path for target in targets for item in target.dependent_files_preview}
+                ),
+                aggregate_dependent_files_preview=self._dedupe_views(
+                    tuple(item for target in targets for item in target.dependent_files_preview),
+                    key=lambda item: item.path,
+                ),
+                aggregate_related_tests=self._dedupe_views(
+                    tuple(item for target in targets for item in target.related_tests),
+                    key=lambda item: item.id,
+                ),
                 suggested_follow_ups=(
                     "what_changes_if_i_edit_this",
                     "what_should_i_run",
                     "can_i_do_this",
                 ),
                 provenance=self._merge_view_provenance(
-                    owner.file.provenance,
-                    *(item.provenance for item in dependency_files_preview),
-                    *(item.provenance for item in dependent_files_preview),
-                    *(item.provenance for item in related_tests),
+                    *(target.provenance for target in targets),
                 ),
             )
 
@@ -288,29 +291,68 @@ class SuitMcpService:
     def what_changes_if_i_edit_this(
         self,
         repository_path: str,
-        repository_rel_path: str,
+        repository_rel_paths: tuple[str, ...],
         reference_preview_limit: int = 50,
         dependent_preview_limit: int = 50,
         test_preview_limit: int = 25,
         runner_preview_limit: int = 25,
-    ) -> ChangeImpactView:
+    ) -> BatchChangeImpactView:
         validate_change_preview_limit(reference_preview_limit, "reference_preview_limit", error_cls=McpValidationError)
         validate_change_preview_limit(dependent_preview_limit, "dependent_preview_limit", error_cls=McpValidationError)
         validate_change_preview_limit(test_preview_limit, "test_preview_limit", error_cls=McpValidationError)
         validate_change_preview_limit(runner_preview_limit, "runner_preview_limit", error_cls=McpValidationError)
 
-        def _callback(repository: Repository) -> ChangeImpactView:
-            try:
-                impact = repository.analyze_change(
-                    ChangeTarget(repository_rel_path=repository_rel_path),
-                    reference_preview_limit=reference_preview_limit,
-                    dependent_preview_limit=dependent_preview_limit,
-                    test_preview_limit=test_preview_limit,
-                    runner_preview_limit=runner_preview_limit,
+        def _callback(repository: Repository) -> BatchChangeImpactView:
+            normalized_paths = self._validate_repository_rel_paths(repository_rel_paths, field_name="repository_rel_paths")
+            targets: list[BatchChangeImpactTargetView] = []
+            for repository_rel_path in normalized_paths:
+                try:
+                    impact = repository.analyze_change(
+                        ChangeTarget(repository_rel_path=repository_rel_path),
+                        reference_preview_limit=reference_preview_limit,
+                        dependent_preview_limit=dependent_preview_limit,
+                        test_preview_limit=test_preview_limit,
+                        runner_preview_limit=runner_preview_limit,
+                    )
+                except ValueError as exc:
+                    raise McpValidationError(str(exc)) from exc
+                targets.append(
+                    BatchChangeImpactTargetView(
+                        repository_rel_path=repository_rel_path,
+                        impact=self._change_impact_presenter.change_impact_view(impact),
+                    )
                 )
-                return self._change_impact_presenter.change_impact_view(impact)
-            except ValueError as exc:
-                raise McpValidationError(str(exc)) from exc
+            frozen_targets = tuple(targets)
+            return BatchChangeImpactView(
+                target_count=len(frozen_targets),
+                targets=frozen_targets,
+                owner_ids=tuple(sorted({item.impact.owner.id for item in frozen_targets})),
+                dependent_files=self._dedupe_views(
+                    tuple(item for target in frozen_targets for item in target.impact.dependent_files),
+                    key=lambda item: item.path,
+                ),
+                dependent_components=self._dedupe_views(
+                    tuple(item for target in frozen_targets for item in target.impact.dependent_components),
+                    key=lambda item: item.id,
+                ),
+                reference_locations=self._dedupe_views(
+                    tuple(item for target in frozen_targets for item in target.impact.reference_locations),
+                    key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+                ),
+                related_tests=self._dedupe_views(
+                    tuple(item for target in frozen_targets for item in target.impact.related_tests),
+                    key=lambda item: item.test.id,
+                ),
+                related_runners=self._dedupe_views(
+                    tuple(item for target in frozen_targets for item in target.impact.related_runners),
+                    key=lambda item: item.runner.id,
+                ),
+                quality_gates=self._dedupe_views(
+                    tuple(item for target in frozen_targets for item in target.impact.quality_gates),
+                    key=lambda item: (item.provider_id, item.reason, item.applies),
+                ),
+                provenance=self._merge_view_provenance(*(target.impact.provenance for target in frozen_targets)),
+            )
 
         return self._with_read_only_repository(repository_path, _callback)
 
@@ -338,12 +380,57 @@ class SuitMcpService:
     def what_should_i_run(
         self,
         repository_path: str,
-        repository_rel_path: str,
-    ) -> MinimumVerifiedChangeSetView:
-        return self.get_minimum_verified_change_set_by_path(
-            repository_path,
-            repository_rel_path=repository_rel_path,
-        )
+        repository_rel_paths: tuple[str, ...],
+    ) -> BatchMinimumVerifiedChangeSetView:
+        def _callback(repository: Repository) -> BatchMinimumVerifiedChangeSetView:
+            normalized_paths = self._validate_repository_rel_paths(repository_rel_paths, field_name="repository_rel_paths")
+            targets: list[BatchMinimumVerifiedChangeSetTargetView] = []
+            for repository_rel_path in normalized_paths:
+                try:
+                    change_set = repository.get_minimum_verified_change_set(
+                        ChangeTarget(repository_rel_path=repository_rel_path)
+                    )
+                except ValueError as exc:
+                    raise McpValidationError(str(exc)) from exc
+                targets.append(
+                    BatchMinimumVerifiedChangeSetTargetView(
+                        repository_rel_path=repository_rel_path,
+                        change_set=self._change_impact_presenter.minimum_verified_change_set_view(change_set),
+                    )
+                )
+            frozen_targets = tuple(targets)
+            return BatchMinimumVerifiedChangeSetView(
+                target_count=len(frozen_targets),
+                targets=frozen_targets,
+                owner_ids=tuple(sorted({item.change_set.owner.id for item in frozen_targets})),
+                tests=self._dedupe_views(
+                    tuple(item for target in frozen_targets for item in target.change_set.tests),
+                    key=lambda item: item.test_id,
+                ),
+                build_targets=self._dedupe_views(
+                    tuple(item for target in frozen_targets for item in target.change_set.build_targets),
+                    key=lambda item: item.action_id,
+                ),
+                runner_actions=self._dedupe_views(
+                    tuple(item for target in frozen_targets for item in target.change_set.runner_actions),
+                    key=lambda item: item.action_id,
+                ),
+                quality_validation_operations=self._dedupe_views(
+                    tuple(item for target in frozen_targets for item in target.change_set.quality_validation_operations),
+                    key=lambda item: item.id,
+                ),
+                quality_hygiene_operations=self._dedupe_views(
+                    tuple(item for target in frozen_targets for item in target.change_set.quality_hygiene_operations),
+                    key=lambda item: item.id,
+                ),
+                excluded_items=self._dedupe_views(
+                    tuple(item for target in frozen_targets for item in target.change_set.excluded_items),
+                    key=lambda item: (item.item_kind, item.item_id, item.reason_code),
+                ),
+                provenance=self._merge_view_provenance(*(target.change_set.provenance for target in frozen_targets)),
+            )
+
+        return self._with_read_only_repository(repository_path, _callback)
 
     def can_i_do_this(
         self,
@@ -985,6 +1072,77 @@ class SuitMcpService:
             except Exception:  # noqa: BLE001
                 return None
         return None
+
+    def _understand_file_target(
+        self,
+        repository: Repository,
+        repository_rel_path: str,
+        *,
+        related_test_limit: int,
+    ) -> FileUnderstandingTargetView:
+        try:
+            context = repository.describe_files((repository_rel_path,), symbol_preview_limit=20, test_preview_limit=related_test_limit)[0]
+            owner = self._ownership_presenter.file_owner_view(repository.get_file_owner(repository_rel_path))
+            dependency_files_preview = tuple(
+                self._intelligence_presenter.file_relationship_view(item) for item in context.dependency_files_preview
+            )
+            dependent_files_preview = tuple(
+                self._intelligence_presenter.file_relationship_view(item) for item in context.dependent_files_preview
+            )
+            related_tests = tuple(
+                self._test_presenter.related_test_view(item)
+                for item in repository.tests.get_related_tests(
+                    RelatedTestTarget(repository_rel_path=repository_rel_path)
+                )[:related_test_limit]
+            )
+        except ValueError as exc:
+            raise McpValidationError(
+                self._explain_unowned_file_error(repository, repository_rel_path, str(exc), tool_name="understand_file")
+            ) from exc
+        return FileUnderstandingTargetView(
+            repository_rel_path=repository_rel_path,
+            file_owner=owner,
+            dependency_file_count=context.dependency_file_count,
+            dependency_files_preview=dependency_files_preview,
+            dependent_file_count=context.dependent_file_count,
+            dependent_files_preview=dependent_files_preview,
+            related_tests=related_tests,
+            provenance=self._merge_view_provenance(
+                owner.file.provenance,
+                *(item.provenance for item in dependency_files_preview),
+                *(item.provenance for item in dependent_files_preview),
+                *(item.provenance for item in related_tests),
+            ),
+        )
+
+    @staticmethod
+    def _validate_repository_rel_paths(
+        repository_rel_paths: tuple[str, ...] | str,
+        *,
+        field_name: str,
+    ) -> tuple[str, ...]:
+        if isinstance(repository_rel_paths, str):
+            repository_rel_paths = (repository_rel_paths,)
+        if not repository_rel_paths:
+            raise McpValidationError(f"{field_name} must not be empty")
+        normalized = tuple(item.strip() for item in repository_rel_paths)
+        if any(not item for item in normalized):
+            raise McpValidationError(f"{field_name} must not contain empty values")
+        if len(set(normalized)) != len(normalized):
+            raise McpValidationError(f"{field_name} must not contain duplicates")
+        return normalized
+
+    @staticmethod
+    def _dedupe_views(items: tuple[T, ...], *, key: Callable[[T], object]) -> tuple[T, ...]:
+        deduped: list[T] = []
+        seen: set[object] = set()
+        for item in items:
+            item_key = key(item)
+            if item_key in seen:
+                continue
+            seen.add(item_key)
+            deduped.append(item)
+        return tuple(deduped)
 
     def _with_read_only_repository(
         self,

@@ -715,6 +715,7 @@ class NPMProvider(
             package_path=self._rebase_path(analysis.package_path),
             manifest_path=self._rebase_path(analysis.manifest_path),
             source_roots=self._rebase_paths(analysis.source_roots),
+            package_owned_paths=self._rebase_paths(analysis.package_owned_paths),
             artifact_paths=self._rebase_paths(analysis.artifact_paths),
         )
 

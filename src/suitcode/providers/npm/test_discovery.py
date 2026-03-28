@@ -73,10 +73,32 @@ class NpmTestDiscoverer:
         exact = package.manifest.scripts.get("test")
         if exact is not None:
             return "test", exact
-        for script_name, command in package.manifest.scripts.items():
-            if script_name.startswith("test:"):
-                return script_name, command
+        candidates = [
+            (script_name, command)
+            for script_name, command in package.manifest.scripts.items()
+            if script_name.startswith("test:")
+        ]
+        if candidates:
+            ranked = sorted(
+                candidates,
+                key=lambda item: self._test_script_sort_key(item[0], item[1]),
+            )
+            return ranked[0]
         return "test", None
+
+    @staticmethod
+    def _test_script_sort_key(script_name: str, command: str) -> tuple[int, int, str]:
+        normalized_name = script_name.lower()
+        normalized_command = command.lower()
+        preferred_names = {
+            "test:unit": 0,
+            "test:ci": 1,
+            "test:integration": 2,
+            "test:all": 3,
+        }
+        name_rank = preferred_names.get(normalized_name, 10)
+        watch_penalty = 1 if "watch" in normalized_name or "--watch" in normalized_command else 0
+        return (watch_penalty, name_rank, normalized_name)
 
     def _infer_framework(self, command: str) -> TestFramework:
         lowered = command.lower()

@@ -22,6 +22,7 @@ from suitcode.core.tests.models import (
 from suitcode.core.provenance_builders import heuristic_provenance
 from suitcode.core.provenance_builders import dependency_graph_provenance
 from suitcode.core.repository import Repository
+from suitcode.core.workspace import Workspace
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
 from suitcode.providers.action_provider_base import ActionProviderBase
 from suitcode.providers.code_provider_base import CodeProviderBase
@@ -132,6 +133,33 @@ def test_npm_provider_returns_package_managers_external_packages_and_files(npm_p
     assert all(node.provenance for node in files)
     owned = {node.repository_rel_path: node.owner_id for node in files}
     assert {path: owned[path] for path in EXPECTED_REPRESENTATIVE_FILE_OWNERS} == EXPECTED_REPRESENTATIVE_FILE_OWNERS
+
+
+def test_npm_provider_assigns_public_runtime_assets_to_package_owner(tmp_path) -> None:
+    repo_root = tmp_path / "frontend"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "public" / "runtimes" / "demo").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true,
+          "scripts": {
+            "build": "vite build"
+          }
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "index.ts").write_text("export const value = 1;\n", encoding="utf-8")
+    (repo_root / "public" / "runtimes" / "demo" / "runtime.js").write_text("console.log('runtime');\n", encoding="utf-8")
+
+    workspace = Workspace(repo_root)
+    repository = workspace.repositories[0]
+    owner = repository.get_file_owner("public/runtimes/demo/runtime.js")
+
+    assert owner.owner.id == "component:npm:frontend"
 
 
 def test_npm_provider_internal_analysis_stays_npm_specific(npm_provider: NPMProvider) -> None:

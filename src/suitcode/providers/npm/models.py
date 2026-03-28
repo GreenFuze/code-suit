@@ -15,6 +15,7 @@ class NpmPackageAnalysis:
     component_kind: ComponentKind
     language: ProgrammingLanguage
     source_roots: tuple[str, ...]
+    package_owned_paths: tuple[str, ...]
     artifact_paths: tuple[str, ...]
     local_dependencies: tuple[str, ...]
     external_dependencies: tuple[str, ...]

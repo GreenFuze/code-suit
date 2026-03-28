@@ -45,6 +45,7 @@ class OwnedFileInventoryBuilder:
             owner_id = f"component:npm:{package.package_name}"
             self._assign(assignments, package.manifest_path, owner_id, "package")
             self._assign_directory_files(assignments, repository_root, package.source_roots, owner_id)
+            self._assign_directory_files(assignments, repository_root, package.package_owned_paths, owner_id)
             self._assign_paths(assignments, repository_root, package.artifact_paths, owner_id)
 
         for aggregator in aggregators:

@@ -35,16 +35,16 @@ def test_service_core_tools_reuse_existing_repository_intelligence(service: Suit
     understanding = service.understand_repository(str(npm_repo_root), preview_limit=5)
     file_understanding = service.understand_file(
         str(npm_repo_root),
-        "packages/core/src/index.ts",
+        ("packages/core/src/index.ts",),
         related_test_limit=5,
     )
     impact = service.what_changes_if_i_edit_this(
         str(npm_repo_root),
-        "packages/core/src/index.ts",
+        ("packages/core/src/index.ts",),
     )
     minimum = service.what_should_i_run(
         str(npm_repo_root),
-        "packages/core/src/index.ts",
+        ("packages/core/src/index.ts",),
     )
     availability = service.can_i_do_this(
         str(npm_repo_root),
@@ -55,12 +55,15 @@ def test_service_core_tools_reuse_existing_repository_intelligence(service: Suit
     assert understanding.repository.component_count >= 1
     assert understanding.truth_coverage.domains
     assert understanding.provenance
-    assert file_understanding.file_owner.owner.id == "component:npm:@monorepo/core"
-    assert file_understanding.related_tests
+    assert file_understanding.target_count == 1
+    assert file_understanding.targets[0].file_owner.owner.id == "component:npm:@monorepo/core"
+    assert file_understanding.aggregate_related_tests
     assert file_understanding.provenance
-    assert impact.target_kind == "file"
+    assert impact.target_count == 1
+    assert impact.targets[0].impact.target_kind == "file"
     assert impact.provenance
-    assert minimum.owner.id == "component:npm:@monorepo/core"
+    assert minimum.target_count == 1
+    assert minimum.targets[0].change_set.owner.id == "component:npm:@monorepo/core"
     assert availability.supported is True
     assert "test" in availability.available_action_kinds
     assert availability.provenance
@@ -153,11 +156,40 @@ def test_understand_file_supports_standalone_npm_package_root(service: SuitMcpSe
 
     understanding = service.understand_file(
         str(repo_root),
-        "src/pages/LibraryPage.tsx",
+        ("src/pages/LibraryPage.tsx",),
         related_test_limit=5,
     )
 
-    assert understanding.file_owner.owner.id == "component:npm:frontend"
+    assert understanding.targets[0].file_owner.owner.id == "component:npm:frontend"
+
+
+def test_understand_file_supports_standalone_npm_public_runtime_asset(service: SuitMcpService, tmp_path: Path) -> None:
+    repo_root = tmp_path / "frontend"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "public" / "runtimes" / "demo").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true,
+          "scripts": {
+            "build": "vite build"
+          }
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "index.ts").write_text("export const value = 1;\n", encoding="utf-8")
+    (repo_root / "public" / "runtimes" / "demo" / "runtime.js").write_text("console.log('runtime');\n", encoding="utf-8")
+
+    understanding = service.understand_file(
+        str(repo_root),
+        ("public/runtimes/demo/runtime.js",),
+        related_test_limit=5,
+    )
+
+    assert understanding.targets[0].file_owner.owner.id == "component:npm:frontend"
 
 
 def test_understand_repository_accepts_larger_preview_limit(service: SuitMcpService, npm_repo_root: Path) -> None:
@@ -172,7 +204,7 @@ def test_understand_file_reports_unowned_artifacts_clearly(service: SuitMcpServi
     with pytest.raises(McpValidationError, match="provider-owned files"):
         service.understand_file(
             str(npm_repo_root),
-            "roadmap.md",
+            ("roadmap.md",),
         )
 
 
@@ -197,7 +229,7 @@ def test_frontend_standalone_package_surfaces_build_script_as_action(service: Su
 
     minimum = service.what_should_i_run(
         str(repo_root),
-        repository_rel_path="src/pages/LibraryPage.tsx",
+        repository_rel_paths=("src/pages/LibraryPage.tsx",),
     )
     availability = service.can_i_do_this(
         str(repo_root),
@@ -207,6 +239,7 @@ def test_frontend_standalone_package_surfaces_build_script_as_action(service: Su
 
     assert [item.action_id for item in minimum.build_targets] == ["action:npm:build:frontend"]
     assert minimum.build_targets[0].invocation.argv_preview == ("npm", "run", "build")
+    assert any(item.reason_code == "no_deterministic_test_targets_available" for item in minimum.excluded_items)
     assert availability.supported is True
     assert "build" in availability.available_action_kinds
 
@@ -232,7 +265,7 @@ def test_frontend_standalone_package_uses_test_prefixed_script_for_validation(se
 
     minimum = service.what_should_i_run(
         str(repo_root),
-        repository_rel_path="src/LibraryPage.tsx",
+        repository_rel_paths=("src/LibraryPage.tsx",),
     )
     availability = service.can_i_do_this(
         str(repo_root),
@@ -242,8 +275,38 @@ def test_frontend_standalone_package_uses_test_prefixed_script_for_validation(se
 
     assert [item.test_id for item in minimum.tests] == ["test:npm:frontend"]
     assert minimum.tests[0].command.argv_preview == ("npm", "run", "test:unit")
+    assert not any(item.reason_code == "no_deterministic_test_targets_available" for item in minimum.excluded_items)
     assert availability.supported is True
     assert "test" in availability.available_action_kinds
+
+
+def test_frontend_standalone_package_prefers_non_watch_test_script(service: SuitMcpService, tmp_path: Path) -> None:
+    repo_root = tmp_path / "frontend"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true,
+          "scripts": {
+            "test:watch": "vitest --watch",
+            "test:unit": "vitest run"
+          }
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "LibraryPage.tsx").write_text("export const LibraryPage = () => null;\n", encoding="utf-8")
+    (repo_root / "src" / "LibraryPage.spec.tsx").write_text("it('works', () => {});\n", encoding="utf-8")
+
+    minimum = service.what_should_i_run(
+        str(repo_root),
+        repository_rel_paths=("src/LibraryPage.tsx",),
+    )
+
+    assert [item.test_id for item in minimum.tests] == ["test:npm:frontend"]
+    assert minimum.tests[0].command.argv_preview == ("npm", "run", "test:unit")
 
 
 def test_repository_summary_excludes_tracked_artifact_files_from_file_count(service: SuitMcpService, tmp_path: Path) -> None:

@@ -252,7 +252,7 @@ def test_core_tools_return_structured_results(core_app, npm_repo_root) -> None:
                 "understand_file",
                 {
                     "repository_path": str(npm_repo_root),
-                    "repository_rel_path": "packages/core/src/index.ts",
+                    "repository_rel_paths": ["packages/core/src/index.ts"],
                 },
             )
         )
@@ -264,7 +264,7 @@ def test_core_tools_return_structured_results(core_app, npm_repo_root) -> None:
                 "what_changes_if_i_edit_this",
                 {
                     "repository_path": str(npm_repo_root),
-                    "repository_rel_path": "packages/core/src/index.ts",
+                    "repository_rel_paths": ["packages/core/src/index.ts"],
                 },
             )
         )
@@ -276,7 +276,7 @@ def test_core_tools_return_structured_results(core_app, npm_repo_root) -> None:
                 "what_should_i_run",
                 {
                     "repository_path": str(npm_repo_root),
-                    "repository_rel_path": "packages/core/src/index.ts",
+                    "repository_rel_paths": ["packages/core/src/index.ts"],
                 },
             )
         )
@@ -297,9 +297,11 @@ def test_core_tools_return_structured_results(core_app, npm_repo_root) -> None:
 
     assert understanding["repository"]["provider_ids"]
     assert understanding["truth_coverage"]["domains"]
-    assert file_understanding["file_owner"]["owner"]["id"]
-    assert isinstance(file_understanding["related_tests"], list)
-    assert impact["target_kind"] == "file"
+    assert file_understanding["target_count"] == 1
+    assert file_understanding["targets"][0]["file_owner"]["owner"]["id"]
+    assert isinstance(file_understanding["aggregate_related_tests"], list)
+    assert impact["target_count"] == 1
+    assert impact["targets"][0]["impact"]["target_kind"] == "file"
     assert isinstance(minimum["tests"], list)
     assert availability["supported"] is True
     assert "test" in availability["available_action_kinds"]
