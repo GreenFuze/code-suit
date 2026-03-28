@@ -28,11 +28,13 @@ class _FakeClient:
         document_symbols_by_path: dict[str, tuple[LspDocumentSymbol, ...]] | None = None,
         definition_locations: tuple[LspLocation, ...] = tuple(),
         reference_locations: tuple[LspLocation, ...] = tuple(),
+        implementation_locations: tuple[LspLocation, ...] = tuple(),
     ) -> None:
         self.workspace_symbols = workspace_symbols
         self.document_symbols_by_path = document_symbols_by_path or {}
         self.definition_locations = definition_locations
         self.reference_locations = reference_locations
+        self.implementation_locations = implementation_locations
         self.initialized_with: Path | None = None
 
     def initialize(self, root_path: Path) -> None:
@@ -55,6 +57,9 @@ class _FakeClient:
         include_declaration: bool = False,
     ) -> tuple[LspLocation, ...]:
         return self.reference_locations
+
+    def implementation(self, file_path: Path, line: int, column: int) -> tuple[LspLocation, ...]:
+        return self.implementation_locations
 
     def shutdown(self) -> None:
         return None
@@ -190,6 +195,7 @@ def test_backend_translates_definition_and_reference_locations(tmp_path: Path) -
     client = _FakeClient(
         definition_locations=(location,),
         reference_locations=(location,),
+        implementation_locations=(location,),
     )
     backend = LspCodeBackend(
         repository_root=tmp_path,
@@ -205,3 +211,4 @@ def test_backend_translates_definition_and_reference_locations(tmp_path: Path) -
     assert backend.find_references("src/main.py", 1, 1, include_definition=True) == (
         ("src/main.py", 4, 4, 2, 6),
     )
+    assert backend.find_implementations("src/main.py", 1, 1) == (("src/main.py", 4, 4, 2, 6),)

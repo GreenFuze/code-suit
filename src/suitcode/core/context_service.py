@@ -8,6 +8,7 @@ from suitcode.core.ownership_index import OwnershipIndex
 from suitcode.core.code_reference_service import CodeReferenceService
 from suitcode.core.provenance import ProvenanceEntry, SourceKind
 from suitcode.core.provenance_builders import derived_summary_provenance, lsp_provenance, ownership_provenance
+from suitcode.core.provenance_summary import preferred_source_tool
 from suitcode.core.tests.provenance import is_authoritative_test_provenance
 from suitcode.core.tests.models import RelatedTestTarget
 
@@ -88,6 +89,7 @@ class ContextService:
                 repository_rel_path,
                 relationship_kind=FileRelationshipKind.IMPORTED_BY,
             )
+            implementation_locations = self._repository.code.get_file_implementation_locations(repository_rel_path)
             related_tests = self._repository.tests.get_related_tests(RelatedTestTarget(repository_rel_path=repository_rel_path))
             contexts.append(
                 FileContext(
@@ -99,6 +101,8 @@ class ContextService:
                     dependency_files_preview=dependency_files[:symbol_preview_limit],
                     dependent_file_count=len(dependent_files),
                     dependent_files_preview=dependent_files[:symbol_preview_limit],
+                    implementation_location_count=len(implementation_locations),
+                    implementation_locations_preview=implementation_locations[:symbol_preview_limit],
                     related_test_count=len(related_tests),
                     related_tests_preview=related_tests[:test_preview_limit],
                     quality_provider_ids=self._repository.quality.provider_ids_for_files(
@@ -109,6 +113,7 @@ class ContextService:
                         symbols,
                         dependency_files,
                         dependent_files,
+                        implementation_locations,
                         related_tests,
                     ),
                 )
@@ -179,6 +184,7 @@ class ContextService:
         symbols,
         dependency_files,
         dependent_files,
+        implementation_locations,
         related_tests,
     ) -> tuple[ProvenanceEntry, ...]:
         entries: list[ProvenanceEntry] = [
@@ -199,7 +205,7 @@ class ContextService:
             entries.append(
                 derived_summary_provenance(
                     source_kind=SourceKind.DEPENDENCY_GRAPH,
-                    source_tool=self._lsp_tool_for_path(repository_rel_path),
+                    source_tool=self._relationship_source_tool(repository_rel_path, dependency_files, dependent_files),
                     evidence_summary=(
                         f"file relationships derived from deterministic dependency-graph resolution for `{repository_rel_path}`"
                     ),
@@ -208,6 +214,14 @@ class ContextService:
                         dependency_files,
                         dependent_files,
                     ),
+                )
+            )
+        if implementation_locations:
+            entries.append(
+                lsp_provenance(
+                    source_tool=self._lsp_tool_for_path(repository_rel_path),
+                    evidence_summary=f"implementation candidates derived from deterministic LSP implementation queries for `{repository_rel_path}`",
+                    evidence_paths=self._summarized_implementation_paths(repository_rel_path, implementation_locations),
                 )
             )
         if related_tests:
@@ -249,6 +263,18 @@ class ContextService:
         return tuple(paths[:10])
 
     @staticmethod
+    def _summarized_implementation_paths(repository_rel_path: str, implementation_locations) -> tuple[str, ...]:
+        paths: list[str] = [repository_rel_path]
+        for item in implementation_locations:
+            if item.repository_rel_path not in paths:
+                paths.append(item.repository_rel_path)
+            for provenance in item.provenance:
+                for path in provenance.evidence_paths:
+                    if path not in paths:
+                        paths.append(path)
+        return tuple(paths[:10])
+
+    @staticmethod
     def _summarized_test_provenance(related_tests, label: str) -> ProvenanceEntry:
         paths: list[str] = []
         authoritative = True
@@ -271,4 +297,15 @@ class ContextService:
         lowered = repository_rel_path.lower()
         if lowered.endswith(".py"):
             return "basedpyright"
+        if lowered.endswith(".go"):
+            return "gopls"
         return "typescript-language-server"
+
+    @staticmethod
+    def _relationship_source_tool(repository_rel_path: str, dependency_files, dependent_files) -> str | None:
+        provenance = tuple(
+            entry
+            for item in (*dependency_files, *dependent_files)
+            for entry in item.provenance
+        )
+        return preferred_source_tool(provenance) if provenance else ContextService._lsp_tool_for_path(repository_rel_path)

@@ -73,25 +73,27 @@ def test_truth_coverage_summary_requires_all_domains(npm_repo_root) -> None:
 
 def test_repository_truth_coverage_for_npm(monkeypatch, npm_repo_root) -> None:
     repository = Workspace(npm_repo_root).repositories[0]
-    provider = repository.get_provider("npm")
-    monkeypatch.setattr(
-        provider,
-        "get_code_runtime_capabilities",
-        lambda: CodeRuntimeCapabilities(
-            symbol_search=_runtime_capability("npm.code.symbol_search", "available", "lsp", "typescript-language-server"),
-            symbols_in_file=_runtime_capability("npm.code.symbols_in_file", "available", "lsp", "typescript-language-server"),
-            definitions=_runtime_capability("npm.code.definitions", "available", "lsp", "typescript-language-server"),
-            references=_runtime_capability("npm.code.references", "available", "lsp", "typescript-language-server"),
-        ),
-    )
-    monkeypatch.setattr(
-        provider,
-        "get_quality_runtime_capabilities",
-        lambda repository_rel_paths=None: QualityRuntimeCapabilities(
-            lint=_runtime_capability("npm.quality.lint", "available", "quality_tool", "eslint"),
-            format=_runtime_capability("npm.quality.format", "available", "quality_tool", "prettier"),
-        ),
-    )
+    for provider in repository.code.providers:
+        monkeypatch.setattr(
+            provider,
+            "get_code_runtime_capabilities",
+            lambda: CodeRuntimeCapabilities(
+                symbol_search=_runtime_capability("repo.code.symbol_search", "available", "lsp", "typescript-language-server"),
+                symbols_in_file=_runtime_capability("repo.code.symbols_in_file", "available", "lsp", "typescript-language-server"),
+                definitions=_runtime_capability("repo.code.definitions", "available", "lsp", "typescript-language-server"),
+                references=_runtime_capability("repo.code.references", "available", "lsp", "typescript-language-server"),
+                implementations=_runtime_capability("repo.code.implementations", "available", "lsp", "typescript-language-server"),
+            ),
+        )
+    for provider in repository.quality.providers:
+        monkeypatch.setattr(
+            provider,
+            "get_quality_runtime_capabilities",
+            lambda repository_rel_paths=None: QualityRuntimeCapabilities(
+                lint=_runtime_capability("repo.quality.lint", "available", "quality_tool", "eslint"),
+                format=_runtime_capability("repo.quality.format", "available", "quality_tool", "prettier"),
+            ),
+        )
 
     truth = repository.get_truth_coverage()
     domains = {item.domain.value: item for item in truth.domains}
@@ -119,6 +121,7 @@ def test_repository_truth_coverage_degrades_when_code_runtime_missing(monkeypatc
             symbols_in_file=_runtime_capability("python.code.symbols_in_file", "degraded", "lsp", "basedpyright", "basedpyright is unavailable"),
             definitions=_runtime_capability("python.code.definitions", "degraded", "lsp", "basedpyright", "basedpyright is unavailable"),
             references=_runtime_capability("python.code.references", "degraded", "lsp", "basedpyright", "basedpyright is unavailable"),
+            implementations=_runtime_capability("python.code.implementations", "degraded", "lsp", "basedpyright", "basedpyright is unavailable"),
         ),
     )
     monkeypatch.setattr(
@@ -134,7 +137,7 @@ def test_repository_truth_coverage_degrades_when_code_runtime_missing(monkeypatc
     code_domain = next(item for item in truth.domains if item.domain.value == "code")
 
     assert code_domain.availability == TruthAvailability.DEGRADED
-    assert code_domain.unavailable_count == 4
+    assert code_domain.unavailable_count == 5
     assert code_domain.degraded_reason == "basedpyright is unavailable"
 
 
@@ -177,6 +180,7 @@ def test_change_truth_coverage_is_attached_to_change_analysis(monkeypatch, npm_r
             symbols_in_file=_runtime_capability("npm.code.symbols_in_file", "available", "lsp", "typescript-language-server"),
             definitions=_runtime_capability("npm.code.definitions", "available", "lsp", "typescript-language-server"),
             references=_runtime_capability("npm.code.references", "available", "lsp", "typescript-language-server"),
+            implementations=_runtime_capability("npm.code.implementations", "available", "lsp", "typescript-language-server"),
         ),
     )
     monkeypatch.setattr(

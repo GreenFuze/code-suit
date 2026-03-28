@@ -47,8 +47,20 @@ class CodeProviderBase(ProviderBase, ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def find_implementations(
+        self,
+        repository_rel_path: str,
+        line: int,
+        column: int,
+    ) -> tuple[CodeLocation, ...]:
+        raise NotImplementedError
+
+    @abstractmethod
     def get_code_runtime_capabilities(self) -> CodeRuntimeCapabilities:
         raise NotImplementedError
 
     def get_file_relationships(self, repository_rel_path: str) -> Sequence[FileRelationshipRef]:
+        return tuple()
+
+    def get_file_implementation_locations(self, repository_rel_path: str) -> tuple[CodeLocation, ...]:
         return tuple()

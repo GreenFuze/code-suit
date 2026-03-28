@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shlex
+
 from suitcode.core.change_models import ChangeEvidenceEdge, ChangeEvidencePreview, ChangeImpact, QualityGateInfo, RunnerImpact, TestImpact
 from suitcode.core.intelligence_models import ComponentContext, ComponentDependencyEdge, DependencyRef, FileContext, ImpactSummary, SymbolContext
 from suitcode.core.minimum_verified_change_set_models import (
@@ -33,6 +35,8 @@ from suitcode.mcp.models import (
     MarkdownFrontmatterView,
     MarkdownLinkView,
     MarkdownSectionView,
+    MinimumVerifiedCompactItemView,
+    MinimumVerifiedCompactSummaryView,
     MinimumVerifiedBuildTargetView,
     MinimumVerifiedCommandSummaryView,
     MinimumVerifiedChangeSetView,
@@ -143,6 +147,10 @@ class IntelligencePresenter:
             dependency_files_preview=tuple(self.file_relationship_view(item) for item in context.dependency_files_preview),
             dependent_file_count=context.dependent_file_count,
             dependent_files_preview=tuple(self.file_relationship_view(item) for item in context.dependent_files_preview),
+            implementation_location_count=context.implementation_location_count,
+            implementation_locations_preview=tuple(
+                self._code_presenter.location_view(item) for item in context.implementation_locations_preview
+            ),
             related_test_count=context.related_test_count,
             related_tests_preview=tuple(self._test_presenter.related_test_view(item) for item in context.related_tests_preview),
             quality_provider_ids=context.quality_provider_ids,
@@ -410,7 +418,30 @@ class ChangeImpactPresenter:
         self,
         change_set: MinimumVerifiedChangeSet,
     ) -> MinimumVerifiedChangeSetView:
+        tests = tuple(self.minimum_verified_test_target_view(item) for item in change_set.tests)
+        build_targets = tuple(self.minimum_verified_build_target_view(item) for item in change_set.build_targets)
+        runner_actions = tuple(self.minimum_verified_runner_action_view(item) for item in change_set.runner_actions)
+        quality_validation_operations = tuple(
+            self.minimum_verified_quality_operation_view(item)
+            for item in change_set.quality_validation_operations
+        )
+        quality_hygiene_operations = tuple(
+            self.minimum_verified_quality_operation_view(item)
+            for item in change_set.quality_hygiene_operations
+        )
+        excluded_items = tuple(
+            self.excluded_minimum_verified_item_view(item)
+            for item in change_set.excluded_items
+        )
         return MinimumVerifiedChangeSetView(
+            compact_summary=self.minimum_verified_compact_summary_view(
+                tests=tests,
+                build_targets=build_targets,
+                runner_actions=runner_actions,
+                quality_validation_operations=quality_validation_operations,
+                quality_hygiene_operations=quality_hygiene_operations,
+                excluded_items=excluded_items,
+            ),
             target_kind=change_set.target_kind,
             owner=self._ownership_presenter.owner_view(change_set.owner),
             primary_component=(
@@ -418,23 +449,104 @@ class ChangeImpactPresenter:
                 if change_set.primary_component is not None
                 else None
             ),
-            tests=tuple(self.minimum_verified_test_target_view(item) for item in change_set.tests),
-            build_targets=tuple(self.minimum_verified_build_target_view(item) for item in change_set.build_targets),
-            runner_actions=tuple(self.minimum_verified_runner_action_view(item) for item in change_set.runner_actions),
-            quality_validation_operations=tuple(
-                self.minimum_verified_quality_operation_view(item)
-                for item in change_set.quality_validation_operations
-            ),
-            quality_hygiene_operations=tuple(
-                self.minimum_verified_quality_operation_view(item)
-                for item in change_set.quality_hygiene_operations
-            ),
-            excluded_items=tuple(
-                self.excluded_minimum_verified_item_view(item)
-                for item in change_set.excluded_items
-            ),
+            tests=tests,
+            build_targets=build_targets,
+            runner_actions=runner_actions,
+            quality_validation_operations=quality_validation_operations,
+            quality_hygiene_operations=quality_hygiene_operations,
+            excluded_items=excluded_items,
             provenance=compact_provenance_views(change_set.provenance),
         )
+
+    def minimum_verified_compact_summary_view(
+        self,
+        *,
+        tests: tuple[MinimumVerifiedTestTargetView, ...],
+        build_targets: tuple[MinimumVerifiedBuildTargetView, ...],
+        runner_actions: tuple[MinimumVerifiedRunnerActionView, ...],
+        quality_validation_operations: tuple[MinimumVerifiedQualityOperationView, ...],
+        quality_hygiene_operations: tuple[MinimumVerifiedQualityOperationView, ...],
+        excluded_items: tuple[ExcludedMinimumVerifiedItemView, ...],
+    ) -> MinimumVerifiedCompactSummaryView:
+        required_validation = (
+            *(self._compact_test_item_view(item) for item in tests),
+            *(self._compact_build_item_view(item) for item in build_targets),
+            *(self._compact_runner_item_view(item) for item in runner_actions),
+            *(self._compact_quality_item_view(item) for item in quality_validation_operations),
+        )
+        optional_hygiene = tuple(self._compact_quality_item_view(item) for item in quality_hygiene_operations)
+        exclusions = tuple(
+            MinimumVerifiedCompactItemView(
+                item_kind=item.item_kind,
+                item_id=item.item_id,
+                summary=item.reason,
+            )
+            for item in excluded_items
+        )
+        return MinimumVerifiedCompactSummaryView(
+            required_validation_count=len(required_validation),
+            required_validation=required_validation,
+            optional_hygiene_count=len(optional_hygiene),
+            optional_hygiene=optional_hygiene,
+            exclusion_count=len(exclusions),
+            exclusions=exclusions,
+        )
+
+    def _compact_test_item_view(self, item: MinimumVerifiedTestTargetView) -> MinimumVerifiedCompactItemView:
+        return MinimumVerifiedCompactItemView(
+            item_kind="test_target",
+            item_id=item.test_id,
+            summary=self._command_line(item.command.argv_preview, item.command.total_arg_count, item.command.truncated, item.command.cwd),
+        )
+
+    def _compact_build_item_view(self, item: MinimumVerifiedBuildTargetView) -> MinimumVerifiedCompactItemView:
+        return MinimumVerifiedCompactItemView(
+            item_kind="build_target",
+            item_id=item.action_id,
+            summary=self._command_line(
+                item.invocation.argv_preview,
+                item.invocation.total_arg_count,
+                item.invocation.truncated,
+                item.invocation.cwd,
+            ),
+        )
+
+    def _compact_runner_item_view(self, item: MinimumVerifiedRunnerActionView) -> MinimumVerifiedCompactItemView:
+        return MinimumVerifiedCompactItemView(
+            item_kind="runner_action",
+            item_id=item.action_id,
+            summary=self._command_line(
+                item.invocation.argv_preview,
+                item.invocation.total_arg_count,
+                item.invocation.truncated,
+                item.invocation.cwd,
+            ),
+        )
+
+    def _compact_quality_item_view(self, item: MinimumVerifiedQualityOperationView) -> MinimumVerifiedCompactItemView:
+        if len(item.repository_rel_paths) == 1:
+            target = item.repository_rel_paths[0]
+        else:
+            target = f"{len(item.repository_rel_paths)} files"
+        return MinimumVerifiedCompactItemView(
+            item_kind="quality_operation",
+            item_id=item.id,
+            summary=f"{item.mcp_tool_name} {target}",
+        )
+
+    @staticmethod
+    def _command_line(
+        argv_preview: tuple[str, ...],
+        total_arg_count: int,
+        truncated: bool,
+        cwd: str | None,
+    ) -> str:
+        rendered = " ".join(shlex.quote(arg) for arg in argv_preview)
+        if truncated and total_arg_count > len(argv_preview):
+            rendered = f"{rendered} ..."
+        if cwd:
+            return f"cd {shlex.quote(cwd)} && {rendered}"
+        return rendered
 
     def change_impact_view(self, impact: ChangeImpact) -> ChangeImpactView:
         return ChangeImpactView(
@@ -453,6 +565,12 @@ class ChangeImpactPresenter:
             ),
             dependent_files=tuple(
                 self._intelligence_presenter.file_relationship_view(item) for item in impact.dependent_files
+            ),
+            implementation_locations=tuple(
+                self._code_presenter.location_view(item) for item in impact.implementation_locations
+            ),
+            implementation_components=tuple(
+                self._architecture_presenter.component_view(item) for item in impact.implementation_components
             ),
             dependent_components=tuple(
                 self._architecture_presenter.component_view(item) for item in impact.dependent_components

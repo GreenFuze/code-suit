@@ -86,7 +86,7 @@ class _DomainAccumulator:
 
 
 class TruthCoverageService:
-    _CODE_OPERATION_COUNT = 4
+    _CODE_OPERATION_COUNT = 5
 
     def __init__(self, repository: Repository) -> None:
         self._repository = repository
@@ -123,6 +123,10 @@ class TruthCoverageService:
             file_context=impact.file_context,
             symbol_context=impact.symbol_context,
             dependent_components=impact.dependent_components,
+            dependency_files=impact.dependency_files,
+            dependent_files=impact.dependent_files,
+            implementation_locations=impact.implementation_locations,
+            implementation_components=impact.implementation_components,
             reference_locations=impact.reference_locations,
             related_tests=impact.related_tests,
             related_runners=impact.related_runners,
@@ -141,6 +145,8 @@ class TruthCoverageService:
         symbol_context: SymbolContext | None,
         dependency_files: tuple[FileRelationshipRef, ...],
         dependent_files: tuple[FileRelationshipRef, ...],
+        implementation_locations: tuple[CodeLocation, ...],
+        implementation_components: tuple[Component, ...],
         dependent_components: tuple[Component, ...],
         reference_locations: tuple[CodeLocation, ...],
         related_tests: tuple[TestImpact, ...],
@@ -167,6 +173,8 @@ class TruthCoverageService:
                 code.add_provenance_item(item.provenance)
         for relationship in (*dependency_files, *dependent_files):
             code.add_provenance_item(relationship.provenance)
+        for item in (*implementation_locations, *implementation_components):
+            code.add_provenance_item(item.provenance)
         code.availability = self._artifact_domain_availability(code)
 
         tests = _DomainAccumulator(domain=TruthCoverageDomain.TESTS)
@@ -250,6 +258,7 @@ class TruthCoverageService:
                 capabilities.symbols_in_file,
                 capabilities.definitions,
                 capabilities.references,
+                capabilities.implementations,
             ):
                 self._apply_runtime_capability(accumulator, capability, reasons=reasons)
         if accumulator.unavailable_count == accumulator.total_entities:

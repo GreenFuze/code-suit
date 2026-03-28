@@ -51,6 +51,7 @@ class CodeRuntimeCapabilities(StrictModel):
     symbols_in_file: RuntimeCapability
     definitions: RuntimeCapability
     references: RuntimeCapability
+    implementations: RuntimeCapability
 
 
 class QualityRuntimeCapabilities(StrictModel):

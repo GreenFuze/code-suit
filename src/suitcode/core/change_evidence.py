@@ -24,6 +24,8 @@ class ChangeEvidenceAssembler:
         ChangeEvidenceEdgeKind.TARGET_REFERENCE,
         ChangeEvidenceEdgeKind.TARGET_DEPENDENCY_FILE,
         ChangeEvidenceEdgeKind.TARGET_DEPENDENT_FILE,
+        ChangeEvidenceEdgeKind.TARGET_IMPLEMENTATION_LOCATION,
+        ChangeEvidenceEdgeKind.COMPONENT_IMPLEMENTATION_COMPONENT,
         ChangeEvidenceEdgeKind.COMPONENT_DEPENDENT_COMPONENT,
         ChangeEvidenceEdgeKind.TARGET_RELATED_TEST,
         ChangeEvidenceEdgeKind.TARGET_RELATED_RUNNER,
@@ -41,6 +43,8 @@ class ChangeEvidenceAssembler:
         reference_locations: tuple[CodeLocation, ...],
         dependency_files: tuple[FileRelationshipRef, ...],
         dependent_files: tuple[FileRelationshipRef, ...],
+        implementation_locations: tuple[CodeLocation, ...],
+        implementation_components: tuple[Component, ...],
         dependent_components: tuple[Component, ...],
         dependent_edges: tuple[ComponentDependencyEdge, ...],
         related_tests: tuple[TestImpact, ...],
@@ -54,6 +58,8 @@ class ChangeEvidenceAssembler:
             *self._reference_edges(target_kind, target_node_id, reference_locations),
             *self._relationship_edges(target_node_id, dependency_files),
             *self._relationship_edges(target_node_id, dependent_files),
+            *self._implementation_location_edges(target_node_id, implementation_locations),
+            *self._implementation_component_edges(primary_component, implementation_components),
             *self._dependent_component_edges(primary_component, dependent_components, dependent_edges),
             *self._related_test_edges(target_kind, target_node_id, related_tests),
             *self._related_runner_edges(target_kind, target_node_id, related_runners),
@@ -161,6 +167,44 @@ class ChangeEvidenceAssembler:
                 )
             )
         return tuple(impacts)
+
+    def _implementation_location_edges(
+        self,
+        target_node_id: str,
+        implementation_locations: tuple[CodeLocation, ...],
+    ) -> tuple[ChangeEvidenceEdge, ...]:
+        return tuple(
+            ChangeEvidenceEdge(
+                source_node_kind="change_target",
+                source_node_id=target_node_id,
+                target_node_kind="implementation_location",
+                target_node_id=self._reference_location_node_id(location),
+                edge_kind=ChangeEvidenceEdgeKind.TARGET_IMPLEMENTATION_LOCATION,
+                reason="implementation candidate discovered from deterministic interface implementation analysis",
+                provenance=location.provenance,
+            )
+            for location in implementation_locations
+        )
+
+    def _implementation_component_edges(
+        self,
+        primary_component: Component | None,
+        implementation_components: tuple[Component, ...],
+    ) -> tuple[ChangeEvidenceEdge, ...]:
+        if primary_component is None:
+            return tuple()
+        return tuple(
+            ChangeEvidenceEdge(
+                source_node_kind="component",
+                source_node_id=primary_component.id,
+                target_node_kind="component",
+                target_node_id=component.id,
+                edge_kind=ChangeEvidenceEdgeKind.COMPONENT_IMPLEMENTATION_COMPONENT,
+                reason="implementation candidate component discovered from deterministic interface implementation analysis",
+                provenance=component.provenance,
+            )
+            for component in implementation_components
+        )
 
     def _dependent_component_edges(
         self,

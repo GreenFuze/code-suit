@@ -63,6 +63,7 @@ def test_service_core_tools_reuse_existing_repository_intelligence(service: Suit
     assert impact.targets[0].impact.target_kind == "file"
     assert impact.provenance
     assert minimum.target_count == 1
+    assert minimum.compact_summary.required_validation_count >= 1
     assert minimum.targets[0].change_set.owner.id == "component:npm:@monorepo/core"
     assert availability.supported is True
     assert "test" in availability.available_action_kinds
@@ -1029,6 +1030,8 @@ def test_service_gets_minimum_verified_change_set(service: SuitMcpService, opene
         repository_rel_path="packages/core/src/index.ts",
     )
 
+    assert change_set.compact_summary.required_validation_count >= 1
+    assert change_set.compact_summary.required_validation[0].summary
     assert change_set.target_kind == "file"
     assert change_set.owner.id == "component:npm:@monorepo/core"
     assert [item.test_id for item in change_set.tests] == ["test:npm:@monorepo/core"]

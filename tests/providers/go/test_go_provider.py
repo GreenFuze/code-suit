@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from suitcode.core.change_models import ChangeTarget
+from suitcode.core.intelligence_models import FileRelationshipKind
 from suitcode.core.repository import Repository
 from suitcode.core.tests.models import RelatedTestTarget
 from suitcode.core.workspace import Workspace
@@ -14,7 +15,7 @@ from suitcode.providers.provider_roles import ProviderRole
 
 def test_go_provider_exposes_components_tests_and_actions(go_repository) -> None:
     assert go_repository.provider_ids == ('go',)
-    assert go_repository.provider_roles['go'] == frozenset({ProviderRole.ARCHITECTURE, ProviderRole.TEST})
+    assert go_repository.provider_roles['go'] == frozenset({ProviderRole.ARCHITECTURE, ProviderRole.CODE, ProviderRole.TEST})
 
     components = go_repository.arch.get_components()
     component_ids = {item.id for item in components}
@@ -42,11 +43,29 @@ def test_go_related_tests_and_minimum_verified_change_set(go_repository) -> None
     assert minimum.build_targets == tuple()
 
 
+def test_go_file_relationships_are_projected_from_component_dependency_graph(go_repository) -> None:
+    dependency_files = go_repository.code.get_file_relationships(
+        'internal/service/service.go',
+        relationship_kind=FileRelationshipKind.IMPORTS,
+    )
+    dependent_files = go_repository.code.get_file_relationships(
+        'internal/service/service.go',
+        relationship_kind=FileRelationshipKind.IMPORTED_BY,
+    )
+
+    assert [item.repository_rel_path for item in dependency_files] == ['pkg/util/util.go']
+    assert [item.repository_rel_path for item in dependent_files] == ['cmd/app/main.go']
+    assert all(item.provenance for item in dependency_files)
+    assert all(item.provenance for item in dependent_files)
+
+
 def test_go_runtime_capabilities_and_build_targets(go_repository) -> None:
     provider = go_repository.get_provider('go')
+    code_caps = provider.get_code_runtime_capabilities()
     test_caps = provider.get_test_runtime_capabilities()
     action_caps = provider.get_action_runtime_capabilities()
 
+    assert code_caps.implementations.availability.value in {'available', 'degraded'}
     assert test_caps.discovery.availability.value == 'available'
     assert test_caps.execution.availability.value == 'available'
     assert action_caps.builds.availability.value == 'available'
@@ -54,6 +73,58 @@ def test_go_runtime_capabilities_and_build_targets(go_repository) -> None:
 
     build_targets = go_repository.list_build_targets()
     assert [item.action_id for item in build_targets] == ['action:go:build:example.com/acme/go-demo/cmd/app']
+
+
+def test_go_provider_exposes_interface_implementation_candidates(tmp_path: Path) -> None:
+    repo_root = tmp_path / "go-impl"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "go.mod").write_text("module example.com/impldemo\n\ngo 1.26\n", encoding="utf-8")
+    (repo_root / "internal" / "service").mkdir(parents=True)
+    (repo_root / "internal" / "impl").mkdir(parents=True)
+    (repo_root / "cmd" / "app").mkdir(parents=True)
+    (repo_root / "internal" / "service" / "service.go").write_text(
+        (
+            "package service\n\n"
+            "type Greeter interface {\n"
+            "\tGreet(name string) string\n"
+            "}\n\n"
+            "type Service struct {\n"
+            "\tgreeter Greeter\n"
+            "}\n\n"
+            "func New(greeter Greeter) Service {\n"
+            "\treturn Service{greeter: greeter}\n"
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    (repo_root / "internal" / "impl" / "greeter.go").write_text(
+        (
+            "package impl\n\n"
+            "type RealGreeter struct{}\n\n"
+            "func (RealGreeter) Greet(name string) string {\n"
+            "\treturn \"hello, \" + name\n"
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    (repo_root / "cmd" / "app" / "main.go").write_text(
+        (
+            "package main\n\n"
+            "import (\n"
+            "\t\"example.com/impldemo/internal/impl\"\n"
+            "\t\"example.com/impldemo/internal/service\"\n"
+            ")\n\n"
+            "func main() {\n"
+            "\t_ = service.New(impl.RealGreeter{})\n"
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    repository = Workspace(repo_root).repositories[0]
+    locations = repository.code.get_file_implementation_locations("internal/service/service.go")
+
+    assert any(item.repository_rel_path == "internal/impl/greeter.go" for item in locations)
 
 
 def test_mixed_npm_and_single_go_module_root_is_supported(tmp_path: Path, npm_fixture_root: Path) -> None:
@@ -103,7 +174,7 @@ def test_real_multi_module_repo_support_if_available() -> None:
         pytest.skip('local MyGamesAnywhere server repo is unavailable')
 
     support = Repository.support_for_path(repo_root)
-    assert support.provider_ids == ('go', 'npm')
+    assert support.provider_ids == ('go', 'markdown', 'npm')
 
     repository = Workspace(repo_root).repositories[0]
     package_manager_ids = [item.id for item in repository.arch.get_package_managers() if item.id.startswith('pkgmgr:go:')]

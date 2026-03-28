@@ -425,6 +425,8 @@ class FileContextView(StrictModel):
     dependency_files_preview: tuple[FileRelationshipView, ...]
     dependent_file_count: int
     dependent_files_preview: tuple[FileRelationshipView, ...]
+    implementation_location_count: int
+    implementation_locations_preview: tuple[LocationView, ...]
     related_test_count: int
     related_tests_preview: tuple[RelatedTestView, ...]
     quality_provider_ids: tuple[str, ...]
@@ -502,6 +504,8 @@ class ChangeImpactView(StrictModel):
     symbol_context: SymbolContextView | None = None
     dependency_files: tuple[FileRelationshipView, ...]
     dependent_files: tuple[FileRelationshipView, ...]
+    implementation_locations: tuple[LocationView, ...]
+    implementation_components: tuple[ComponentView, ...]
     dependent_components: tuple[ComponentView, ...]
     reference_locations: tuple[LocationView, ...]
     related_tests: tuple[TestImpactView, ...]
@@ -527,6 +531,21 @@ class MinimumVerifiedCommandSummaryView(StrictModel):
     total_arg_count: int
     truncated: bool
     cwd: str | None = None
+
+
+class MinimumVerifiedCompactItemView(StrictModel):
+    item_kind: str
+    item_id: str
+    summary: str
+
+
+class MinimumVerifiedCompactSummaryView(StrictModel):
+    required_validation_count: int
+    required_validation: tuple[MinimumVerifiedCompactItemView, ...]
+    optional_hygiene_count: int
+    optional_hygiene: tuple[MinimumVerifiedCompactItemView, ...]
+    exclusion_count: int
+    exclusions: tuple[MinimumVerifiedCompactItemView, ...]
 
 
 class MinimumVerifiedTestTargetView(StrictModel):
@@ -597,6 +616,7 @@ class ExcludedMinimumVerifiedItemView(StrictModel):
 
 
 class MinimumVerifiedChangeSetView(StrictModel):
+    compact_summary: MinimumVerifiedCompactSummaryView
     target_kind: str
     owner: OwnerView
     primary_component: ComponentView | None = None
@@ -768,6 +788,8 @@ class FileUnderstandingTargetView(StrictModel):
     dependency_files_preview: tuple[FileRelationshipView, ...]
     dependent_file_count: int
     dependent_files_preview: tuple[FileRelationshipView, ...]
+    implementation_location_count: int
+    implementation_locations_preview: tuple[LocationView, ...]
     related_tests: tuple[RelatedTestView, ...]
     structured_artifact: StructuredArtifactView | None = None
     provenance: tuple[ProvenanceView, ...]
@@ -781,6 +803,8 @@ class FileUnderstandingView(StrictModel):
     aggregate_dependency_files_preview: tuple[FileRelationshipView, ...]
     aggregate_dependent_file_count: int
     aggregate_dependent_files_preview: tuple[FileRelationshipView, ...]
+    aggregate_implementation_location_count: int
+    aggregate_implementation_locations_preview: tuple[LocationView, ...]
     aggregate_related_tests: tuple[RelatedTestView, ...]
     suggested_follow_ups: tuple[str, ...]
     provenance: tuple[ProvenanceView, ...]
@@ -796,6 +820,8 @@ class BatchChangeImpactView(StrictModel):
     targets: tuple[BatchChangeImpactTargetView, ...]
     owner_ids: tuple[str, ...]
     dependent_files: tuple[FileRelationshipView, ...]
+    implementation_locations: tuple[LocationView, ...]
+    implementation_components: tuple[ComponentView, ...]
     dependent_components: tuple[ComponentView, ...]
     reference_locations: tuple[LocationView, ...]
     related_tests: tuple[TestImpactView, ...]
@@ -810,6 +836,7 @@ class BatchMinimumVerifiedChangeSetTargetView(StrictModel):
 
 
 class BatchMinimumVerifiedChangeSetView(StrictModel):
+    compact_summary: MinimumVerifiedCompactSummaryView
     target_count: int
     targets: tuple[BatchMinimumVerifiedChangeSetTargetView, ...]
     owner_ids: tuple[str, ...]

@@ -239,6 +239,7 @@ class PythonProvider(
             symbols_in_file=capability,
             definitions=capability,
             references=capability,
+            implementations=capability,
         )
 
     def get_test_runtime_capabilities(self) -> TestRuntimeCapabilities:
@@ -512,6 +513,9 @@ class PythonProvider(
             column,
             include_definition=include_definition,
         )
+
+    def _find_implementation_locations(self, repository_rel_path: str, line: int, column: int) -> tuple[tuple[str, int, int, int, int], ...]:
+        return self._build_file_symbol_service().find_implementations(repository_rel_path, line, column)
 
     def _to_entity_info(self, symbol: object) -> EntityInfo:
         return self._symbol_translator.to_entity_info(symbol)

@@ -103,6 +103,8 @@ class ChangeEvidenceEdgeKind(StrEnum):
     TARGET_REFERENCE = "target_reference"
     TARGET_DEPENDENCY_FILE = "target_dependency_file"
     TARGET_DEPENDENT_FILE = "target_dependent_file"
+    TARGET_IMPLEMENTATION_LOCATION = "target_implementation_location"
+    COMPONENT_IMPLEMENTATION_COMPONENT = "component_implementation_component"
     COMPONENT_DEPENDENT_COMPONENT = "component_dependent_component"
     TARGET_RELATED_TEST = "target_related_test"
     TARGET_RELATED_RUNNER = "target_related_runner"
@@ -191,6 +193,8 @@ class ChangeImpact(StrictModel):
     symbol_context: SymbolContext | None = None
     dependency_files: tuple[FileRelationshipRef, ...]
     dependent_files: tuple[FileRelationshipRef, ...]
+    implementation_locations: tuple[CodeLocation, ...]
+    implementation_components: tuple[Component, ...]
     dependent_components: tuple[Component, ...]
     reference_locations: tuple[CodeLocation, ...]
     related_tests: tuple[TestImpact, ...]

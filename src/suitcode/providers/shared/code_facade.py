@@ -58,6 +58,17 @@ class CodeFacadeMixin:
             )
         )
 
+    def find_implementations(
+        self,
+        repository_rel_path: str,
+        line: int,
+        column: int,
+    ) -> tuple[CodeLocation, ...]:
+        return tuple(
+            self._to_code_location(item, operation="implementation")
+            for item in self._find_implementation_locations(repository_rel_path, line, column)
+        )
+
     @abstractmethod
     def _get_symbols(self, query: str, is_case_sensitive: bool = False) -> tuple[object, ...]:
         raise NotImplementedError
@@ -83,6 +94,10 @@ class CodeFacadeMixin:
         column: int,
         include_definition: bool = False,
     ) -> tuple[tuple[str, int, int, int, int], ...]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def _find_implementation_locations(self, repository_rel_path: str, line: int, column: int) -> tuple[tuple[str, int, int, int, int], ...]:
         raise NotImplementedError
 
     @abstractmethod

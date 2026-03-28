@@ -151,6 +151,8 @@ class FileContext(StrictModel):
     dependency_files_preview: tuple[FileRelationshipRef, ...]
     dependent_file_count: int
     dependent_files_preview: tuple[FileRelationshipRef, ...]
+    implementation_location_count: int
+    implementation_locations_preview: tuple[CodeLocation, ...]
     related_test_count: int
     related_tests_preview: tuple[ResolvedRelatedTest, ...]
     quality_provider_ids: tuple[str, ...]
@@ -160,8 +162,10 @@ class FileContext(StrictModel):
     def _validate_provenance(self) -> "FileContext":
         if not self.provenance:
             raise ValueError("provenance must not be empty")
-        if self.symbol_count > 0 and not any(item.source_kind == SourceKind.LSP for item in self.provenance):
-            raise ValueError("file contexts with symbols must include LSP provenance")
+        if (self.symbol_count > 0 or self.implementation_location_count > 0) and not any(
+            item.source_kind == SourceKind.LSP for item in self.provenance
+        ):
+            raise ValueError("file contexts with symbol or implementation evidence must include LSP provenance")
         return self
 
 

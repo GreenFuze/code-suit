@@ -76,3 +76,11 @@ class LspSymbolServiceBase(Generic[_SymbolT]):
             column,
             include_definition=include_definition,
         )
+
+    def find_implementations(
+        self,
+        repository_rel_path: str,
+        line: int,
+        column: int,
+    ) -> tuple[tuple[str, int, int, int, int], ...]:
+        return self._backend.find_implementations(repository_rel_path, line, column)

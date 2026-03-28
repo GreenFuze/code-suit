@@ -264,6 +264,8 @@ def test_change_impact_presenter_maps_composed_artifact(npm_repo_root) -> None:
                 ),
             ),
         ),
+        implementation_locations=tuple(),
+        implementation_components=tuple(),
         dependent_components=(
             next(item for item in repository.arch.get_components() if item.id == "component:npm:@monorepo/utils"),
         ),
@@ -372,6 +374,8 @@ def test_change_impact_presenter_maps_minimum_verified_change_set(npm_repo_root)
 
     view = ChangeImpactPresenter().minimum_verified_change_set_view(change_set)
 
+    assert view.compact_summary.required_validation_count >= 1
+    assert view.compact_summary.required_validation[0].item_kind in {"test_target", "build_target", "runner_action", "quality_operation"}
     assert view.owner.id == "component:npm:@monorepo/core"
     assert view.tests[0].test_id == "test:npm:@monorepo/core"
     assert view.tests[0].command.total_arg_count >= 1

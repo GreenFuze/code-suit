@@ -8,6 +8,28 @@ Stop guessing and exploring blindly. SuitCode turns repo/toolchain signals into 
 
 SuitCode is an MCP server for repository intelligence that reads the same surfaces your build, test, quality, and language tooling already define. Instead of giving your agent another repo map or another search index, it gives grounded answers like ownership, impact, minimum validation sets, deterministic targets, and explicit unsupported boundaries.
 
+## Current MCP Shape
+
+SuitCode now has two public profiles:
+
+- `core`: the small default agent-facing surface
+- `full`: the larger expert/compatibility surface
+
+The `core` profile is the intended default for agents. Its primary tools are:
+
+- `understand_repository`
+- `understand_file`
+- `what_changes_if_i_edit_this`
+- `what_should_i_run`
+- `can_i_do_this`
+
+The target-bearing core tools accept file lists and return both:
+
+- aggregate results for the whole change set
+- per-target detail and evidence
+
+This keeps the tool surface small while reducing repeated per-file calls.
+
 ## Why It Is Different
 
 - Search tells the agent where text appears. SuitCode asks the actual toolchain what owns the file, what depends on it, and what should run.
@@ -47,6 +69,24 @@ suitcode-install --agent codex
 
 Replace `codex` with `claude`, `cursor`, or `all` as needed.
 
+Installed entrypoints:
+
+- `suitcode-mcp-core`
+- `suitcode-mcp --profile core`
+- `suitcode-mcp --profile full`
+
+Repository launchers in a source checkout:
+
+- Windows: `run_mcp.bat`
+- macOS/Linux: `run_mcp.sh`
+
+The repository launchers default to `core`.
+
+Current installer note:
+
+- `suitcode-install` still wires `suitcode-mcp`
+- if you want the smaller recommended `core` surface today, use the manual MCP config shown below or point your agent at `run_mcp.bat` / `run_mcp.sh` from a source checkout
+
 ## Connect To Your Agent
 
 ### Codex
@@ -63,6 +103,8 @@ Verify:
 codex mcp list
 ```
 
+If you used `suitcode-install`, switch the generated entry to the `core` command below if you want the smaller default surface today.
+
 Manual fallback:
 
 Windows `~/.codex/config.toml`
@@ -71,7 +113,7 @@ Windows `~/.codex/config.toml`
 [mcp_servers.suitcode]
 transport = "stdio"
 command = "cmd"
-args = ["/c", "suitcode-mcp"]
+args = ["/c", "suitcode-mcp-core"]
 enabled = true
 ```
 
@@ -80,7 +122,29 @@ macOS/Linux `~/.codex/config.toml`
 ```toml
 [mcp_servers.suitcode]
 transport = "stdio"
-command = "suitcode-mcp"
+command = "suitcode-mcp-core"
+args = []
+enabled = true
+```
+
+Source checkout fallback:
+
+Windows
+
+```toml
+[mcp_servers.suitcode]
+transport = "stdio"
+command = "cmd"
+args = ["/c", "C:/src/github.com/GreenFuze/suit-code/run_mcp.bat"]
+enabled = true
+```
+
+macOS/Linux
+
+```toml
+[mcp_servers.suitcode]
+transport = "stdio"
+command = "/path/to/suit-code/run_mcp.sh"
 args = []
 enabled = true
 ```
@@ -101,18 +165,20 @@ claude mcp list
 
 Then open Claude Code and run `/mcp`.
 
+If you used `suitcode-install`, switch the generated entry to the `core` command below if you want the smaller default surface today.
+
 Manual fallback:
 
 Windows
 
 ```bash
-claude mcp add --transport stdio --scope user suitcode -- cmd /c suitcode-mcp
+claude mcp add --transport stdio --scope user suitcode -- cmd /c suitcode-mcp-core
 ```
 
 macOS/Linux
 
 ```bash
-claude mcp add --transport stdio --scope user suitcode -- suitcode-mcp
+claude mcp add --transport stdio --scope user suitcode -- suitcode-mcp-core
 ```
 
 ### Cursor
@@ -127,6 +193,8 @@ Verify:
 - restart Cursor
 - confirm `suitcode` appears in MCP tools
 
+If you used `suitcode-install`, switch the generated entry to the `core` command below if you want the smaller default surface today.
+
 Manual fallback:
 
 Windows `%USERPROFILE%\\.cursor\\mcp.json`
@@ -136,7 +204,7 @@ Windows `%USERPROFILE%\\.cursor\\mcp.json`
   "mcpServers": {
     "suitcode": {
       "command": "cmd",
-      "args": ["/c", "suitcode-mcp"]
+      "args": ["/c", "suitcode-mcp-core"]
     }
   }
 }
@@ -148,7 +216,7 @@ macOS/Linux `~/.cursor/mcp.json`
 {
   "mcpServers": {
     "suitcode": {
-      "command": "suitcode-mcp",
+      "command": "suitcode-mcp-core",
       "args": []
     }
   }
@@ -178,6 +246,7 @@ Current repository/provider support:
 - Python
 - npm
 - Go
+- Markdown
 
 Current agent setup paths:
 - Codex
@@ -193,7 +262,22 @@ Current Go scope:
 - single-module repositories
 - multi-module repositories with no `go.work`
 - mixed repositories with Go module subtrees and no `go.work`
+- Go code intelligence through `gopls` for symbols, definitions, references, and implementation candidates
 - `go.work` support comes next
+
+Current markdown scope:
+- deterministic markdown file ownership
+- section and heading structure with line ranges
+- fenced code blocks
+- links
+- frontmatter keys and ranges
+- checklist items
+
+Current frontend/npm scope:
+- mixed repo attachment discovery from a larger repo root
+- deterministic file ownership for package-owned source and `public/` assets
+- concrete npm build/test/runner actions from package scripts
+- TypeScript code intelligence through `typescript-language-server`
 
 ## Evidence
 

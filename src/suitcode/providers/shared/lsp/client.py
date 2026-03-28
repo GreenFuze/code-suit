@@ -79,6 +79,15 @@ class LspClient:
         )
         return self._parser.parse_locations(payload)
 
+    def implementation(self, file_path: Path, line: int, column: int) -> tuple[LspLocation, ...]:
+        resolved = file_path.resolve()
+        payload = self._request_for_open_document(
+            resolved,
+            "textDocument/implementation",
+            {"textDocument": {"uri": resolved.as_uri()}, "position": self._lsp_position(line, column)},
+        )
+        return self._parser.parse_locations(payload)
+
     def shutdown(self) -> None:
         if not self._initialized:
             self._process.stop()
@@ -174,6 +183,8 @@ class LspClient:
             return "javascript"
         if suffix == ".jsx":
             return "javascriptreact"
+        if suffix == ".go":
+            return "go"
         return "plaintext"
 
     def __enter__(self) -> "LspClient":

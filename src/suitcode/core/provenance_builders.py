@@ -192,7 +192,7 @@ def lsp_location_provenance(
     repository_rel_path: str,
     operation: str,
 ) -> ProvenanceEntry:
-    if operation not in {"definition", "references"}:
+    if operation not in {"definition", "references", "implementation"}:
         raise ValueError(f"unsupported lsp location operation: `{operation}`")
     return lsp_provenance(
         source_tool=source_tool,

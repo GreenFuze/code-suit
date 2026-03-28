@@ -234,6 +234,17 @@ class SuitMcpService:
                     tuple(item for target in targets for item in target.dependent_files_preview),
                     key=lambda item: item.path,
                 ),
+                aggregate_implementation_location_count=len(
+                    {
+                        (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id)
+                        for target in targets
+                        for item in target.implementation_locations_preview
+                    }
+                ),
+                aggregate_implementation_locations_preview=self._dedupe_views(
+                    tuple(item for target in targets for item in target.implementation_locations_preview),
+                    key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+                ),
                 aggregate_related_tests=self._dedupe_views(
                     tuple(item for target in targets for item in target.related_tests),
                     key=lambda item: item.id,
@@ -335,6 +346,14 @@ class SuitMcpService:
                     tuple(item for target in frozen_targets for item in target.impact.dependent_files),
                     key=lambda item: item.path,
                 ),
+                implementation_locations=self._dedupe_views(
+                    tuple(item for target in frozen_targets for item in target.impact.implementation_locations),
+                    key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+                ),
+                implementation_components=self._dedupe_views(
+                    tuple(item for target in frozen_targets for item in target.impact.implementation_components),
+                    key=lambda item: item.id,
+                ),
                 dependent_components=self._dedupe_views(
                     tuple(item for target in frozen_targets for item in target.impact.dependent_components),
                     key=lambda item: item.id,
@@ -403,34 +422,48 @@ class SuitMcpService:
                     )
                 )
             frozen_targets = tuple(targets)
+            tests = self._dedupe_views(
+                tuple(item for target in frozen_targets for item in target.change_set.tests),
+                key=lambda item: item.test_id,
+            )
+            build_targets = self._dedupe_views(
+                tuple(item for target in frozen_targets for item in target.change_set.build_targets),
+                key=lambda item: item.action_id,
+            )
+            runner_actions = self._dedupe_views(
+                tuple(item for target in frozen_targets for item in target.change_set.runner_actions),
+                key=lambda item: item.action_id,
+            )
+            quality_validation_operations = self._dedupe_views(
+                tuple(item for target in frozen_targets for item in target.change_set.quality_validation_operations),
+                key=lambda item: item.id,
+            )
+            quality_hygiene_operations = self._dedupe_views(
+                tuple(item for target in frozen_targets for item in target.change_set.quality_hygiene_operations),
+                key=lambda item: item.id,
+            )
+            excluded_items = self._dedupe_views(
+                tuple(item for target in frozen_targets for item in target.change_set.excluded_items),
+                key=lambda item: (item.item_kind, item.item_id, item.reason_code),
+            )
             return BatchMinimumVerifiedChangeSetView(
+                compact_summary=self._change_impact_presenter.minimum_verified_compact_summary_view(
+                    tests=tests,
+                    build_targets=build_targets,
+                    runner_actions=runner_actions,
+                    quality_validation_operations=quality_validation_operations,
+                    quality_hygiene_operations=quality_hygiene_operations,
+                    excluded_items=excluded_items,
+                ),
                 target_count=len(frozen_targets),
                 targets=frozen_targets,
                 owner_ids=tuple(sorted({item.change_set.owner.id for item in frozen_targets})),
-                tests=self._dedupe_views(
-                    tuple(item for target in frozen_targets for item in target.change_set.tests),
-                    key=lambda item: item.test_id,
-                ),
-                build_targets=self._dedupe_views(
-                    tuple(item for target in frozen_targets for item in target.change_set.build_targets),
-                    key=lambda item: item.action_id,
-                ),
-                runner_actions=self._dedupe_views(
-                    tuple(item for target in frozen_targets for item in target.change_set.runner_actions),
-                    key=lambda item: item.action_id,
-                ),
-                quality_validation_operations=self._dedupe_views(
-                    tuple(item for target in frozen_targets for item in target.change_set.quality_validation_operations),
-                    key=lambda item: item.id,
-                ),
-                quality_hygiene_operations=self._dedupe_views(
-                    tuple(item for target in frozen_targets for item in target.change_set.quality_hygiene_operations),
-                    key=lambda item: item.id,
-                ),
-                excluded_items=self._dedupe_views(
-                    tuple(item for target in frozen_targets for item in target.change_set.excluded_items),
-                    key=lambda item: (item.item_kind, item.item_id, item.reason_code),
-                ),
+                tests=tests,
+                build_targets=build_targets,
+                runner_actions=runner_actions,
+                quality_validation_operations=quality_validation_operations,
+                quality_hygiene_operations=quality_hygiene_operations,
+                excluded_items=excluded_items,
                 provenance=self._merge_view_provenance(*(target.change_set.provenance for target in frozen_targets)),
             )
 
@@ -1093,6 +1126,9 @@ class SuitMcpService:
             dependent_files_preview = tuple(
                 self._intelligence_presenter.file_relationship_view(item) for item in context.dependent_files_preview
             )
+            implementation_locations_preview = tuple(
+                self._code_presenter.location_view(item) for item in context.implementation_locations_preview
+            )
             related_tests = tuple(
                 self._test_presenter.related_test_view(item)
                 for item in repository.tests.get_related_tests(
@@ -1116,12 +1152,15 @@ class SuitMcpService:
             dependency_files_preview=dependency_files_preview,
             dependent_file_count=context.dependent_file_count,
             dependent_files_preview=dependent_files_preview,
+            implementation_location_count=context.implementation_location_count,
+            implementation_locations_preview=implementation_locations_preview,
             related_tests=related_tests,
             structured_artifact=structured_artifact_view,
             provenance=self._merge_view_provenance(
                 owner.file.provenance,
                 *(item.provenance for item in dependency_files_preview),
                 *(item.provenance for item in dependent_files_preview),
+                *(item.provenance for item in implementation_locations_preview),
                 *(item.provenance for item in related_tests),
                 structured_artifact_view.provenance if structured_artifact_view is not None else tuple(),
             ),

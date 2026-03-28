@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname
 
+from suitcode.providers.shared.lsp.errors import LspProtocolError
 from suitcode.providers.shared.lsp import LspClient, LspDocumentSymbol, LspLocation, LspWorkspaceSymbol
 from suitcode.providers.shared.lsp_code.session import (
     LspClientFactory,
@@ -131,7 +132,10 @@ class LspCodeBackend:
         self._ensure_ready()
         with self._session_manager.open_client(self._repository_root, self._resolver, self._client_factory) as client:
             client.initialize(self._repository_root)
-            locations = client.definition(file_path, line, column)
+            try:
+                locations = client.definition(file_path, line, column)
+            except LspProtocolError:
+                return tuple()
         return self._translate_locations(locations)
 
     def find_references(
@@ -148,7 +152,29 @@ class LspCodeBackend:
         self._ensure_ready()
         with self._session_manager.open_client(self._repository_root, self._resolver, self._client_factory) as client:
             client.initialize(self._repository_root)
-            locations = client.references(file_path, line, column, include_declaration=include_definition)
+            try:
+                locations = client.references(file_path, line, column, include_declaration=include_definition)
+            except LspProtocolError:
+                return tuple()
+        return self._translate_locations(locations)
+
+    def find_implementations(
+        self,
+        repository_rel_path: str,
+        line: int,
+        column: int,
+    ) -> tuple[tuple[str, int, int, int, int], ...]:
+        self._validate_position(line, column)
+        file_path = self._validate_repository_file(repository_rel_path)
+        if not self._is_supported_symbol_file(file_path):
+            return tuple()
+        self._ensure_ready()
+        with self._session_manager.open_client(self._repository_root, self._resolver, self._client_factory) as client:
+            client.initialize(self._repository_root)
+            try:
+                locations = client.implementation(file_path, line, column)
+            except LspProtocolError:
+                return tuple()
         return self._translate_locations(locations)
 
     def _validate_query(self, query: str) -> str:
@@ -264,15 +290,16 @@ class LspCodeBackend:
         flattened: list[LspRepositorySymbol] = []
         for symbol in symbols:
             current_container_name = container_name or symbol.container_name
+            selection_range = symbol.selection_range
             flattened.append(
                 LspRepositorySymbol(
                     name=symbol.name,
                     kind=self._symbol_kind(symbol.kind),
                     repository_rel_path=repository_rel_path,
-                    line_start=symbol.range.start.line + 1,
-                    line_end=symbol.range.end.line + 1,
-                    column_start=symbol.range.start.character + 1,
-                    column_end=symbol.range.end.character + 1,
+                    line_start=selection_range.start.line + 1,
+                    line_end=selection_range.end.line + 1,
+                    column_start=selection_range.start.character + 1,
+                    column_end=selection_range.end.character + 1,
                     container_name=current_container_name,
                     signature=symbol.detail or current_container_name,
                 )

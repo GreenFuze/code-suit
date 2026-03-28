@@ -37,18 +37,18 @@ class LspProtocolParser:
                 return (LspLocation(uri=link.target_uri, range=link.target_selection_range or link.target_range),)
             raise LspProtocolError("location response object must be a Location or LocationLink")
         if not isinstance(payload, list):
-            raise LspProtocolError("definition/reference response must be a location, a list of locations, or null")
+            raise LspProtocolError("definition/reference/implementation response must be a location, a list of locations, or null")
         parsed: list[LspLocation] = []
         for item in payload:
             if not isinstance(item, dict):
-                raise LspProtocolError("definition/reference list items must be objects")
+                raise LspProtocolError("definition/reference/implementation list items must be objects")
             if "uri" in item:
                 parsed.append(self._parse_location(item))
             elif "targetUri" in item:
                 link = self._parse_location_link(item)
                 parsed.append(LspLocation(uri=link.target_uri, range=link.target_selection_range or link.target_range))
             else:
-                raise LspProtocolError("definition/reference list items must be Location or LocationLink objects")
+                raise LspProtocolError("definition/reference/implementation list items must be Location or LocationLink objects")
         return tuple(parsed)
 
     def _parse_workspace_symbol(self, payload: object) -> LspWorkspaceSymbol:

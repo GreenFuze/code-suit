@@ -7,7 +7,8 @@ from threading import Lock
 from typing import TYPE_CHECKING
 
 from suitcode.core.intelligence_models import ComponentDependencyEdge
-from suitcode.core.models import Aggregator, Component, ExternalPackage, FileInfo, PackageManager, Runner, TestDefinition, TestFramework
+from suitcode.core.code.models import CodeLocation
+from suitcode.core.models import Aggregator, Component, EntityInfo, ExternalPackage, FileInfo, PackageManager, Runner, TestDefinition, TestFramework
 from suitcode.core.provenance import SourceKind
 from suitcode.core.provenance_builders import (
     derived_summary_provenance,
@@ -18,18 +19,27 @@ from suitcode.core.provenance_builders import (
 from suitcode.core.tests.models import DiscoveredTestDefinition, RelatedTestMatch, RelatedTestTarget
 from suitcode.providers.action_provider_base import ActionProviderBase
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
+from suitcode.providers.code_provider_base import CodeProviderBase
 from suitcode.providers.go.action_service import GoActionService
+from suitcode.providers.go.implementation_service import GoImplementationService
+from suitcode.providers.go.location_translation import GoLocationTranslator
+from suitcode.providers.go.lsp_resolution import GoplsResolver
 from suitcode.providers.go.models import GoPackageAnalysis, GoPackageManagerAnalysis, GoTestAnalysis
+from suitcode.providers.go.symbol_models import GoWorkspaceSymbol
+from suitcode.providers.go.symbol_service import GoFileSymbolService, GoSymbolService
+from suitcode.providers.go.symbol_translation import GoSymbolTranslator
 from suitcode.providers.go.workspace_analyzer import GoWorkspaceAnalyzer
 from suitcode.providers.provider_metadata import ProviderAttachmentCandidate, ProviderAttachmentContext
 from suitcode.providers.provider_roles import ProviderRole
 from suitcode.providers.runtime_capability_models import (
     ActionRuntimeCapabilities,
+    CodeRuntimeCapabilities,
     RuntimeCapability,
     RuntimeCapabilityAvailability,
     TestRuntimeCapabilities,
 )
 from suitcode.providers.shared.actions import ProviderActionSpec, ProviderActionTranslator
+from suitcode.providers.shared.code_facade import CodeFacadeMixin
 from suitcode.providers.shared.component_index import ComponentIndexBuilder
 from suitcode.providers.shared.provider_translation_mixin import ProviderTranslationMixin
 from suitcode.providers.shared.test_execution import TestExecutionService
@@ -44,9 +54,11 @@ if TYPE_CHECKING:
 
 class GoProvider(
     ProviderTranslationMixin,
+    CodeFacadeMixin,
     TestFacadeMixin,
     DeterministicTestTargetMixin,
     ArchitectureProviderBase,
+    CodeProviderBase,
     TestProviderBase,
     ActionProviderBase,
 ):
@@ -70,7 +82,7 @@ class GoProvider(
             ProviderAttachmentCandidate(
                 provider_id=cls.PROVIDER_ID,
                 attachment_root=attachment_root,
-                detected_roles=frozenset({ProviderRole.ARCHITECTURE, ProviderRole.TEST}),
+                detected_roles=frozenset({ProviderRole.ARCHITECTURE, ProviderRole.CODE, ProviderRole.TEST}),
             )
             for attachment_root in attachment_roots
         )
@@ -83,11 +95,16 @@ class GoProvider(
         self._analyzer = GoWorkspaceAnalyzer(self.attachment_root)
         self._action_service = GoActionService()
         self._action_translator = ProviderActionTranslator(provider_id='go', default_test_tool='go test')
+        self._symbol_translator = GoSymbolTranslator()
+        self._location_translator = GoLocationTranslator()
         self._analysis_cache = None
         self._component_id_index: dict[str, GoPackageAnalysis] | None = None
         self._dependency_edges_cache: tuple[ComponentDependencyEdge, ...] | None = None
         self._test_execution_service: TestExecutionService | None = None
         self._tests_cache: tuple[GoTestAnalysis, ...] | None = None
+        self._symbol_service: GoSymbolService | None = None
+        self._file_symbol_service: GoFileSymbolService | None = None
+        self._implementation_service: GoImplementationService | None = None
         self._tests_lock = Lock()
 
     def get_components(self) -> tuple[Component, ...]:
@@ -152,6 +169,34 @@ class GoProvider(
             )
             for item in discovered_tests
             if item.test_definition.id == test_id
+        )
+
+    def get_code_runtime_capabilities(self) -> CodeRuntimeCapabilities:
+        resolver = GoplsResolver()
+        try:
+            resolver.resolve(self.attachment_root)
+            capability = self._runtime_capability(
+                capability_id="go.code.lsp",
+                availability=RuntimeCapabilityAvailability.AVAILABLE,
+                source_kind=SourceKind.LSP,
+                source_tool="gopls",
+                summary="gopls is available for deterministic Go code intelligence",
+            )
+        except ValueError as exc:
+            capability = self._runtime_capability(
+                capability_id="go.code.lsp",
+                availability=RuntimeCapabilityAvailability.DEGRADED,
+                source_kind=SourceKind.LSP,
+                source_tool="gopls",
+                summary="gopls is unavailable for deterministic Go code intelligence",
+                reason=str(exc),
+            )
+        return CodeRuntimeCapabilities(
+            symbol_search=capability,
+            symbols_in_file=capability,
+            definitions=capability,
+            references=capability,
+            implementations=capability,
         )
 
     def get_actions(self) -> tuple['RepositoryAction', ...]:
@@ -229,6 +274,34 @@ class GoProvider(
             self._analysis_cache = self._rebase_workspace_analysis(self._analyzer.analyze())
         return self._analysis_cache
 
+    def _build_symbol_service(self) -> GoSymbolService:
+        if self._symbol_service is None:
+            self._symbol_service = GoSymbolService(
+                self.repository,
+                attachment_root=self.attachment_root,
+                attachment_root_rel_path=self.attachment_root_rel_path,
+            )
+        return self._symbol_service
+
+    def _build_file_symbol_service(self) -> GoFileSymbolService:
+        if self._file_symbol_service is None:
+            self._file_symbol_service = GoFileSymbolService(
+                self.repository,
+                attachment_root=self.attachment_root,
+                attachment_root_rel_path=self.attachment_root_rel_path,
+            )
+        return self._file_symbol_service
+
+    def _build_implementation_service(self) -> GoImplementationService:
+        if self._implementation_service is None:
+            self._implementation_service = GoImplementationService(
+                repository_root=self.repository.root,
+                attachment_root=self.attachment_root,
+                attachment_root_rel_path=self.attachment_root_rel_path,
+                symbol_service=self._build_file_symbol_service(),
+            )
+        return self._implementation_service
+
     def _build_test_execution_service(self) -> TestExecutionService:
         if self._test_execution_service is None:
             self._test_execution_service = TestExecutionService(repository_root=self.repository.root, suit_dir=self.repository.suit_dir)
@@ -236,6 +309,47 @@ class GoProvider(
 
     def _get_components(self) -> tuple[GoPackageAnalysis, ...]:
         return self._analysis().components
+
+    def _get_symbols(self, query: str, is_case_sensitive: bool = False) -> tuple[GoWorkspaceSymbol, ...]:
+        return self._build_symbol_service().get_symbols(query, is_case_sensitive=is_case_sensitive)
+
+    def _list_file_symbols(
+        self,
+        repository_rel_path: str,
+        query: str | None = None,
+        is_case_sensitive: bool = False,
+    ) -> tuple[GoWorkspaceSymbol, ...]:
+        return self._build_file_symbol_service().list_file_symbols(
+            repository_rel_path,
+            query=query,
+            is_case_sensitive=is_case_sensitive,
+        )
+
+    def _find_definition_locations(self, repository_rel_path: str, line: int, column: int) -> tuple[tuple[str, int, int, int, int], ...]:
+        return self._build_file_symbol_service().find_definition(repository_rel_path, line, column)
+
+    def _find_reference_locations(
+        self,
+        repository_rel_path: str,
+        line: int,
+        column: int,
+        include_definition: bool = False,
+    ) -> tuple[tuple[str, int, int, int, int], ...]:
+        return self._build_file_symbol_service().find_references(
+            repository_rel_path,
+            line,
+            column,
+            include_definition=include_definition,
+        )
+
+    def _find_implementation_locations(self, repository_rel_path: str, line: int, column: int) -> tuple[tuple[str, int, int, int, int], ...]:
+        return self._build_file_symbol_service().find_implementations(repository_rel_path, line, column)
+
+    def get_file_implementation_locations(self, repository_rel_path: str) -> tuple[CodeLocation, ...]:
+        return tuple(
+            self._to_code_location(item, operation="implementation")
+            for item in self._build_implementation_service().get_file_implementation_locations(repository_rel_path)
+        )
 
     def _get_actions(self) -> tuple[ProviderActionSpec, ...]:
         return self._action_service.discover(
@@ -417,6 +531,17 @@ class GoProvider(
                 ),
             ),
         )
+
+    def _to_entity_info(self, symbol: object) -> EntityInfo:
+        return self._symbol_translator.to_entity_info(symbol)
+
+    def _to_code_location(
+        self,
+        location: tuple[str, int, int, int, int],
+        *,
+        operation: str,
+    ) -> CodeLocation:
+        return self._location_translator.to_code_location(location, operation=operation)
 
     @staticmethod
     def _component_id(import_path: str) -> str:

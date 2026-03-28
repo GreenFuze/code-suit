@@ -8,6 +8,7 @@ from suitcode.core.models import EntityInfo
 from suitcode.core.provenance_builders import lsp_provenance
 from suitcode.core.provenance_builders import lsp_location_provenance
 from suitcode.providers.code_provider_base import CodeProviderBase
+from suitcode.providers.provider_metadata import ProviderAttachmentContext
 from suitcode.providers.provider_roles import ProviderRole
 from suitcode.providers.runtime_capability_models import CodeRuntimeCapabilities, RuntimeCapability, RuntimeCapabilityAvailability
 from suitcode.core.provenance import SourceKind
@@ -22,6 +23,9 @@ class _FakeRepository:
             return self._providers
         return tuple()
 
+    def get_providers_for_file_role(self, repository_rel_path: str, role: ProviderRole):
+        return self.get_providers_for_role(role)
+
 
 class _CodeProvider(CodeProviderBase):
     PROVIDER_ID = "fake-code"
@@ -33,8 +37,20 @@ class _CodeProvider(CodeProviderBase):
     def detect_roles(cls, repository_root: Path) -> frozenset[ProviderRole]:
         return frozenset({ProviderRole.CODE})
 
+    @classmethod
+    def discover_attachments(cls, repository_root: Path):
+        return tuple()
+
     def __init__(self, repository, name: str, line: int) -> None:
-        super().__init__(repository)
+        super().__init__(
+            repository,
+            ProviderAttachmentContext(
+                provider_id=self.PROVIDER_ID,
+                repository_root=Path("."),
+                attachment_root=Path("."),
+                attachment_root_rel_path="",
+            ),
+        )
         self._name = name
         self._line = line
 
@@ -98,6 +114,24 @@ class _CodeProvider(CodeProviderBase):
             ),
         )
 
+    def find_implementations(self, repository_rel_path: str, line: int, column: int):
+        return (
+            CodeLocation(
+                repository_rel_path=repository_rel_path,
+                line_start=line + 1,
+                line_end=line + 1,
+                column_start=column,
+                column_end=column,
+                provenance=(
+                    lsp_location_provenance(
+                        source_tool="typescript-language-server",
+                        repository_rel_path=repository_rel_path,
+                        operation="implementation",
+                    ),
+                ),
+            ),
+        )
+
     def get_code_runtime_capabilities(self) -> CodeRuntimeCapabilities:
         capability = RuntimeCapability(
             capability_id="fake.code",
@@ -117,7 +151,11 @@ class _CodeProvider(CodeProviderBase):
             symbols_in_file=capability,
             definitions=capability,
             references=capability,
+            implementations=capability,
         )
+
+    def get_file_implementation_locations(self, repository_rel_path: str):
+        return self.find_implementations(repository_rel_path, self._line, 1)
 
 
 def test_code_intelligence_concatenates_and_sorts_symbols() -> None:
@@ -142,4 +180,15 @@ def test_code_intelligence_resolves_symbol_id_for_definitions() -> None:
 
     assert result[0].repository_rel_path == "file.ts"
     assert result[0].line_start == 3
+    assert result[0].provenance[0].source_kind.value == "lsp"
+
+
+def test_code_intelligence_collects_file_implementation_locations() -> None:
+    repo = _FakeRepository((_CodeProvider(repository=None, name="Alpha", line=3),))  # type: ignore[arg-type]
+    intelligence = CodeIntelligence(repo)  # type: ignore[arg-type]
+
+    result = intelligence.get_file_implementation_locations("file.ts")
+
+    assert result[0].repository_rel_path == "file.ts"
+    assert result[0].line_start == 4
     assert result[0].provenance[0].source_kind.value == "lsp"

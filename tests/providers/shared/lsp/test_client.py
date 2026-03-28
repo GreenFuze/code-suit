@@ -109,17 +109,35 @@ def test_lsp_client_definition_and_references_open_and_close_file(tmp_path: Path
                 ],
             }
         )
+        + _message(
+            {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "result": [
+                    {
+                        "uri": source_file.resolve().as_uri(),
+                        "range": {
+                            "start": {"line": 0, "character": 0},
+                            "end": {"line": 0, "character": 5},
+                        },
+                    }
+                ],
+            }
+        )
     )
     client = LspClient(("fake-server",), tmp_path, process=process)
 
     client.initialize(tmp_path)
     definition = client.definition(source_file, 1, 1)
     references = client.references(source_file, 1, 1, include_declaration=True)
+    implementations = client.implementation(source_file, 1, 1)
 
     payload = process.stdin.getvalue().decode("utf-8")
     assert definition[0].uri == source_file.resolve().as_uri()
     assert len(references) == 1
-    assert payload.count('"method": "textDocument/didOpen"') == 2
-    assert payload.count('"method": "textDocument/didClose"') == 2
+    assert len(implementations) == 1
+    assert payload.count('"method": "textDocument/didOpen"') == 3
+    assert payload.count('"method": "textDocument/didClose"') == 3
     assert '"method": "textDocument/definition"' in payload
     assert '"method": "textDocument/references"' in payload
+    assert '"method": "textDocument/implementation"' in payload

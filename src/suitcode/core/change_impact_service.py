@@ -102,6 +102,8 @@ class ChangeImpactService:
         )
         dependent_components = self._dependent_components(primary_component, dependent_preview_limit)
         dependency_files, dependent_files = self._file_relationships(resolved.evidence_path)
+        implementation_locations = self._implementation_locations(resolved.evidence_path)
+        implementation_components = self._implementation_components(implementation_locations)
         related_tests = self._test_impacts(resolved.related_tests)
         if resolved.target_kind == "owner":
             related_runners = self._related_runners_for_owner(resolved.owner.id, primary_component, runner_preview_limit)
@@ -121,6 +123,8 @@ class ChangeImpactService:
             symbol_context=resolved.symbol_context,
             dependency_files=dependency_files,
             dependent_files=dependent_files,
+            implementation_locations=implementation_locations,
+            implementation_components=implementation_components,
             dependent_components=dependent_components,
             reference_locations=resolved.reference_locations,
             related_tests=related_tests,
@@ -135,6 +139,8 @@ class ChangeImpactService:
                 reference_locations=resolved.reference_locations,
                 dependency_files=dependency_files,
                 dependent_files=dependent_files,
+                implementation_locations=implementation_locations,
+                implementation_components=implementation_components,
                 dependent_components=dependent_components,
                 dependent_edges=dependent_edges,
                 related_tests=related_tests,
@@ -151,6 +157,8 @@ class ChangeImpactService:
                 symbol_context=resolved.symbol_context,
                 dependency_files=dependency_files,
                 dependent_files=dependent_files,
+                implementation_locations=implementation_locations,
+                implementation_components=implementation_components,
                 dependent_components=dependent_components,
                 reference_locations=resolved.reference_locations,
                 related_tests=related_tests,
@@ -161,6 +169,8 @@ class ChangeImpactService:
                 owner_id=resolved.owner.id,
                 dependency_files=dependency_files,
                 dependent_files=dependent_files,
+                implementation_locations=implementation_locations,
+                implementation_components=implementation_components,
                 dependent_components=dependent_components,
                 reference_locations=resolved.reference_locations,
                 related_tests=related_tests,
@@ -219,6 +229,30 @@ class ChangeImpactService:
                 relationship_kind=FileRelationshipKind.IMPORTED_BY,
             ),
         )
+
+    def _implementation_locations(self, evidence_path: str | None) -> tuple[CodeLocation, ...]:
+        if evidence_path is None:
+            return tuple()
+        return self._repository.code.get_file_implementation_locations(evidence_path)
+
+    def _implementation_components(
+        self,
+        implementation_locations: tuple[CodeLocation, ...],
+    ) -> tuple[Component, ...]:
+        components_by_id = {component.id: component for component in self._repository.arch.get_components()}
+        resolved: dict[str, Component] = {}
+        for location in implementation_locations:
+            try:
+                owner = self._repository.get_file_owner(location.repository_rel_path).owner
+            except ValueError:
+                continue
+            if owner.kind != "component":
+                continue
+            component = components_by_id.get(owner.id)
+            if component is None:
+                continue
+            resolved.setdefault(component.id, component)
+        return tuple(sorted(resolved.values(), key=lambda item: item.id))
 
     def _dependent_component_edges(
         self,
@@ -383,6 +417,8 @@ class ChangeImpactService:
         related_tests: tuple[TestImpact, ...],
         related_runners: tuple[RunnerImpact, ...],
         quality_gates: tuple[QualityGateInfo, ...],
+        implementation_locations: tuple[CodeLocation, ...],
+        implementation_components: tuple[Component, ...],
         evidence_path: str | None,
     ):
         entries = [
@@ -411,6 +447,18 @@ class ChangeImpactService:
                     source_tool=self._relationship_source_tool((*dependency_files, *dependent_files), evidence_path),
                     evidence_summary="change analysis includes deterministic file relationship evidence",
                     evidence_paths=tuple(relationship_paths[:10]),
+                )
+            )
+        if implementation_locations or implementation_components:
+            implementation_paths = [item.repository_rel_path for item in implementation_locations]
+            if evidence_path is not None and evidence_path not in implementation_paths:
+                implementation_paths.insert(0, evidence_path)
+            entries.append(
+                derived_summary_provenance(
+                    source_kind=SourceKind.LSP,
+                    source_tool="gopls",
+                    evidence_summary="change analysis includes deterministic implementation candidate evidence",
+                    evidence_paths=tuple(implementation_paths[:10]),
                 )
             )
         if reference_locations:
