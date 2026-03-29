@@ -297,11 +297,13 @@ def test_core_tools_return_structured_results(core_app, npm_repo_root) -> None:
 
     assert understanding["repository"]["provider_ids"]
     assert understanding["truth_coverage"]["domains"]
+    assert file_understanding["detail_level"] == "compact"
     assert file_understanding["target_count"] == 1
     assert file_understanding["targets"][0]["file_owner"]["owner"]["id"]
     assert isinstance(file_understanding["aggregate_related_tests"], list)
+    assert impact["detail_level"] == "compact"
     assert impact["target_count"] == 1
-    assert impact["targets"][0]["impact"]["target_kind"] == "file"
+    assert impact["targets"][0]["owner"]["id"]
     assert isinstance(minimum["tests"], list)
     assert availability["supported"] is True
     assert "test" in availability["available_action_kinds"]

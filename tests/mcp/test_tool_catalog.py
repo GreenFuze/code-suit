@@ -75,4 +75,6 @@ def test_core_tool_catalog_is_small_and_intent_shaped() -> None:
     assert by_name["understand_repository"].to_annotations().readOnlyHint is True
     assert by_name["understand_repository"].title == "Core: Understand Repository"
     assert "start here" in by_name["understand_repository"].description.lower()
+    assert "detail_level=compact" in by_name["understand_file"].description
+    assert "detail_level=compact" in by_name["what_changes_if_i_edit_this"].description
     assert "deterministic yes or no" in by_name["can_i_do_this"].description.lower()

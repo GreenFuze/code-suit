@@ -80,12 +80,12 @@ CORE_TOOL_CATALOG: tuple[ToolBinding, ...] = (
     ),
     _read_only(
         "understand_file",
-        "Start here when you need to know what owns one or more files and which related tests are closest to them by repository path. Pass `repository_rel_paths` as a list so one call can cover a whole local change set.",
+        "Start here when you need to know what owns one or more files and which related tests are closest to them by repository path. Pass `repository_rel_paths` as a list so one call can cover a whole local change set. `detail_level=compact` returns the smallest curated answer, `standard` adds limited previews, and `full` returns the current rich evidence payload.",
         title="Core: Understand File",
     ),
     _read_only(
         "what_changes_if_i_edit_this",
-        "Use this when one or more file changes may have blast radius. Pass `repository_rel_paths` as a list to return per-target results plus one deduplicated aggregate impact view.",
+        "Use this when one or more file changes may have blast radius. Pass `repository_rel_paths` as a list to return per-target results plus one deduplicated aggregate impact view. `detail_level=compact` returns the tightest impacted-surface answer, `standard` adds limited previews, and `full` returns the current rich evidence payload.",
         title="Core: What Changes If I Edit This?",
     ),
     _read_only(

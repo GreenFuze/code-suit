@@ -438,9 +438,12 @@ class ChangeImpactService:
                 )
             )
         if dependency_files or dependent_files:
-            relationship_paths = [item.repository_rel_path for item in (*dependency_files, *dependent_files)]
-            if evidence_path is not None and evidence_path not in relationship_paths:
-                relationship_paths.insert(0, evidence_path)
+            relationship_paths: list[str] = []
+            if evidence_path is not None:
+                relationship_paths.append(evidence_path)
+            for item in (*dependency_files, *dependent_files):
+                if item.repository_rel_path not in relationship_paths:
+                    relationship_paths.append(item.repository_rel_path)
             entries.append(
                 derived_summary_provenance(
                     source_kind=SourceKind.DEPENDENCY_GRAPH,
@@ -450,9 +453,12 @@ class ChangeImpactService:
                 )
             )
         if implementation_locations or implementation_components:
-            implementation_paths = [item.repository_rel_path for item in implementation_locations]
-            if evidence_path is not None and evidence_path not in implementation_paths:
-                implementation_paths.insert(0, evidence_path)
+            implementation_paths: list[str] = []
+            if evidence_path is not None:
+                implementation_paths.append(evidence_path)
+            for item in implementation_locations:
+                if item.repository_rel_path not in implementation_paths:
+                    implementation_paths.append(item.repository_rel_path)
             entries.append(
                 derived_summary_provenance(
                     source_kind=SourceKind.LSP,

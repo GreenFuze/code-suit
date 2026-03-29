@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from suitcode.core.change_models import ChangeTarget
+from suitcode.core.code.models import CodeLocation
 from suitcode.core.intelligence_models import FileRelationshipKind, FileRelationshipRef
-from suitcode.core.provenance_builders import dependency_graph_provenance
+from suitcode.core.provenance_builders import dependency_graph_provenance, lsp_location_provenance
 from suitcode.core.workspace import Workspace
 
 
@@ -225,3 +226,50 @@ def test_change_impact_routes_quality_gates_to_owning_provider_in_mixed_repo(tmp
         "test:go:example.com/mixed/server/internal/db"
     ]
     assert impact.quality_gates == tuple()
+
+
+def test_change_impact_dedupes_implementation_provenance_paths(go_repository) -> None:
+    class _FakeCode:
+        def __init__(self, wrapped) -> None:
+            self._wrapped = wrapped
+
+        def __getattr__(self, name):
+            return getattr(self._wrapped, name)
+
+        def get_file_implementation_locations(self, repository_rel_path: str):
+            provenance = (lsp_location_provenance("gopls", "cmd/app/main.go", "implementation"),)
+            return (
+                CodeLocation(
+                    repository_rel_path="cmd/app/main.go",
+                    line_start=5,
+                    line_end=5,
+                    column_start=1,
+                    column_end=10,
+                    provenance=provenance,
+                ),
+                CodeLocation(
+                    repository_rel_path="cmd/app/main.go",
+                    line_start=8,
+                    line_end=8,
+                    column_start=1,
+                    column_end=10,
+                    provenance=provenance,
+                ),
+            )
+
+    repository = go_repository
+    repository._code = _FakeCode(repository.code)
+
+    impact = repository.analyze_change(ChangeTarget(repository_rel_path="internal/service/service.go"))
+
+    implementation_provenance = [
+        item
+        for item in impact.provenance
+        if item.source_kind.value == "lsp"
+        and "implementation candidate" in item.evidence_summary
+    ]
+    assert len(implementation_provenance) == 1
+    assert implementation_provenance[0].evidence_paths == (
+        "internal/service/service.go",
+        "cmd/app/main.go",
+    )

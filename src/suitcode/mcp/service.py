@@ -22,6 +22,10 @@ from suitcode.mcp.models import (
     BuildTargetDescriptionView,
     BatchChangeImpactTargetView,
     BatchChangeImpactView,
+    BatchChangeImpactCompactTargetView,
+    BatchChangeImpactCompactView,
+    BatchChangeImpactStandardTargetView,
+    BatchChangeImpactStandardView,
     BatchMinimumVerifiedChangeSetTargetView,
     BatchMinimumVerifiedChangeSetView,
     ChangeImpactView,
@@ -37,6 +41,10 @@ from suitcode.mcp.models import (
     FileOwnerView,
     FileUnderstandingTargetView,
     FileUnderstandingView,
+    FileUnderstandingCompactTargetView,
+    FileUnderstandingCompactView,
+    FileUnderstandingStandardTargetView,
+    FileUnderstandingStandardView,
     FileView,
     ImpactSummaryView,
     InefficientToolCallView,
@@ -207,16 +215,27 @@ class SuitMcpService:
         repository_path: str,
         repository_rel_paths: tuple[str, ...],
         related_test_limit: int = 10,
-    ) -> FileUnderstandingView:
+        detail_level: str = "compact",
+    ) -> FileUnderstandingCompactView | FileUnderstandingStandardView | FileUnderstandingView:
         validate_preview_limit(related_test_limit, "related_test_limit", max_value=25, error_cls=McpValidationError)
+        validated_detail_level = self._validate_detail_level(detail_level)
 
-        def _callback(repository: Repository) -> FileUnderstandingView:
+        def _callback(repository: Repository) -> FileUnderstandingCompactView | FileUnderstandingStandardView | FileUnderstandingView:
             normalized_paths = self._validate_repository_rel_paths(repository_rel_paths, field_name="repository_rel_paths")
             targets = tuple(
-                self._understand_file_target(repository, repository_rel_path, related_test_limit=related_test_limit)
+                self._understand_file_target(
+                    repository,
+                    repository_rel_path,
+                    related_test_limit=self._detail_preview_limit(validated_detail_level, related_test_limit),
+                )
                 for repository_rel_path in normalized_paths
             )
+            if validated_detail_level == "compact":
+                return self._compact_file_understanding_view(targets)
+            if validated_detail_level == "standard":
+                return self._standard_file_understanding_view(targets)
             return FileUnderstandingView(
+                detail_level="full",
                 target_count=len(targets),
                 targets=targets,
                 owner_ids=tuple(sorted({item.file_owner.owner.id for item in targets})),
@@ -311,23 +330,25 @@ class SuitMcpService:
         dependent_preview_limit: int = 50,
         test_preview_limit: int = 25,
         runner_preview_limit: int = 25,
-    ) -> BatchChangeImpactView:
+        detail_level: str = "compact",
+    ) -> BatchChangeImpactCompactView | BatchChangeImpactStandardView | BatchChangeImpactView:
         validate_change_preview_limit(reference_preview_limit, "reference_preview_limit", error_cls=McpValidationError)
         validate_change_preview_limit(dependent_preview_limit, "dependent_preview_limit", error_cls=McpValidationError)
         validate_change_preview_limit(test_preview_limit, "test_preview_limit", error_cls=McpValidationError)
         validate_change_preview_limit(runner_preview_limit, "runner_preview_limit", error_cls=McpValidationError)
+        validated_detail_level = self._validate_detail_level(detail_level)
 
-        def _callback(repository: Repository) -> BatchChangeImpactView:
+        def _callback(repository: Repository) -> BatchChangeImpactCompactView | BatchChangeImpactStandardView | BatchChangeImpactView:
             normalized_paths = self._validate_repository_rel_paths(repository_rel_paths, field_name="repository_rel_paths")
             targets: list[BatchChangeImpactTargetView] = []
             for repository_rel_path in normalized_paths:
                 try:
                     impact = repository.analyze_change(
                         ChangeTarget(repository_rel_path=repository_rel_path),
-                        reference_preview_limit=reference_preview_limit,
-                        dependent_preview_limit=dependent_preview_limit,
-                        test_preview_limit=test_preview_limit,
-                        runner_preview_limit=runner_preview_limit,
+                        reference_preview_limit=self._detail_preview_limit(validated_detail_level, reference_preview_limit),
+                        dependent_preview_limit=self._detail_preview_limit(validated_detail_level, dependent_preview_limit),
+                        test_preview_limit=self._detail_preview_limit(validated_detail_level, test_preview_limit),
+                        runner_preview_limit=self._detail_preview_limit(validated_detail_level, runner_preview_limit),
                     )
                 except ValueError as exc:
                     raise McpValidationError(str(exc)) from exc
@@ -338,7 +359,12 @@ class SuitMcpService:
                     )
                 )
             frozen_targets = tuple(targets)
+            if validated_detail_level == "compact":
+                return self._compact_change_impact_view(frozen_targets)
+            if validated_detail_level == "standard":
+                return self._standard_change_impact_view(frozen_targets)
             return BatchChangeImpactView(
+                detail_level="full",
                 target_count=len(frozen_targets),
                 targets=frozen_targets,
                 owner_ids=tuple(sorted({item.impact.owner.id for item in frozen_targets})),
@@ -1146,6 +1172,7 @@ class SuitMcpService:
                 self._explain_unowned_file_error(repository, repository_rel_path, str(exc), tool_name="understand_file")
             ) from exc
         return FileUnderstandingTargetView(
+            detail_level="full",
             repository_rel_path=repository_rel_path,
             file_owner=owner,
             dependency_file_count=context.dependency_file_count,
@@ -1164,6 +1191,238 @@ class SuitMcpService:
                 *(item.provenance for item in related_tests),
                 structured_artifact_view.provenance if structured_artifact_view is not None else tuple(),
             ),
+        )
+
+    @staticmethod
+    def _validate_detail_level(detail_level: str) -> str:
+        normalized = detail_level.strip().lower()
+        if normalized not in {"compact", "standard", "full"}:
+            raise McpValidationError("detail_level must be one of: compact, standard, full")
+        return normalized
+
+    @staticmethod
+    def _detail_preview_limit(detail_level: str, requested_limit: int) -> int:
+        if detail_level == "compact":
+            return min(requested_limit, 3)
+        if detail_level == "standard":
+            return min(requested_limit, 10)
+        return requested_limit
+
+    def _compact_file_understanding_view(
+        self,
+        targets: tuple[FileUnderstandingTargetView, ...],
+    ) -> FileUnderstandingCompactView:
+        compact_targets = tuple(
+            FileUnderstandingCompactTargetView(
+                detail_level="compact",
+                repository_rel_path=target.repository_rel_path,
+                file_owner=target.file_owner,
+                dependency_file_count=target.dependency_file_count,
+                dependency_files_preview=target.dependency_files_preview[:3],
+                dependent_file_count=target.dependent_file_count,
+                dependent_files_preview=target.dependent_files_preview[:3],
+                related_test_count=len(target.related_tests),
+                related_tests=target.related_tests[:3],
+                structured_artifact=target.structured_artifact,
+            )
+            for target in targets
+        )
+        return FileUnderstandingCompactView(
+            detail_level="compact",
+            target_count=len(compact_targets),
+            targets=compact_targets,
+            owner_ids=tuple(sorted({item.file_owner.owner.id for item in compact_targets})),
+            aggregate_dependency_file_count=len({item.path for target in compact_targets for item in target.dependency_files_preview}),
+            aggregate_dependency_files_preview=self._dedupe_views(
+                tuple(item for target in compact_targets for item in target.dependency_files_preview),
+                key=lambda item: item.path,
+            )[:3],
+            aggregate_dependent_file_count=len({item.path for target in compact_targets for item in target.dependent_files_preview}),
+            aggregate_dependent_files_preview=self._dedupe_views(
+                tuple(item for target in compact_targets for item in target.dependent_files_preview),
+                key=lambda item: item.path,
+            )[:3],
+            aggregate_related_tests=self._dedupe_views(
+                tuple(item for target in compact_targets for item in target.related_tests),
+                key=lambda item: item.id,
+            )[:3],
+            suggested_follow_ups=(
+                tuple()
+                if compact_targets and all(target.structured_artifact is not None for target in compact_targets)
+                else (
+                    "what_changes_if_i_edit_this",
+                    "what_should_i_run",
+                    "can_i_do_this",
+                )
+            ),
+        )
+
+    def _standard_file_understanding_view(
+        self,
+        targets: tuple[FileUnderstandingTargetView, ...],
+    ) -> FileUnderstandingStandardView:
+        standard_targets = tuple(
+            FileUnderstandingStandardTargetView(
+                detail_level="standard",
+                repository_rel_path=target.repository_rel_path,
+                file_owner=target.file_owner,
+                dependency_file_count=target.dependency_file_count,
+                dependency_files_preview=target.dependency_files_preview[:10],
+                dependent_file_count=target.dependent_file_count,
+                dependent_files_preview=target.dependent_files_preview[:10],
+                implementation_location_count=target.implementation_location_count,
+                implementation_locations_preview=target.implementation_locations_preview[:10],
+                related_test_count=len(target.related_tests),
+                related_tests=target.related_tests[:10],
+                structured_artifact=target.structured_artifact,
+            )
+            for target in targets
+        )
+        return FileUnderstandingStandardView(
+            detail_level="standard",
+            target_count=len(standard_targets),
+            targets=standard_targets,
+            owner_ids=tuple(sorted({item.file_owner.owner.id for item in standard_targets})),
+            aggregate_dependency_file_count=len({item.path for target in standard_targets for item in target.dependency_files_preview}),
+            aggregate_dependency_files_preview=self._dedupe_views(
+                tuple(item for target in standard_targets for item in target.dependency_files_preview),
+                key=lambda item: item.path,
+            )[:10],
+            aggregate_dependent_file_count=len({item.path for target in standard_targets for item in target.dependent_files_preview}),
+            aggregate_dependent_files_preview=self._dedupe_views(
+                tuple(item for target in standard_targets for item in target.dependent_files_preview),
+                key=lambda item: item.path,
+            )[:10],
+            aggregate_implementation_location_count=len(
+                {
+                    (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id)
+                    for target in standard_targets
+                    for item in target.implementation_locations_preview
+                }
+            ),
+            aggregate_implementation_locations_preview=self._dedupe_views(
+                tuple(item for target in standard_targets for item in target.implementation_locations_preview),
+                key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+            )[:10],
+            aggregate_related_tests=self._dedupe_views(
+                tuple(item for target in standard_targets for item in target.related_tests),
+                key=lambda item: item.id,
+            )[:10],
+            suggested_follow_ups=(
+                tuple()
+                if standard_targets and all(target.structured_artifact is not None for target in standard_targets)
+                else (
+                    "what_changes_if_i_edit_this",
+                    "what_should_i_run",
+                    "can_i_do_this",
+                )
+            ),
+        )
+
+    def _compact_change_impact_view(
+        self,
+        targets: tuple[BatchChangeImpactTargetView, ...],
+    ) -> BatchChangeImpactCompactView:
+        compact_targets = tuple(
+            BatchChangeImpactCompactTargetView(
+                detail_level="compact",
+                repository_rel_path=target.repository_rel_path,
+                owner=target.impact.owner,
+                primary_component=target.impact.primary_component,
+                dependent_files=target.impact.dependent_files[:3],
+                dependent_components=target.impact.dependent_components[:3],
+                related_tests=target.impact.related_tests[:3],
+                related_runners=target.impact.related_runners[:3],
+                quality_gates=target.impact.quality_gates[:3],
+            )
+            for target in targets
+        )
+        return BatchChangeImpactCompactView(
+            detail_level="compact",
+            target_count=len(compact_targets),
+            targets=compact_targets,
+            owner_ids=tuple(sorted({item.owner.id for item in compact_targets})),
+            dependent_files=self._dedupe_views(
+                tuple(item for target in compact_targets for item in target.dependent_files),
+                key=lambda item: item.path,
+            )[:3],
+            dependent_components=self._dedupe_views(
+                tuple(item for target in compact_targets for item in target.dependent_components),
+                key=lambda item: item.id,
+            )[:3],
+            related_tests=self._dedupe_views(
+                tuple(item for target in compact_targets for item in target.related_tests),
+                key=lambda item: item.test.id,
+            )[:3],
+            related_runners=self._dedupe_views(
+                tuple(item for target in compact_targets for item in target.related_runners),
+                key=lambda item: item.runner.id,
+            )[:3],
+            quality_gates=self._dedupe_views(
+                tuple(item for target in compact_targets for item in target.quality_gates),
+                key=lambda item: (item.provider_id, item.reason, item.applies),
+            )[:3],
+        )
+
+    def _standard_change_impact_view(
+        self,
+        targets: tuple[BatchChangeImpactTargetView, ...],
+    ) -> BatchChangeImpactStandardView:
+        standard_targets = tuple(
+            BatchChangeImpactStandardTargetView(
+                detail_level="standard",
+                repository_rel_path=target.repository_rel_path,
+                owner=target.impact.owner,
+                primary_component=target.impact.primary_component,
+                dependency_files=target.impact.dependency_files[:10],
+                dependent_files=target.impact.dependent_files[:10],
+                implementation_locations=target.impact.implementation_locations[:10],
+                implementation_components=target.impact.implementation_components[:10],
+                dependent_components=target.impact.dependent_components[:10],
+                reference_locations=target.impact.reference_locations[:10],
+                related_tests=target.impact.related_tests[:10],
+                related_runners=target.impact.related_runners[:10],
+                quality_gates=target.impact.quality_gates[:10],
+            )
+            for target in targets
+        )
+        return BatchChangeImpactStandardView(
+            detail_level="standard",
+            target_count=len(standard_targets),
+            targets=standard_targets,
+            owner_ids=tuple(sorted({item.owner.id for item in standard_targets})),
+            dependent_files=self._dedupe_views(
+                tuple(item for target in standard_targets for item in target.dependent_files),
+                key=lambda item: item.path,
+            )[:10],
+            implementation_locations=self._dedupe_views(
+                tuple(item for target in standard_targets for item in target.implementation_locations),
+                key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+            )[:10],
+            implementation_components=self._dedupe_views(
+                tuple(item for target in standard_targets for item in target.implementation_components),
+                key=lambda item: item.id,
+            )[:10],
+            dependent_components=self._dedupe_views(
+                tuple(item for target in standard_targets for item in target.dependent_components),
+                key=lambda item: item.id,
+            )[:10],
+            reference_locations=self._dedupe_views(
+                tuple(item for target in standard_targets for item in target.reference_locations),
+                key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+            )[:10],
+            related_tests=self._dedupe_views(
+                tuple(item for target in standard_targets for item in target.related_tests),
+                key=lambda item: item.test.id,
+            )[:10],
+            related_runners=self._dedupe_views(
+                tuple(item for target in standard_targets for item in target.related_runners),
+                key=lambda item: item.runner.id,
+            )[:10],
+            quality_gates=self._dedupe_views(
+                tuple(item for target in standard_targets for item in target.quality_gates),
+                key=lambda item: (item.provider_id, item.reason, item.applies),
+            )[:10],
         )
 
     @staticmethod

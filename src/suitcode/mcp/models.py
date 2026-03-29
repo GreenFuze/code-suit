@@ -782,6 +782,7 @@ class RepositorySummaryView(StrictModel):
 
 
 class FileUnderstandingTargetView(StrictModel):
+    detail_level: str
     repository_rel_path: str
     file_owner: FileOwnerView
     dependency_file_count: int
@@ -796,6 +797,7 @@ class FileUnderstandingTargetView(StrictModel):
 
 
 class FileUnderstandingView(StrictModel):
+    detail_level: str
     target_count: int
     targets: tuple[FileUnderstandingTargetView, ...]
     owner_ids: tuple[str, ...]
@@ -810,12 +812,69 @@ class FileUnderstandingView(StrictModel):
     provenance: tuple[ProvenanceView, ...]
 
 
+class FileUnderstandingCompactTargetView(StrictModel):
+    detail_level: str
+    repository_rel_path: str
+    file_owner: FileOwnerView
+    dependency_file_count: int
+    dependency_files_preview: tuple[FileRelationshipView, ...]
+    dependent_file_count: int
+    dependent_files_preview: tuple[FileRelationshipView, ...]
+    related_test_count: int
+    related_tests: tuple[RelatedTestView, ...]
+    structured_artifact: StructuredArtifactView | None = None
+
+
+class FileUnderstandingCompactView(StrictModel):
+    detail_level: str
+    target_count: int
+    targets: tuple[FileUnderstandingCompactTargetView, ...]
+    owner_ids: tuple[str, ...]
+    aggregate_dependency_file_count: int
+    aggregate_dependency_files_preview: tuple[FileRelationshipView, ...]
+    aggregate_dependent_file_count: int
+    aggregate_dependent_files_preview: tuple[FileRelationshipView, ...]
+    aggregate_related_tests: tuple[RelatedTestView, ...]
+    suggested_follow_ups: tuple[str, ...]
+
+
+class FileUnderstandingStandardTargetView(StrictModel):
+    detail_level: str
+    repository_rel_path: str
+    file_owner: FileOwnerView
+    dependency_file_count: int
+    dependency_files_preview: tuple[FileRelationshipView, ...]
+    dependent_file_count: int
+    dependent_files_preview: tuple[FileRelationshipView, ...]
+    implementation_location_count: int
+    implementation_locations_preview: tuple[LocationView, ...]
+    related_test_count: int
+    related_tests: tuple[RelatedTestView, ...]
+    structured_artifact: StructuredArtifactView | None = None
+
+
+class FileUnderstandingStandardView(StrictModel):
+    detail_level: str
+    target_count: int
+    targets: tuple[FileUnderstandingStandardTargetView, ...]
+    owner_ids: tuple[str, ...]
+    aggregate_dependency_file_count: int
+    aggregate_dependency_files_preview: tuple[FileRelationshipView, ...]
+    aggregate_dependent_file_count: int
+    aggregate_dependent_files_preview: tuple[FileRelationshipView, ...]
+    aggregate_implementation_location_count: int
+    aggregate_implementation_locations_preview: tuple[LocationView, ...]
+    aggregate_related_tests: tuple[RelatedTestView, ...]
+    suggested_follow_ups: tuple[str, ...]
+
+
 class BatchChangeImpactTargetView(StrictModel):
     repository_rel_path: str
     impact: ChangeImpactView
 
 
 class BatchChangeImpactView(StrictModel):
+    detail_level: str
     target_count: int
     targets: tuple[BatchChangeImpactTargetView, ...]
     owner_ids: tuple[str, ...]
@@ -828,6 +887,61 @@ class BatchChangeImpactView(StrictModel):
     related_runners: tuple[RunnerImpactView, ...]
     quality_gates: tuple[QualityGateView, ...]
     provenance: tuple[ProvenanceView, ...]
+
+
+class BatchChangeImpactCompactTargetView(StrictModel):
+    detail_level: str
+    repository_rel_path: str
+    owner: OwnerView
+    primary_component: ComponentView | None = None
+    dependent_files: tuple[FileRelationshipView, ...]
+    dependent_components: tuple[ComponentView, ...]
+    related_tests: tuple[TestImpactView, ...]
+    related_runners: tuple[RunnerImpactView, ...]
+    quality_gates: tuple[QualityGateView, ...]
+
+
+class BatchChangeImpactCompactView(StrictModel):
+    detail_level: str
+    target_count: int
+    targets: tuple[BatchChangeImpactCompactTargetView, ...]
+    owner_ids: tuple[str, ...]
+    dependent_files: tuple[FileRelationshipView, ...]
+    dependent_components: tuple[ComponentView, ...]
+    related_tests: tuple[TestImpactView, ...]
+    related_runners: tuple[RunnerImpactView, ...]
+    quality_gates: tuple[QualityGateView, ...]
+
+
+class BatchChangeImpactStandardTargetView(StrictModel):
+    detail_level: str
+    repository_rel_path: str
+    owner: OwnerView
+    primary_component: ComponentView | None = None
+    dependency_files: tuple[FileRelationshipView, ...]
+    dependent_files: tuple[FileRelationshipView, ...]
+    implementation_locations: tuple[LocationView, ...]
+    implementation_components: tuple[ComponentView, ...]
+    dependent_components: tuple[ComponentView, ...]
+    reference_locations: tuple[LocationView, ...]
+    related_tests: tuple[TestImpactView, ...]
+    related_runners: tuple[RunnerImpactView, ...]
+    quality_gates: tuple[QualityGateView, ...]
+
+
+class BatchChangeImpactStandardView(StrictModel):
+    detail_level: str
+    target_count: int
+    targets: tuple[BatchChangeImpactStandardTargetView, ...]
+    owner_ids: tuple[str, ...]
+    dependent_files: tuple[FileRelationshipView, ...]
+    implementation_locations: tuple[LocationView, ...]
+    implementation_components: tuple[ComponentView, ...]
+    dependent_components: tuple[ComponentView, ...]
+    reference_locations: tuple[LocationView, ...]
+    related_tests: tuple[TestImpactView, ...]
+    related_runners: tuple[RunnerImpactView, ...]
+    quality_gates: tuple[QualityGateView, ...]
 
 
 class BatchMinimumVerifiedChangeSetTargetView(StrictModel):

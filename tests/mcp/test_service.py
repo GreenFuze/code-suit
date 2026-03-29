@@ -37,10 +37,12 @@ def test_service_core_tools_reuse_existing_repository_intelligence(service: Suit
         str(npm_repo_root),
         ("packages/core/src/index.ts",),
         related_test_limit=5,
+        detail_level="full",
     )
     impact = service.what_changes_if_i_edit_this(
         str(npm_repo_root),
         ("packages/core/src/index.ts",),
+        detail_level="full",
     )
     minimum = service.what_should_i_run(
         str(npm_repo_root),
@@ -68,6 +70,78 @@ def test_service_core_tools_reuse_existing_repository_intelligence(service: Suit
     assert availability.supported is True
     assert "test" in availability.available_action_kinds
     assert availability.provenance
+
+
+def test_service_core_tools_default_to_compact_detail_level(service: SuitMcpService, npm_repo_root: Path) -> None:
+    file_understanding = service.understand_file(
+        str(npm_repo_root),
+        ("packages/core/src/index.ts",),
+        related_test_limit=5,
+    )
+    impact = service.what_changes_if_i_edit_this(
+        str(npm_repo_root),
+        ("packages/core/src/index.ts",),
+    )
+
+    assert file_understanding.detail_level == "compact"
+    assert not hasattr(file_understanding, "provenance")
+    assert impact.detail_level == "compact"
+    assert not hasattr(impact, "provenance")
+
+
+def test_core_tools_reject_invalid_detail_level(service: SuitMcpService, npm_repo_root: Path) -> None:
+    with pytest.raises(McpValidationError, match="detail_level must be one of"):
+        service.understand_file(
+            str(npm_repo_root),
+            ("packages/core/src/index.ts",),
+            detail_level="verbose",
+        )
+
+    with pytest.raises(McpValidationError, match="detail_level must be one of"):
+        service.what_changes_if_i_edit_this(
+            str(npm_repo_root),
+            ("packages/core/src/index.ts",),
+            detail_level="verbose",
+        )
+
+
+def test_compact_detail_levels_materially_reduce_payload_size(service: SuitMcpService, npm_repo_root: Path) -> None:
+    compact_file = service.understand_file(
+        str(npm_repo_root),
+        ("packages/core/src/index.ts",),
+        related_test_limit=5,
+        detail_level="compact",
+    )
+    standard_file = service.understand_file(
+        str(npm_repo_root),
+        ("packages/core/src/index.ts",),
+        related_test_limit=5,
+        detail_level="standard",
+    )
+    full_file = service.understand_file(
+        str(npm_repo_root),
+        ("packages/core/src/index.ts",),
+        related_test_limit=5,
+        detail_level="full",
+    )
+    compact_impact = service.what_changes_if_i_edit_this(
+        str(npm_repo_root),
+        ("packages/core/src/index.ts",),
+        detail_level="compact",
+    )
+    standard_impact = service.what_changes_if_i_edit_this(
+        str(npm_repo_root),
+        ("packages/core/src/index.ts",),
+        detail_level="standard",
+    )
+    full_impact = service.what_changes_if_i_edit_this(
+        str(npm_repo_root),
+        ("packages/core/src/index.ts",),
+        detail_level="full",
+    )
+
+    assert len(compact_file.model_dump_json()) < len(standard_file.model_dump_json()) < len(full_file.model_dump_json())
+    assert len(compact_impact.model_dump_json()) < len(standard_impact.model_dump_json()) < len(full_impact.model_dump_json())
 
 
 def test_read_only_by_path_tools_match_workspace_tools_without_registry_mutation(service: SuitMcpService, npm_repo_root: Path) -> None:

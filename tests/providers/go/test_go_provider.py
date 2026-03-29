@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import shutil
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,6 +12,7 @@ from suitcode.core.intelligence_models import FileRelationshipKind
 from suitcode.core.repository import Repository
 from suitcode.core.tests.models import RelatedTestTarget
 from suitcode.core.workspace import Workspace
+from suitcode.providers.go.implementation_service import GoImplementationAnchor, GoImplementationService
 from suitcode.providers.provider_roles import ProviderRole
 
 
@@ -125,6 +128,62 @@ def test_go_provider_exposes_interface_implementation_candidates(tmp_path: Path)
     locations = repository.code.get_file_implementation_locations("internal/service/service.go")
 
     assert any(item.repository_rel_path == "internal/impl/greeter.go" for item in locations)
+
+
+def test_go_implementation_service_reuses_one_lsp_session_per_file() -> None:
+    class _FakeSession:
+        def __init__(self) -> None:
+            self.definition_calls = 0
+            self.implementation_calls = 0
+
+        def find_definition(self, repository_rel_path: str, line: int, column: int):
+            self.definition_calls += 1
+            return (("internal/contracts/contracts.go", 1, 3, 1, 10),)
+
+        def list_file_symbols(self, repository_rel_path: str):
+            return (
+                SimpleNamespace(
+                    line_start=1,
+                    line_end=3,
+                    column_start=1,
+                    column_end=10,
+                    kind="interface",
+                ),
+            )
+
+        def find_implementations(self, repository_rel_path: str, line: int, column: int):
+            self.implementation_calls += 1
+            return (("internal/impl/greeter.go", 5, 5, 1, 20),)
+
+    class _FakeSymbolService:
+        def __init__(self) -> None:
+            self.open_session_calls = 0
+            self.session = _FakeSession()
+
+        @contextmanager
+        def open_session(self):
+            self.open_session_calls += 1
+            yield self.session
+
+    service = GoImplementationService(
+        repository_root=Path(r"C:\repo"),
+        attachment_root=Path(r"C:\repo"),
+        attachment_root_rel_path="",
+        symbol_service=_FakeSymbolService(),
+    )
+    service._anchors_cache["internal/service/service.go"] = (
+        GoImplementationAnchor("internal/service/service.go", 10, 5, "type_usage"),
+        GoImplementationAnchor("internal/service/service.go", 15, 5, "type_usage"),
+    )
+
+    locations = service.get_file_implementation_locations("internal/service/service.go")
+    second_locations = service.get_file_implementation_locations("internal/service/service.go")
+
+    assert locations == (("internal/impl/greeter.go", 5, 5, 1, 20),)
+    assert second_locations == locations
+    assert service._symbol_service.open_session_calls == 1
+    assert service._symbol_service.session.definition_calls == 2
+    assert service._symbol_service.session.implementation_calls == 2
 
 
 def test_mixed_npm_and_single_go_module_root_is_supported(tmp_path: Path, npm_fixture_root: Path) -> None:

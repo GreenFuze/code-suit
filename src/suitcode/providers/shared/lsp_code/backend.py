@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -58,11 +59,16 @@ class LspCodeBackend:
         )
         self._session_manager = session_manager or PerCallLspSessionManager()
 
-    def get_symbols(self, query: str, is_case_sensitive: bool = False) -> tuple[LspRepositorySymbol, ...]:
-        normalized_query = self._validate_query(query)
+    @contextmanager
+    def open_session(self) -> Iterator[LspClient]:
         self._ensure_ready()
         with self._session_manager.open_client(self._repository_root, self._resolver, self._client_factory) as client:
             client.initialize(self._repository_root)
+            yield client
+
+    def get_symbols(self, query: str, is_case_sensitive: bool = False) -> tuple[LspRepositorySymbol, ...]:
+        normalized_query = self._validate_query(query)
+        with self.open_session() as client:
             raw = client.workspace_symbol(self._workspace_query(normalized_query))
             translated = tuple(
                 item
@@ -104,9 +110,7 @@ class LspCodeBackend:
         file_path = self._validate_repository_file(repository_rel_path)
         if not self._is_supported_symbol_file(file_path):
             return tuple()
-        self._ensure_ready()
-        with self._session_manager.open_client(self._repository_root, self._resolver, self._client_factory) as client:
-            client.initialize(self._repository_root)
+        with self.open_session() as client:
             raw = client.document_symbol(file_path)
         flattened = self._flatten_symbols(raw, file_path.relative_to(self._repository_root).as_posix(), None)
         if query is not None:
@@ -129,9 +133,7 @@ class LspCodeBackend:
         file_path = self._validate_repository_file(repository_rel_path)
         if not self._is_supported_symbol_file(file_path):
             return tuple()
-        self._ensure_ready()
-        with self._session_manager.open_client(self._repository_root, self._resolver, self._client_factory) as client:
-            client.initialize(self._repository_root)
+        with self.open_session() as client:
             try:
                 locations = client.definition(file_path, line, column)
             except LspProtocolError:
@@ -149,9 +151,7 @@ class LspCodeBackend:
         file_path = self._validate_repository_file(repository_rel_path)
         if not self._is_supported_symbol_file(file_path):
             return tuple()
-        self._ensure_ready()
-        with self._session_manager.open_client(self._repository_root, self._resolver, self._client_factory) as client:
-            client.initialize(self._repository_root)
+        with self.open_session() as client:
             try:
                 locations = client.references(file_path, line, column, include_declaration=include_definition)
             except LspProtocolError:
@@ -168,13 +168,72 @@ class LspCodeBackend:
         file_path = self._validate_repository_file(repository_rel_path)
         if not self._is_supported_symbol_file(file_path):
             return tuple()
-        self._ensure_ready()
-        with self._session_manager.open_client(self._repository_root, self._resolver, self._client_factory) as client:
-            client.initialize(self._repository_root)
+        with self.open_session() as client:
             try:
                 locations = client.implementation(file_path, line, column)
             except LspProtocolError:
                 return tuple()
+        return self._translate_locations(locations)
+
+    def list_file_symbols_with_client(
+        self,
+        client: LspClient,
+        repository_rel_path: str,
+        query: str | None = None,
+        is_case_sensitive: bool = False,
+    ) -> tuple[LspRepositorySymbol, ...]:
+        file_path = self._validate_repository_file(repository_rel_path)
+        if not self._is_supported_symbol_file(file_path):
+            return tuple()
+        raw = client.document_symbol(file_path)
+        flattened = self._flatten_symbols(raw, file_path.relative_to(self._repository_root).as_posix(), None)
+        if query is not None:
+            normalized_query = self._validate_query(query)
+            flattened = self._filter_symbols(flattened, normalized_query, is_case_sensitive)
+        return tuple(
+            sorted(
+                flattened,
+                key=lambda item: (
+                    item.name,
+                    item.kind,
+                    item.line_start or 0,
+                    item.column_start or 0,
+                ),
+            )
+        )
+
+    def find_definition_with_client(
+        self,
+        client: LspClient,
+        repository_rel_path: str,
+        line: int,
+        column: int,
+    ) -> tuple[tuple[str, int, int, int, int], ...]:
+        self._validate_position(line, column)
+        file_path = self._validate_repository_file(repository_rel_path)
+        if not self._is_supported_symbol_file(file_path):
+            return tuple()
+        try:
+            locations = client.definition(file_path, line, column)
+        except LspProtocolError:
+            return tuple()
+        return self._translate_locations(locations)
+
+    def find_implementations_with_client(
+        self,
+        client: LspClient,
+        repository_rel_path: str,
+        line: int,
+        column: int,
+    ) -> tuple[tuple[str, int, int, int, int], ...]:
+        self._validate_position(line, column)
+        file_path = self._validate_repository_file(repository_rel_path)
+        if not self._is_supported_symbol_file(file_path):
+            return tuple()
+        try:
+            locations = client.implementation(file_path, line, column)
+        except LspProtocolError:
+            return tuple()
         return self._translate_locations(locations)
 
     def _validate_query(self, query: str) -> str:

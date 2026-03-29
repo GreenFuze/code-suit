@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -144,6 +145,58 @@ class _GoSymbolServiceBase:
         if not normalized:
             return self._attachment_root_rel_path
         return f"{self._attachment_root_rel_path}/{normalized}"
+
+    @contextmanager
+    def open_session(self):
+        with self._backend.open_session() as client:
+            yield _GoSymbolSession(self, client)
+
+
+class _GoSymbolSession:
+    def __init__(self, service: _GoSymbolServiceBase, client: LspClient) -> None:
+        self._service = service
+        self._client = client
+
+    def list_file_symbols(
+        self,
+        repository_rel_path: str,
+        query: str | None = None,
+        is_case_sensitive: bool = False,
+    ) -> tuple[GoWorkspaceSymbol, ...]:
+        return tuple(
+            self._service._to_go_symbol(item)
+            for item in self._service._backend.list_file_symbols_with_client(
+                self._client,
+                self._service._to_attachment_rel_path(repository_rel_path),
+                query=query,
+                is_case_sensitive=is_case_sensitive,
+            )
+        )
+
+    def find_definition(self, repository_rel_path: str, line: int, column: int) -> tuple[tuple[str, int, int, int, int], ...]:
+        return self._service._rebase_locations(
+            self._service._backend.find_definition_with_client(
+                self._client,
+                self._service._to_attachment_rel_path(repository_rel_path),
+                line,
+                column,
+            )
+        )
+
+    def find_implementations(
+        self,
+        repository_rel_path: str,
+        line: int,
+        column: int,
+    ) -> tuple[tuple[str, int, int, int, int], ...]:
+        return self._service._rebase_locations(
+            self._service._backend.find_implementations_with_client(
+                self._client,
+                self._service._to_attachment_rel_path(repository_rel_path),
+                line,
+                column,
+            )
+        )
 
 
 class GoSymbolService(_GoSymbolServiceBase):

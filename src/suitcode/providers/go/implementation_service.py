@@ -32,33 +32,42 @@ class GoImplementationService:
         self._symbol_service = symbol_service
         self._anchors_cache: dict[str, tuple[GoImplementationAnchor, ...]] = {}
         self._definition_symbol_cache: dict[str, tuple[object, ...]] = {}
+        self._locations_cache: dict[str, tuple[tuple[str, int, int, int, int], ...]] = {}
         self._lock = Lock()
 
     def get_file_implementation_locations(self, repository_rel_path: str) -> tuple[tuple[str, int, int, int, int], ...]:
+        with self._lock:
+            cached = self._locations_cache.get(repository_rel_path)
+            if cached is not None:
+                return cached
         anchors = self._anchors_for_file(repository_rel_path)
         locations: dict[tuple[str, int, int, int, int], tuple[str, int, int, int, int]] = {}
-        for anchor in anchors:
-            if anchor.kind != "interface_declaration" and not self._anchor_targets_interface(anchor):
-                continue
-            for location in self._symbol_service.find_implementations(
-                anchor.repository_rel_path,
-                anchor.line,
-                anchor.column,
-            ):
-                locations.setdefault(location, location)
-        return tuple(sorted(locations.values(), key=lambda item: (item[0], item[1], item[3], item[2], item[4])))
+        with self._symbol_service.open_session() as session:
+            for anchor in anchors:
+                if anchor.kind != "interface_declaration" and not self._anchor_targets_interface(anchor, session=session):
+                    continue
+                for location in session.find_implementations(
+                    anchor.repository_rel_path,
+                    anchor.line,
+                    anchor.column,
+                ):
+                    locations.setdefault(location, location)
+        result = tuple(sorted(locations.values(), key=lambda item: (item[0], item[1], item[3], item[2], item[4])))
+        with self._lock:
+            self._locations_cache[repository_rel_path] = result
+        return result
 
-    def _anchor_targets_interface(self, anchor: GoImplementationAnchor) -> bool:
-        definitions = self._symbol_service.find_definition(anchor.repository_rel_path, anchor.line, anchor.column)
+    def _anchor_targets_interface(self, anchor: GoImplementationAnchor, *, session) -> bool:
+        definitions = session.find_definition(anchor.repository_rel_path, anchor.line, anchor.column)
         if not definitions:
             return False
         for definition in definitions:
-            if self._definition_kind(definition[0], definition[1], definition[3]) == "interface":
+            if self._definition_kind(definition[0], definition[1], definition[3], session=session) == "interface":
                 return True
         return False
 
-    def _definition_kind(self, repository_rel_path: str, line: int, column: int) -> str | None:
-        symbols = self._symbols_for_definition_file(repository_rel_path)
+    def _definition_kind(self, repository_rel_path: str, line: int, column: int, *, session) -> str | None:
+        symbols = self._symbols_for_definition_file(repository_rel_path, session=session)
         candidates = [
             symbol
             for symbol in symbols
@@ -93,12 +102,12 @@ class GoImplementationService:
             return False
         return True
 
-    def _symbols_for_definition_file(self, repository_rel_path: str) -> tuple[object, ...]:
+    def _symbols_for_definition_file(self, repository_rel_path: str, *, session) -> tuple[object, ...]:
         with self._lock:
             cached = self._definition_symbol_cache.get(repository_rel_path)
             if cached is not None:
                 return cached
-        symbols = self._symbol_service.list_file_symbols(repository_rel_path)
+        symbols = session.list_file_symbols(repository_rel_path)
         with self._lock:
             self._definition_symbol_cache[repository_rel_path] = symbols
         return symbols

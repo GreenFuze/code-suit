@@ -30,6 +30,21 @@ The target-bearing core tools accept file lists and return both:
 
 This keeps the tool surface small while reducing repeated per-file calls.
 
+Two of the heavier core tools also accept `detail_level`:
+
+- `understand_file`
+- `what_changes_if_i_edit_this`
+
+Detail levels:
+
+- `compact`: smallest curated deterministic answer
+- `standard`: balanced deterministic answer with limited previews
+- `full`: current rich evidence payload
+
+Current default:
+
+- `compact`
+
 ## Why It Is Different
 
 - Search tells the agent where text appears. SuitCode asks the actual toolchain what owns the file, what depends on it, and what should run.
