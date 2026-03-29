@@ -5,7 +5,7 @@ from enum import StrEnum
 from pydantic import field_validator, model_validator
 
 from suitcode.core.code.models import CodeLocation
-from suitcode.core.intelligence_models import ComponentContext, FileContext, FileRelationshipRef, SymbolContext
+from suitcode.core.intelligence_models import ComponentContext, FileContext, FileRelationshipRef, RenderEdgeRef, SymbolContext
 from suitcode.core.models import Component, Runner
 from suitcode.core.models.nodes import StrictModel
 from suitcode.core.provenance import ProvenanceEntry
@@ -103,6 +103,8 @@ class ChangeEvidenceEdgeKind(StrEnum):
     TARGET_REFERENCE = "target_reference"
     TARGET_DEPENDENCY_FILE = "target_dependency_file"
     TARGET_DEPENDENT_FILE = "target_dependent_file"
+    TARGET_RENDER_CHILD = "target_render_child"
+    TARGET_RENDER_PARENT = "target_render_parent"
     TARGET_IMPLEMENTATION_LOCATION = "target_implementation_location"
     COMPONENT_IMPLEMENTATION_COMPONENT = "component_implementation_component"
     COMPONENT_DEPENDENT_COMPONENT = "component_dependent_component"
@@ -193,6 +195,8 @@ class ChangeImpact(StrictModel):
     symbol_context: SymbolContext | None = None
     dependency_files: tuple[FileRelationshipRef, ...]
     dependent_files: tuple[FileRelationshipRef, ...]
+    render_children: tuple[RenderEdgeRef, ...]
+    render_parents: tuple[RenderEdgeRef, ...]
     implementation_locations: tuple[CodeLocation, ...]
     implementation_components: tuple[Component, ...]
     dependent_components: tuple[Component, ...]

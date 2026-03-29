@@ -5,6 +5,7 @@ import shutil
 from dataclasses import replace
 from suitcode.core.intelligence_models import ComponentDependencyEdge
 from suitcode.core.intelligence_models import FileRelationshipRef
+from suitcode.core.intelligence_models import RenderEdgeRef
 from suitcode.core.action_models import RepositoryAction
 from pathlib import Path
 from pathlib import PurePosixPath
@@ -44,6 +45,7 @@ from suitcode.providers.npm.models import (
 )
 from suitcode.providers.npm.location_translation import NpmLocationTranslator
 from suitcode.providers.npm.file_relationship_service import NpmFileRelationshipService
+from suitcode.providers.npm.render_edge_service import NpmRenderEdgeService
 from suitcode.providers.npm.symbol_models import NpmWorkspaceSymbol
 from suitcode.providers.npm.symbol_service import NpmFileSymbolService, NpmSymbolService
 from suitcode.providers.npm.symbol_translation import NpmSymbolTranslator
@@ -164,6 +166,7 @@ class NPMProvider(
         self._symbol_service: NpmSymbolService | None = None
         self._file_symbol_service: NpmFileSymbolService | None = None
         self._file_relationship_service: NpmFileRelationshipService | None = None
+        self._render_edge_service: NpmRenderEdgeService | None = None
         self._quality_service: NpmQualityService | None = None
         self._test_execution_service: TestExecutionService | None = None
 
@@ -454,6 +457,14 @@ class NPMProvider(
             )
         return self._file_relationship_service
 
+    def _build_render_edge_service(self) -> NpmRenderEdgeService:
+        if self._render_edge_service is None:
+            self._render_edge_service = NpmRenderEdgeService(
+                repository_root=self.repository.root,
+                attachment_root=self.attachment_root,
+            )
+        return self._render_edge_service
+
     def _get_symbols(self, query: str, is_case_sensitive: bool = False) -> tuple[NpmWorkspaceSymbol, ...]:
         return self._build_symbol_service().get_symbols(query, is_case_sensitive=is_case_sensitive)
 
@@ -632,6 +643,12 @@ class NPMProvider(
     def get_file_relationships(self, repository_rel_path: str) -> tuple[FileRelationshipRef, ...]:
         try:
             return self._build_file_relationship_service().get_file_relationships(repository_rel_path)
+        except ValueError:
+            return tuple()
+
+    def get_file_render_edges(self, repository_rel_path: str) -> tuple[RenderEdgeRef, ...]:
+        try:
+            return self._build_render_edge_service().get_file_render_edges(repository_rel_path)
         except ValueError:
             return tuple()
 

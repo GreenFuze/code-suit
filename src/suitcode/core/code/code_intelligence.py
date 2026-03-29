@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from suitcode.core.code.models import CodeLocation, SymbolLookupTarget
-from suitcode.core.intelligence_models import FileRelationshipKind, FileRelationshipRef
+from suitcode.core.intelligence_models import FileRelationshipKind, FileRelationshipRef, RenderEdgeKind, RenderEdgeRef
 from suitcode.core.models import EntityInfo
 from suitcode.core.models.ids import normalize_repository_relative_path
 from suitcode.core.provenance import ProvenanceEntry, SourceKind
@@ -116,6 +116,54 @@ class CodeIntelligence:
             sorted(
                 merged.values(),
                 key=lambda item: (item.repository_rel_path, item.line_start, item.column_start, item.symbol_id or ""),
+            )
+        )
+
+    def get_file_render_edges(
+        self,
+        repository_rel_path: str,
+        relationship_kind: RenderEdgeKind | None = None,
+    ) -> tuple[RenderEdgeRef, ...]:
+        normalized_path = normalize_repository_relative_path(repository_rel_path)
+        merged: dict[tuple[RenderEdgeKind, str, int, int, tuple[str, ...], bool], RenderEdgeRef] = {}
+        for provider in self._providers_for_file(normalized_path):
+            try:
+                items = provider.get_file_render_edges(normalized_path)
+            except ValueError:
+                continue
+            for item in items:
+                if relationship_kind is not None and item.relationship_kind != relationship_kind:
+                    continue
+                key = (
+                    item.relationship_kind,
+                    item.repository_rel_path,
+                    item.line_start,
+                    item.column_start,
+                    item.prop_names,
+                    item.has_spread_props,
+                )
+                existing = merged.get(key)
+                if existing is None:
+                    merged[key] = item
+                    continue
+                merged[key] = item.model_copy(
+                    update={
+                        "provenance": tuple(
+                            dict.fromkeys((*existing.provenance, *item.provenance))
+                        )
+                    }
+                )
+        return tuple(
+            sorted(
+                merged.values(),
+                key=lambda item: (
+                    item.relationship_kind.value,
+                    item.repository_rel_path,
+                    item.line_start,
+                    item.column_start,
+                    item.prop_names,
+                    item.has_spread_props,
+                ),
             )
         )
 

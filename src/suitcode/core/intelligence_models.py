@@ -142,6 +142,57 @@ class FileRelationshipRef(StrictModel):
         return self
 
 
+class RenderEdgeKind(StrEnum):
+    __test__ = False
+    RENDERS = "renders"
+    RENDERED_BY = "rendered_by"
+
+
+class RenderEdgeRef(StrictModel):
+    repository_rel_path: str
+    relationship_kind: RenderEdgeKind
+    line_start: int
+    column_start: int
+    prop_names: tuple[str, ...]
+    has_spread_props: bool
+    provenance: tuple[ProvenanceEntry, ...]
+
+    @field_validator("repository_rel_path")
+    @classmethod
+    def _validate_repository_rel_path(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("repository_rel_path must not be empty")
+        return value
+
+    @field_validator("line_start", "column_start")
+    @classmethod
+    def _validate_position(cls, value: int, info) -> int:
+        if value < 1:
+            raise ValueError(f"{info.field_name} must be >= 1")
+        return value
+
+    @field_validator("prop_names")
+    @classmethod
+    def _validate_prop_names(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        normalized: list[str] = []
+        for item in value:
+            candidate = item.strip()
+            if not candidate:
+                raise ValueError("prop_names must not contain empty values")
+            if candidate in normalized:
+                raise ValueError("prop_names must not contain duplicates")
+            normalized.append(candidate)
+        return tuple(normalized)
+
+    @model_validator(mode="after")
+    def _validate_provenance(self) -> "RenderEdgeRef":
+        if not self.provenance:
+            raise ValueError("provenance must not be empty")
+        if any(item.source_kind == SourceKind.HEURISTIC for item in self.provenance):
+            raise ValueError("render edge provenance must not be heuristic")
+        return self
+
+
 class FileContext(StrictModel):
     file_info: FileInfo
     owner: OwnedNodeInfo
@@ -151,6 +202,10 @@ class FileContext(StrictModel):
     dependency_files_preview: tuple[FileRelationshipRef, ...]
     dependent_file_count: int
     dependent_files_preview: tuple[FileRelationshipRef, ...]
+    render_child_count: int
+    render_children_preview: tuple[RenderEdgeRef, ...]
+    render_parent_count: int
+    render_parents_preview: tuple[RenderEdgeRef, ...]
     implementation_location_count: int
     implementation_locations_preview: tuple[CodeLocation, ...]
     related_test_count: int

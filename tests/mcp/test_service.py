@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from suitcode.core.build_service import BuildService
-from suitcode.core.intelligence_models import FileRelationshipKind, FileRelationshipRef
+from suitcode.core.intelligence_models import FileRelationshipKind, FileRelationshipRef, RenderEdgeKind, RenderEdgeRef
 from suitcode.core.provenance_builders import dependency_graph_provenance
 from suitcode.core.runner_service import RunnerService
 from suitcode.mcp.errors import McpNotFoundError, McpUnsupportedRepositoryError, McpValidationError
@@ -1146,8 +1146,30 @@ def test_service_exposes_component_file_and_impact_context(service: SuitMcpServi
                 ),
             )
 
+    class _FakeRenderEdgeService:
+        def get_file_render_edges(self, repository_rel_path: str) -> tuple[RenderEdgeRef, ...]:
+            assert repository_rel_path == "packages/core/src/index.ts"
+            return (
+                RenderEdgeRef(
+                    repository_rel_path="packages/ui/src/Button.tsx",
+                    relationship_kind=RenderEdgeKind.RENDERS,
+                    line_start=12,
+                    column_start=5,
+                    prop_names=("label", "variant"),
+                    has_spread_props=False,
+                    provenance=(
+                        dependency_graph_provenance(
+                            source_tool="typescript",
+                            evidence_summary="resolved JSX render edge",
+                            evidence_paths=("packages/core/src/index.ts", "packages/ui/src/Button.tsx"),
+                        ),
+                    ),
+                ),
+            )
+
     provider._file_symbol_service = _FakeFileSymbolService()  # type: ignore[attr-defined]
     provider._file_relationship_service = _FakeRelationshipService()  # type: ignore[attr-defined]
+    provider._render_edge_service = _FakeRenderEdgeService()  # type: ignore[attr-defined]
 
     component_contexts = service.describe_components(
         workspace_id,
@@ -1201,6 +1223,8 @@ def test_service_exposes_component_file_and_impact_context(service: SuitMcpServi
     assert file_contexts[0].owner.id == "component:npm:@monorepo/core"
     assert file_contexts[0].dependency_file_count == 0
     assert [item.path for item in file_contexts[0].dependent_files_preview] == ["packages/utils/src/index.ts"]
+    assert [item.path for item in file_contexts[0].render_children_preview] == ["packages/ui/src/Button.tsx"]
+    assert file_contexts[0].render_children_preview[0].prop_names == ("label", "variant")
     assert file_contexts[0].file.provenance
     assert symbol_context.symbol.name == "Core"
     assert symbol_context.symbol.provenance
@@ -1215,6 +1239,8 @@ def test_service_exposes_component_file_and_impact_context(service: SuitMcpServi
     assert change.primary_component is not None
     assert change.primary_component.id == "component:npm:@monorepo/core"
     assert [item.path for item in change.dependent_files] == ["packages/utils/src/index.ts"]
+    assert [item.path for item in change.render_children] == ["packages/ui/src/Button.tsx"]
+    assert change.render_children[0].prop_names == ("label", "variant")
     assert change.reference_locations
     assert change.related_tests
     assert isinstance(change.related_runners, tuple)

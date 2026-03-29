@@ -11,7 +11,14 @@ from suitcode.core.models import (
     TestDefinition as DefinitionNode,
 )
 from suitcode.core.action_models import ActionKind
-from suitcode.core.intelligence_models import ComponentDependencyEdge, DependencyRef, FileRelationshipKind, FileRelationshipRef
+from suitcode.core.intelligence_models import (
+    ComponentDependencyEdge,
+    DependencyRef,
+    FileRelationshipKind,
+    FileRelationshipRef,
+    RenderEdgeKind,
+    RenderEdgeRef,
+)
 from suitcode.core.runner_service import RunnerService
 from suitcode.core.provenance import SourceKind
 from suitcode.core.tests.models import (
@@ -248,6 +255,38 @@ def test_npm_provider_returns_file_relationships_from_provider_service(npm_provi
     assert len(relationships) == 1
     assert relationships[0].relationship_kind == FileRelationshipKind.IMPORTED_BY
     assert relationships[0].repository_rel_path == "packages/utils/src/index.ts"
+
+
+def test_npm_provider_returns_render_edges_from_provider_service(npm_provider: NPMProvider) -> None:
+    class _FakeRenderEdgeService:
+        def get_file_render_edges(self, repository_rel_path: str) -> tuple[RenderEdgeRef, ...]:
+            assert repository_rel_path == "packages/core/src/index.tsx"
+            return (
+                RenderEdgeRef(
+                    repository_rel_path="packages/ui/src/Button.tsx",
+                    relationship_kind=RenderEdgeKind.RENDERS,
+                    line_start=12,
+                    column_start=5,
+                    prop_names=("label", "onClick"),
+                    has_spread_props=False,
+                    provenance=(
+                        dependency_graph_provenance(
+                            source_tool="typescript",
+                            evidence_summary="resolved JSX render edge",
+                            evidence_paths=("packages/core/src/index.tsx", "packages/ui/src/Button.tsx"),
+                        ),
+                    ),
+                ),
+            )
+
+    npm_provider._render_edge_service = _FakeRenderEdgeService()  # type: ignore[assignment]
+
+    edges = npm_provider.get_file_render_edges("packages/core/src/index.tsx")
+
+    assert len(edges) == 1
+    assert edges[0].relationship_kind == RenderEdgeKind.RENDERS
+    assert edges[0].repository_rel_path == "packages/ui/src/Button.tsx"
+    assert edges[0].prop_names == ("label", "onClick")
 
 
 def test_npm_provider_internal_symbol_analysis_stays_npm_specific(npm_provider: NPMProvider) -> None:

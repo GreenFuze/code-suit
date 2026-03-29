@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from suitcode.core.intelligence_models import ComponentContext, FileContext, FileRelationshipKind, SymbolContext
+from suitcode.core.intelligence_models import ComponentContext, FileContext, FileRelationshipKind, RenderEdgeKind, SymbolContext
 from suitcode.core.component_context_resolver import ComponentContextResolver
 from suitcode.core.ownership_index import OwnershipIndex
 from suitcode.core.code_reference_service import CodeReferenceService
@@ -89,6 +89,14 @@ class ContextService:
                 repository_rel_path,
                 relationship_kind=FileRelationshipKind.IMPORTED_BY,
             )
+            render_children = self._repository.code.get_file_render_edges(
+                repository_rel_path,
+                relationship_kind=RenderEdgeKind.RENDERS,
+            )
+            render_parents = self._repository.code.get_file_render_edges(
+                repository_rel_path,
+                relationship_kind=RenderEdgeKind.RENDERED_BY,
+            )
             implementation_locations = self._repository.code.get_file_implementation_locations(repository_rel_path)
             related_tests = self._repository.tests.get_related_tests(RelatedTestTarget(repository_rel_path=repository_rel_path))
             contexts.append(
@@ -101,6 +109,10 @@ class ContextService:
                     dependency_files_preview=dependency_files[:symbol_preview_limit],
                     dependent_file_count=len(dependent_files),
                     dependent_files_preview=dependent_files[:symbol_preview_limit],
+                    render_child_count=len(render_children),
+                    render_children_preview=render_children[:symbol_preview_limit],
+                    render_parent_count=len(render_parents),
+                    render_parents_preview=render_parents[:symbol_preview_limit],
                     implementation_location_count=len(implementation_locations),
                     implementation_locations_preview=implementation_locations[:symbol_preview_limit],
                     related_test_count=len(related_tests),
@@ -113,6 +125,8 @@ class ContextService:
                         symbols,
                         dependency_files,
                         dependent_files,
+                        render_children,
+                        render_parents,
                         implementation_locations,
                         related_tests,
                     ),
@@ -184,6 +198,8 @@ class ContextService:
         symbols,
         dependency_files,
         dependent_files,
+        render_children,
+        render_parents,
         implementation_locations,
         related_tests,
     ) -> tuple[ProvenanceEntry, ...]:
@@ -213,6 +229,21 @@ class ContextService:
                         repository_rel_path,
                         dependency_files,
                         dependent_files,
+                    ),
+                )
+            )
+        if render_children or render_parents:
+            entries.append(
+                derived_summary_provenance(
+                    source_kind=SourceKind.DEPENDENCY_GRAPH,
+                    source_tool=self._render_source_tool(repository_rel_path, render_children, render_parents),
+                    evidence_summary=(
+                        f"UI render relationships derived from deterministic JSX component resolution for `{repository_rel_path}`"
+                    ),
+                    evidence_paths=self._summarized_render_paths(
+                        repository_rel_path,
+                        render_children,
+                        render_parents,
                     ),
                 )
             )
@@ -254,6 +285,18 @@ class ContextService:
     def _summarized_relationship_paths(repository_rel_path: str, dependency_files, dependent_files) -> tuple[str, ...]:
         paths: list[str] = [repository_rel_path]
         for item in (*dependency_files, *dependent_files):
+            if item.repository_rel_path not in paths:
+                paths.append(item.repository_rel_path)
+            for provenance in item.provenance:
+                for path in provenance.evidence_paths:
+                    if path not in paths:
+                        paths.append(path)
+        return tuple(paths[:10])
+
+    @staticmethod
+    def _summarized_render_paths(repository_rel_path: str, render_children, render_parents) -> tuple[str, ...]:
+        paths: list[str] = [repository_rel_path]
+        for item in (*render_children, *render_parents):
             if item.repository_rel_path not in paths:
                 paths.append(item.repository_rel_path)
             for provenance in item.provenance:
@@ -306,6 +349,15 @@ class ContextService:
         provenance = tuple(
             entry
             for item in (*dependency_files, *dependent_files)
+            for entry in item.provenance
+        )
+        return preferred_source_tool(provenance) if provenance else ContextService._lsp_tool_for_path(repository_rel_path)
+
+    @staticmethod
+    def _render_source_tool(repository_rel_path: str, render_children, render_parents) -> str | None:
+        provenance = tuple(
+            entry
+            for item in (*render_children, *render_parents)
             for entry in item.provenance
         )
         return preferred_source_tool(provenance) if provenance else ContextService._lsp_tool_for_path(repository_rel_path)

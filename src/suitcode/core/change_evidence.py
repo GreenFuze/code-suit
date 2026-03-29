@@ -11,7 +11,7 @@ from suitcode.core.change_models import (
     TestImpact,
 )
 from suitcode.core.code.models import CodeLocation
-from suitcode.core.intelligence_models import ComponentDependencyEdge, FileRelationshipKind, FileRelationshipRef
+from suitcode.core.intelligence_models import ComponentDependencyEdge, FileRelationshipKind, FileRelationshipRef, RenderEdgeKind, RenderEdgeRef
 from suitcode.core.models import Component
 from suitcode.core.repository_models import OwnedNodeInfo
 
@@ -24,6 +24,8 @@ class ChangeEvidenceAssembler:
         ChangeEvidenceEdgeKind.TARGET_REFERENCE,
         ChangeEvidenceEdgeKind.TARGET_DEPENDENCY_FILE,
         ChangeEvidenceEdgeKind.TARGET_DEPENDENT_FILE,
+        ChangeEvidenceEdgeKind.TARGET_RENDER_CHILD,
+        ChangeEvidenceEdgeKind.TARGET_RENDER_PARENT,
         ChangeEvidenceEdgeKind.TARGET_IMPLEMENTATION_LOCATION,
         ChangeEvidenceEdgeKind.COMPONENT_IMPLEMENTATION_COMPONENT,
         ChangeEvidenceEdgeKind.COMPONENT_DEPENDENT_COMPONENT,
@@ -43,6 +45,8 @@ class ChangeEvidenceAssembler:
         reference_locations: tuple[CodeLocation, ...],
         dependency_files: tuple[FileRelationshipRef, ...],
         dependent_files: tuple[FileRelationshipRef, ...],
+        render_children: tuple[RenderEdgeRef, ...],
+        render_parents: tuple[RenderEdgeRef, ...],
         implementation_locations: tuple[CodeLocation, ...],
         implementation_components: tuple[Component, ...],
         dependent_components: tuple[Component, ...],
@@ -58,6 +62,8 @@ class ChangeEvidenceAssembler:
             *self._reference_edges(target_kind, target_node_id, reference_locations),
             *self._relationship_edges(target_node_id, dependency_files),
             *self._relationship_edges(target_node_id, dependent_files),
+            *self._render_edges(target_node_id, render_children),
+            *self._render_edges(target_node_id, render_parents),
             *self._implementation_location_edges(target_node_id, implementation_locations),
             *self._implementation_component_edges(primary_component, implementation_components),
             *self._dependent_component_edges(primary_component, dependent_components, dependent_edges),
@@ -155,6 +161,32 @@ class ChangeEvidenceAssembler:
             else:
                 edge_kind = ChangeEvidenceEdgeKind.TARGET_DEPENDENT_FILE
                 reason = "dependent file discovered from deterministic import resolution"
+            impacts.append(
+                ChangeEvidenceEdge(
+                    source_node_kind="change_target",
+                    source_node_id=target_node_id,
+                    target_node_kind="file",
+                    target_node_id=f"file:{item.repository_rel_path}",
+                    edge_kind=edge_kind,
+                    reason=reason,
+                    provenance=item.provenance,
+                )
+            )
+        return tuple(impacts)
+
+    def _render_edges(
+        self,
+        target_node_id: str,
+        render_edges: tuple[RenderEdgeRef, ...],
+    ) -> tuple[ChangeEvidenceEdge, ...]:
+        impacts: list[ChangeEvidenceEdge] = []
+        for item in render_edges:
+            if item.relationship_kind == RenderEdgeKind.RENDERS:
+                edge_kind = ChangeEvidenceEdgeKind.TARGET_RENDER_CHILD
+                reason = "render child discovered from deterministic JSX component resolution"
+            else:
+                edge_kind = ChangeEvidenceEdgeKind.TARGET_RENDER_PARENT
+                reason = "render parent discovered from deterministic JSX component resolution"
             impacts.append(
                 ChangeEvidenceEdge(
                     source_node_kind="change_target",

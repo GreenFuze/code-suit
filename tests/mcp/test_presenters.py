@@ -264,6 +264,8 @@ def test_change_impact_presenter_maps_composed_artifact(npm_repo_root) -> None:
                 ),
             ),
         ),
+        render_children=tuple(),
+        render_parents=tuple(),
         implementation_locations=tuple(),
         implementation_components=tuple(),
         dependent_components=(

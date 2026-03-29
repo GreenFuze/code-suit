@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from suitcode.core.code.models import CodeLocation
-from suitcode.core.intelligence_models import FileRelationshipRef
+from suitcode.core.intelligence_models import FileRelationshipRef, RenderEdgeRef
 from suitcode.core.models import EntityInfo
 from suitcode.providers.provider_base import ProviderBase
 from suitcode.providers.provider_metadata import ProviderAttachmentContext
@@ -60,6 +60,9 @@ class CodeProviderBase(ProviderBase, ABC):
         raise NotImplementedError
 
     def get_file_relationships(self, repository_rel_path: str) -> Sequence[FileRelationshipRef]:
+        return tuple()
+
+    def get_file_render_edges(self, repository_rel_path: str) -> Sequence[RenderEdgeRef]:
         return tuple()
 
     def get_file_implementation_locations(self, repository_rel_path: str) -> tuple[CodeLocation, ...]:

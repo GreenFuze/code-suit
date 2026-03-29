@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from suitcode.core.change_models import ChangeTarget
 from suitcode.core.code.models import CodeLocation
-from suitcode.core.intelligence_models import FileRelationshipKind, FileRelationshipRef
+from suitcode.core.intelligence_models import FileRelationshipKind, FileRelationshipRef, RenderEdgeKind, RenderEdgeRef
 from suitcode.core.provenance_builders import dependency_graph_provenance, lsp_location_provenance
 from suitcode.core.workspace import Workspace
 
@@ -92,8 +92,30 @@ def test_change_impact_for_npm_file_target(npm_repo_root) -> None:
                 ),
             )
 
+    class _FakeRenderEdgeService:
+        def get_file_render_edges(self, repository_rel_path: str) -> tuple[RenderEdgeRef, ...]:
+            assert repository_rel_path == "packages/core/src/index.ts"
+            return (
+                RenderEdgeRef(
+                    repository_rel_path="packages/ui/src/Button.tsx",
+                    relationship_kind=RenderEdgeKind.RENDERS,
+                    line_start=12,
+                    column_start=5,
+                    prop_names=("label",),
+                    has_spread_props=False,
+                    provenance=(
+                        dependency_graph_provenance(
+                            source_tool="typescript",
+                            evidence_summary="resolved JSX render edge",
+                            evidence_paths=("packages/core/src/index.ts", "packages/ui/src/Button.tsx"),
+                        ),
+                    ),
+                ),
+            )
+
     provider._file_symbol_service = _FakeFileSymbolService()  # type: ignore[attr-defined]
     provider._file_relationship_service = _FakeRelationshipService()  # type: ignore[attr-defined]
+    provider._render_edge_service = _FakeRenderEdgeService()  # type: ignore[attr-defined]
 
     impact = repository.analyze_change(ChangeTarget(repository_rel_path="packages/core/src/index.ts"))
 
@@ -104,6 +126,9 @@ def test_change_impact_for_npm_file_target(npm_repo_root) -> None:
     assert impact.component_context is not None
     assert impact.dependency_files == tuple()
     assert [item.repository_rel_path for item in impact.dependent_files] == ["packages/utils/src/index.ts"]
+    assert [item.repository_rel_path for item in impact.render_children] == ["packages/ui/src/Button.tsx"]
+    assert impact.render_children[0].prop_names == ("label",)
+    assert impact.render_parents == tuple()
     assert any(component.id == "component:npm:@monorepo/utils" for component in impact.dependent_components)
     assert any(test.related_test.test_definition.id == "test:npm:@monorepo/core" for test in impact.related_tests)
     assert impact.quality_gates

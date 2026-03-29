@@ -253,6 +253,52 @@ class SuitMcpService:
                     tuple(item for target in targets for item in target.dependent_files_preview),
                     key=lambda item: item.path,
                 ),
+                aggregate_render_child_count=len(
+                    {
+                        (
+                            item.path,
+                            item.line_start,
+                            item.column_start,
+                            item.prop_names,
+                            item.has_spread_props,
+                        )
+                        for target in targets
+                        for item in target.render_children_preview
+                    }
+                ),
+                aggregate_render_children_preview=self._dedupe_views(
+                    tuple(item for target in targets for item in target.render_children_preview),
+                    key=lambda item: (
+                        item.path,
+                        item.line_start,
+                        item.column_start,
+                        item.prop_names,
+                        item.has_spread_props,
+                    ),
+                ),
+                aggregate_render_parent_count=len(
+                    {
+                        (
+                            item.path,
+                            item.line_start,
+                            item.column_start,
+                            item.prop_names,
+                            item.has_spread_props,
+                        )
+                        for target in targets
+                        for item in target.render_parents_preview
+                    }
+                ),
+                aggregate_render_parents_preview=self._dedupe_views(
+                    tuple(item for target in targets for item in target.render_parents_preview),
+                    key=lambda item: (
+                        item.path,
+                        item.line_start,
+                        item.column_start,
+                        item.prop_names,
+                        item.has_spread_props,
+                    ),
+                ),
                 aggregate_implementation_location_count=len(
                     {
                         (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id)
@@ -371,6 +417,26 @@ class SuitMcpService:
                 dependent_files=self._dedupe_views(
                     tuple(item for target in frozen_targets for item in target.impact.dependent_files),
                     key=lambda item: item.path,
+                ),
+                render_children=self._dedupe_views(
+                    tuple(item for target in frozen_targets for item in target.impact.render_children),
+                    key=lambda item: (
+                        item.path,
+                        item.line_start,
+                        item.column_start,
+                        item.prop_names,
+                        item.has_spread_props,
+                    ),
+                ),
+                render_parents=self._dedupe_views(
+                    tuple(item for target in frozen_targets for item in target.impact.render_parents),
+                    key=lambda item: (
+                        item.path,
+                        item.line_start,
+                        item.column_start,
+                        item.prop_names,
+                        item.has_spread_props,
+                    ),
                 ),
                 implementation_locations=self._dedupe_views(
                     tuple(item for target in frozen_targets for item in target.impact.implementation_locations),
@@ -1152,6 +1218,12 @@ class SuitMcpService:
             dependent_files_preview = tuple(
                 self._intelligence_presenter.file_relationship_view(item) for item in context.dependent_files_preview
             )
+            render_children_preview = tuple(
+                self._intelligence_presenter.render_edge_view(item) for item in context.render_children_preview
+            )
+            render_parents_preview = tuple(
+                self._intelligence_presenter.render_edge_view(item) for item in context.render_parents_preview
+            )
             implementation_locations_preview = tuple(
                 self._code_presenter.location_view(item) for item in context.implementation_locations_preview
             )
@@ -1179,6 +1251,10 @@ class SuitMcpService:
             dependency_files_preview=dependency_files_preview,
             dependent_file_count=context.dependent_file_count,
             dependent_files_preview=dependent_files_preview,
+            render_child_count=context.render_child_count,
+            render_children_preview=render_children_preview,
+            render_parent_count=context.render_parent_count,
+            render_parents_preview=render_parents_preview,
             implementation_location_count=context.implementation_location_count,
             implementation_locations_preview=implementation_locations_preview,
             related_tests=related_tests,
@@ -1187,6 +1263,8 @@ class SuitMcpService:
                 owner.file.provenance,
                 *(item.provenance for item in dependency_files_preview),
                 *(item.provenance for item in dependent_files_preview),
+                *(item.provenance for item in render_children_preview),
+                *(item.provenance for item in render_parents_preview),
                 *(item.provenance for item in implementation_locations_preview),
                 *(item.provenance for item in related_tests),
                 structured_artifact_view.provenance if structured_artifact_view is not None else tuple(),
@@ -1221,6 +1299,10 @@ class SuitMcpService:
                 dependency_files_preview=target.dependency_files_preview[:3],
                 dependent_file_count=target.dependent_file_count,
                 dependent_files_preview=target.dependent_files_preview[:3],
+                render_child_count=target.render_child_count,
+                render_children_preview=target.render_children_preview[:3],
+                render_parent_count=target.render_parent_count,
+                render_parents_preview=target.render_parents_preview[:3],
                 related_test_count=len(target.related_tests),
                 related_tests=target.related_tests[:3],
                 structured_artifact=target.structured_artifact,
@@ -1241,6 +1323,52 @@ class SuitMcpService:
             aggregate_dependent_files_preview=self._dedupe_views(
                 tuple(item for target in compact_targets for item in target.dependent_files_preview),
                 key=lambda item: item.path,
+            )[:3],
+            aggregate_render_child_count=len(
+                {
+                    (
+                        item.path,
+                        item.line_start,
+                        item.column_start,
+                        item.prop_names,
+                        item.has_spread_props,
+                    )
+                    for target in compact_targets
+                    for item in target.render_children_preview
+                }
+            ),
+            aggregate_render_children_preview=self._dedupe_views(
+                tuple(item for target in compact_targets for item in target.render_children_preview),
+                key=lambda item: (
+                    item.path,
+                    item.line_start,
+                    item.column_start,
+                    item.prop_names,
+                    item.has_spread_props,
+                ),
+            )[:3],
+            aggregate_render_parent_count=len(
+                {
+                    (
+                        item.path,
+                        item.line_start,
+                        item.column_start,
+                        item.prop_names,
+                        item.has_spread_props,
+                    )
+                    for target in compact_targets
+                    for item in target.render_parents_preview
+                }
+            ),
+            aggregate_render_parents_preview=self._dedupe_views(
+                tuple(item for target in compact_targets for item in target.render_parents_preview),
+                key=lambda item: (
+                    item.path,
+                    item.line_start,
+                    item.column_start,
+                    item.prop_names,
+                    item.has_spread_props,
+                ),
             )[:3],
             aggregate_related_tests=self._dedupe_views(
                 tuple(item for target in compact_targets for item in target.related_tests),
@@ -1270,6 +1398,10 @@ class SuitMcpService:
                 dependency_files_preview=target.dependency_files_preview[:10],
                 dependent_file_count=target.dependent_file_count,
                 dependent_files_preview=target.dependent_files_preview[:10],
+                render_child_count=target.render_child_count,
+                render_children_preview=target.render_children_preview[:10],
+                render_parent_count=target.render_parent_count,
+                render_parents_preview=target.render_parents_preview[:10],
                 implementation_location_count=target.implementation_location_count,
                 implementation_locations_preview=target.implementation_locations_preview[:10],
                 related_test_count=len(target.related_tests),
@@ -1292,6 +1424,52 @@ class SuitMcpService:
             aggregate_dependent_files_preview=self._dedupe_views(
                 tuple(item for target in standard_targets for item in target.dependent_files_preview),
                 key=lambda item: item.path,
+            )[:10],
+            aggregate_render_child_count=len(
+                {
+                    (
+                        item.path,
+                        item.line_start,
+                        item.column_start,
+                        item.prop_names,
+                        item.has_spread_props,
+                    )
+                    for target in standard_targets
+                    for item in target.render_children_preview
+                }
+            ),
+            aggregate_render_children_preview=self._dedupe_views(
+                tuple(item for target in standard_targets for item in target.render_children_preview),
+                key=lambda item: (
+                    item.path,
+                    item.line_start,
+                    item.column_start,
+                    item.prop_names,
+                    item.has_spread_props,
+                ),
+            )[:10],
+            aggregate_render_parent_count=len(
+                {
+                    (
+                        item.path,
+                        item.line_start,
+                        item.column_start,
+                        item.prop_names,
+                        item.has_spread_props,
+                    )
+                    for target in standard_targets
+                    for item in target.render_parents_preview
+                }
+            ),
+            aggregate_render_parents_preview=self._dedupe_views(
+                tuple(item for target in standard_targets for item in target.render_parents_preview),
+                key=lambda item: (
+                    item.path,
+                    item.line_start,
+                    item.column_start,
+                    item.prop_names,
+                    item.has_spread_props,
+                ),
             )[:10],
             aggregate_implementation_location_count=len(
                 {
@@ -1330,6 +1508,8 @@ class SuitMcpService:
                 owner=target.impact.owner,
                 primary_component=target.impact.primary_component,
                 dependent_files=target.impact.dependent_files[:3],
+                render_children=target.impact.render_children[:3],
+                render_parents=target.impact.render_parents[:3],
                 dependent_components=target.impact.dependent_components[:3],
                 related_tests=target.impact.related_tests[:3],
                 related_runners=target.impact.related_runners[:3],
@@ -1345,6 +1525,26 @@ class SuitMcpService:
             dependent_files=self._dedupe_views(
                 tuple(item for target in compact_targets for item in target.dependent_files),
                 key=lambda item: item.path,
+            )[:3],
+            render_children=self._dedupe_views(
+                tuple(item for target in compact_targets for item in target.render_children),
+                key=lambda item: (
+                    item.path,
+                    item.line_start,
+                    item.column_start,
+                    item.prop_names,
+                    item.has_spread_props,
+                ),
+            )[:3],
+            render_parents=self._dedupe_views(
+                tuple(item for target in compact_targets for item in target.render_parents),
+                key=lambda item: (
+                    item.path,
+                    item.line_start,
+                    item.column_start,
+                    item.prop_names,
+                    item.has_spread_props,
+                ),
             )[:3],
             dependent_components=self._dedupe_views(
                 tuple(item for target in compact_targets for item in target.dependent_components),
@@ -1376,6 +1576,8 @@ class SuitMcpService:
                 primary_component=target.impact.primary_component,
                 dependency_files=target.impact.dependency_files[:10],
                 dependent_files=target.impact.dependent_files[:10],
+                render_children=target.impact.render_children[:10],
+                render_parents=target.impact.render_parents[:10],
                 implementation_locations=target.impact.implementation_locations[:10],
                 implementation_components=target.impact.implementation_components[:10],
                 dependent_components=target.impact.dependent_components[:10],
@@ -1394,6 +1596,26 @@ class SuitMcpService:
             dependent_files=self._dedupe_views(
                 tuple(item for target in standard_targets for item in target.dependent_files),
                 key=lambda item: item.path,
+            )[:10],
+            render_children=self._dedupe_views(
+                tuple(item for target in standard_targets for item in target.render_children),
+                key=lambda item: (
+                    item.path,
+                    item.line_start,
+                    item.column_start,
+                    item.prop_names,
+                    item.has_spread_props,
+                ),
+            )[:10],
+            render_parents=self._dedupe_views(
+                tuple(item for target in standard_targets for item in target.render_parents),
+                key=lambda item: (
+                    item.path,
+                    item.line_start,
+                    item.column_start,
+                    item.prop_names,
+                    item.has_spread_props,
+                ),
             )[:10],
             implementation_locations=self._dedupe_views(
                 tuple(item for target in standard_targets for item in target.implementation_locations),

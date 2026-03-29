@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from suitcode.core.change_models import ChangeImpact, QualityGateInfo, RunnerImpact, TestImpact
 from suitcode.core.code.models import CodeLocation
 from suitcode.core.intelligence_models import ComponentContext, FileContext, SymbolContext
-from suitcode.core.intelligence_models import FileRelationshipRef
+from suitcode.core.intelligence_models import FileRelationshipRef, RenderEdgeRef
 from suitcode.core.models import Component, EntityInfo, ExternalPackage, FileInfo, PackageManager, Runner, TestDefinition
 from suitcode.core.provenance import ConfidenceMode, ProvenanceEntry, SourceKind
 from suitcode.core.provenance_builders import derived_summary_provenance
@@ -125,6 +125,8 @@ class TruthCoverageService:
             dependent_components=impact.dependent_components,
             dependency_files=impact.dependency_files,
             dependent_files=impact.dependent_files,
+            render_children=impact.render_children,
+            render_parents=impact.render_parents,
             implementation_locations=impact.implementation_locations,
             implementation_components=impact.implementation_components,
             reference_locations=impact.reference_locations,
@@ -145,6 +147,8 @@ class TruthCoverageService:
         symbol_context: SymbolContext | None,
         dependency_files: tuple[FileRelationshipRef, ...],
         dependent_files: tuple[FileRelationshipRef, ...],
+        render_children: tuple[RenderEdgeRef, ...],
+        render_parents: tuple[RenderEdgeRef, ...],
         implementation_locations: tuple[CodeLocation, ...],
         implementation_components: tuple[Component, ...],
         dependent_components: tuple[Component, ...],
@@ -173,6 +177,8 @@ class TruthCoverageService:
                 code.add_provenance_item(item.provenance)
         for relationship in (*dependency_files, *dependent_files):
             code.add_provenance_item(relationship.provenance)
+        for edge in (*render_children, *render_parents):
+            code.add_provenance_item(edge.provenance)
         for item in (*implementation_locations, *implementation_components):
             code.add_provenance_item(item.provenance)
         code.availability = self._artifact_domain_availability(code)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import shlex
 
 from suitcode.core.change_models import ChangeEvidenceEdge, ChangeEvidencePreview, ChangeImpact, QualityGateInfo, RunnerImpact, TestImpact
-from suitcode.core.intelligence_models import ComponentContext, ComponentDependencyEdge, DependencyRef, FileContext, ImpactSummary, SymbolContext
+from suitcode.core.intelligence_models import ComponentContext, ComponentDependencyEdge, DependencyRef, FileContext, ImpactSummary, RenderEdgeRef, SymbolContext
 from suitcode.core.minimum_verified_change_set_models import (
     ExcludedMinimumVerifiedItem,
     MinimumVerifiedBuildTarget,
@@ -49,6 +49,7 @@ from suitcode.mcp.models import (
     MinimumVerifiedRunnerActionView,
     MinimumVerifiedTestTargetView,
     QualityGateView,
+    RenderEdgeView,
     RepositorySummaryView,
     RunnerImpactView,
     StructuredArtifactView,
@@ -141,6 +142,17 @@ class IntelligencePresenter:
             provenance=provenance_views(relationship.provenance),
         )
 
+    @staticmethod
+    def render_edge_view(edge: RenderEdgeRef) -> RenderEdgeView:
+        return RenderEdgeView(
+            path=edge.repository_rel_path,
+            line_start=edge.line_start,
+            column_start=edge.column_start,
+            prop_names=edge.prop_names,
+            has_spread_props=edge.has_spread_props,
+            provenance=provenance_views(edge.provenance),
+        )
+
     def file_context_view(self, context: FileContext) -> FileContextView:
         return FileContextView(
             file=self._architecture_presenter.file_view(context.file_info),
@@ -151,6 +163,10 @@ class IntelligencePresenter:
             dependency_files_preview=tuple(self.file_relationship_view(item) for item in context.dependency_files_preview),
             dependent_file_count=context.dependent_file_count,
             dependent_files_preview=tuple(self.file_relationship_view(item) for item in context.dependent_files_preview),
+            render_child_count=context.render_child_count,
+            render_children_preview=tuple(self.render_edge_view(item) for item in context.render_children_preview),
+            render_parent_count=context.render_parent_count,
+            render_parents_preview=tuple(self.render_edge_view(item) for item in context.render_parents_preview),
             implementation_location_count=context.implementation_location_count,
             implementation_locations_preview=tuple(
                 self._code_presenter.location_view(item) for item in context.implementation_locations_preview
@@ -604,6 +620,12 @@ class ChangeImpactPresenter:
             ),
             dependent_files=tuple(
                 self._intelligence_presenter.file_relationship_view(item) for item in impact.dependent_files
+            ),
+            render_children=tuple(
+                self._intelligence_presenter.render_edge_view(item) for item in impact.render_children
+            ),
+            render_parents=tuple(
+                self._intelligence_presenter.render_edge_view(item) for item in impact.render_parents
             ),
             implementation_locations=tuple(
                 self._code_presenter.location_view(item) for item in impact.implementation_locations
