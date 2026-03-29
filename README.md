@@ -262,6 +262,7 @@ Current repository/provider support:
 - npm
 - Go
 - Markdown
+- OpenAPI
 
 Current agent setup paths:
 - Codex
@@ -287,6 +288,21 @@ Current markdown scope:
 - links
 - frontmatter keys and ranges
 - checklist items
+
+Current OpenAPI scope:
+- deterministic ownership for well-known OpenAPI/Swagger files:
+  - `openapi.yaml|yml|json`
+  - `swagger.yaml|yml|json`
+- spec version
+- path + method structure
+- operation IDs when present
+- component schema names
+- top-level tags
+
+Current docs/spec tool behavior:
+- `understand_file` supports provider-owned markdown and OpenAPI files
+- `what_should_i_run` returns explicit exclusions instead of hard failure when provider-owned docs/spec files have no deterministic validation surface
+- `what_changes_if_i_edit_this` returns owned-but-empty impact for provider-owned docs/spec files when no deterministic code impact evidence exists
 
 Current frontend/npm scope:
 - mixed repo attachment discovery from a larger repo root

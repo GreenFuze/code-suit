@@ -20,6 +20,7 @@ class MinimumVerifiedItemKind(StrEnum):
     BUILD_TARGET = "build_target"
     RUNNER_ACTION = "runner_action"
     QUALITY_OPERATION = "quality_operation"
+    VALIDATION_SURFACE = "validation_surface"
 
 
 class MinimumVerifiedExclusionReason(StrEnum):
@@ -30,6 +31,9 @@ class MinimumVerifiedExclusionReason(StrEnum):
     RUNNER_NOT_DIRECTLY_VALIDATION_RELEVANT = "runner_not_directly_validation_relevant"
     DUPLICATE_QUALITY_OPERATION_COLLAPSED = "duplicate_quality_operation_collapsed"
     NO_DETERMINISTIC_TEST_TARGETS_AVAILABLE = "no_deterministic_test_targets_available"
+    NO_DETERMINISTIC_VALIDATION_SURFACES_FOR_PROVIDER_OWNED_ARTIFACT = (
+        "no_deterministic_validation_surfaces_for_provider_owned_artifact"
+    )
 
 
 class QualityOperationScope(StrEnum):
@@ -281,8 +285,8 @@ class MinimumVerifiedChangeSet(StrictModel):
                 self.quality_validation_operations,
                 self.quality_hygiene_operations,
             )
-        ):
+        ) and not self.excluded_items:
             raise ValueError(
-                "minimum verified change set requires at least one deterministic validation or hygiene surface"
+                "minimum verified change set requires at least one deterministic validation, hygiene surface, or explicit exclusion"
             )
         return self

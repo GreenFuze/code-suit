@@ -325,6 +325,47 @@ def test_understand_file_returns_markdown_structure(service: SuitMcpService, tmp
     assert understanding.suggested_follow_ups == tuple()
 
 
+def test_understand_file_returns_openapi_structure(service: SuitMcpService, tmp_path: Path) -> None:
+    repo_root = tmp_path / "api-repo"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "openapi.yaml").write_text(
+        "openapi: 3.1.0\n"
+        "tags:\n"
+        "  - name: scan\n"
+        "paths:\n"
+        "  /scan/jobs:\n"
+        "    get:\n"
+        "      operationId: listScanJobs\n"
+        "components:\n"
+        "  schemas:\n"
+        "    ScanJob:\n"
+        "      type: object\n",
+        encoding="utf-8",
+    )
+
+    understanding = service.understand_file(
+        str(repo_root),
+        ("openapi.yaml",),
+        related_test_limit=5,
+    )
+
+    target = understanding.targets[0]
+    assert target.file_owner.owner.id == "component:openapi:specs"
+    assert target.structured_artifact is not None
+    assert target.structured_artifact.artifact_kind == "openapi_document"
+    assert target.structured_artifact.openapi is not None
+    assert target.structured_artifact.openapi.spec_version == "3.1.0"
+    assert target.structured_artifact.openapi.path_count == 1
+    assert target.structured_artifact.openapi.operations[0].path == "/scan/jobs"
+    assert target.structured_artifact.openapi.operations[0].method == "get"
+    assert target.structured_artifact.openapi.operations[0].operation_id == "listScanJobs"
+    assert target.structured_artifact.openapi.schema_count == 1
+    assert target.structured_artifact.openapi.schemas[0].name == "ScanJob"
+    assert target.structured_artifact.openapi.tag_count == 1
+    assert target.structured_artifact.openapi.tags[0].name == "scan"
+    assert understanding.suggested_follow_ups == tuple()
+
+
 def test_frontend_standalone_package_surfaces_build_script_as_action(service: SuitMcpService, tmp_path: Path) -> None:
     repo_root = tmp_path / "frontend"
     (repo_root / ".git").mkdir(parents=True)
@@ -424,6 +465,117 @@ def test_frontend_standalone_package_prefers_non_watch_test_script(service: Suit
 
     assert [item.test_id for item in minimum.tests] == ["test:npm:frontend"]
     assert minimum.tests[0].command.argv_preview == ("npm", "run", "test:unit")
+
+
+def test_what_should_i_run_returns_exclusion_for_markdown_only_target(service: SuitMcpService, tmp_path: Path) -> None:
+    repo_root = tmp_path / "docs-repo"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "scan_events.md").write_text("# Scan Events\n", encoding="utf-8")
+
+    minimum = service.what_should_i_run(
+        str(repo_root),
+        repository_rel_paths=("scan_events.md",),
+    )
+    availability = service.can_i_do_this(
+        str(repo_root),
+        repository_rel_path="scan_events.md",
+        requested_action_kind="test",
+    )
+
+    assert minimum.tests == tuple()
+    assert minimum.build_targets == tuple()
+    assert minimum.compact_summary.required_validation_count == 0
+    assert any(
+        item.reason_code == "no_deterministic_validation_surfaces_for_provider_owned_artifact"
+        for item in minimum.excluded_items
+    )
+    assert availability.supported is False
+    assert availability.reason_code == "actions_truth_unavailable"
+
+
+def test_what_should_i_run_returns_exclusion_for_openapi_only_target(service: SuitMcpService, tmp_path: Path) -> None:
+    repo_root = tmp_path / "api-repo"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "openapi.yaml").write_text("openapi: 3.1.0\npaths: {}\n", encoding="utf-8")
+
+    minimum = service.what_should_i_run(
+        str(repo_root),
+        repository_rel_paths=("openapi.yaml",),
+    )
+
+    assert minimum.tests == tuple()
+    assert minimum.build_targets == tuple()
+    assert any(
+        item.reason_code == "no_deterministic_validation_surfaces_for_provider_owned_artifact"
+        for item in minimum.excluded_items
+    )
+
+
+def test_mixed_code_and_docs_targets_include_validations_and_exclusions(service: SuitMcpService, tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "go.mod").write_text("module example.com/repo\n\ngo 1.22\n", encoding="utf-8")
+    (repo_root / "internal" / "http").mkdir(parents=True)
+    (repo_root / "internal" / "http" / "server.go").write_text("package http\n\nfunc Value() string { return \"ok\" }\n", encoding="utf-8")
+    (repo_root / "internal" / "http" / "server_test.go").write_text("package http\n\nimport \"testing\"\n\nfunc TestValue(t *testing.T) {}\n", encoding="utf-8")
+    (repo_root / "scan_events.md").write_text("# Scan Events\n", encoding="utf-8")
+    (repo_root / "openapi.yaml").write_text("openapi: 3.1.0\npaths: {}\n", encoding="utf-8")
+
+    minimum = service.what_should_i_run(
+        str(repo_root),
+        repository_rel_paths=("internal/http/server.go", "scan_events.md", "openapi.yaml"),
+    )
+
+    assert [item.test_id for item in minimum.tests] == ["test:go:example.com/repo/internal/http"]
+    assert any(
+        item.reason_code == "no_deterministic_validation_surfaces_for_provider_owned_artifact"
+        for item in minimum.excluded_items
+    )
+
+
+def test_docs_only_validation_exclusions_omit_runner_noise_in_mixed_repo(
+    service: SuitMcpService,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "go.mod").write_text("module example.com/repo\n\ngo 1.22\n", encoding="utf-8")
+    (repo_root / "cmd" / "server").mkdir(parents=True)
+    (repo_root / "cmd" / "server" / "main.go").write_text("package main\n\nfunc main() {}\n", encoding="utf-8")
+    (repo_root / "scan_events.md").write_text("# Scan Events\n", encoding="utf-8")
+
+    minimum = service.what_should_i_run(
+        str(repo_root),
+        repository_rel_paths=("scan_events.md",),
+    )
+
+    assert minimum.tests == tuple()
+    assert minimum.build_targets == tuple()
+    assert minimum.runner_actions == tuple()
+    assert [item.reason_code for item in minimum.excluded_items] == [
+        "no_deterministic_validation_surfaces_for_provider_owned_artifact"
+    ]
+
+
+def test_what_changes_if_i_edit_this_supports_provider_owned_markdown_and_openapi(
+    service: SuitMcpService,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "docs-repo"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "scan_events.md").write_text("# Scan Events\n", encoding="utf-8")
+    (repo_root / "openapi.yaml").write_text("openapi: 3.1.0\npaths: {}\n", encoding="utf-8")
+
+    impact = service.what_changes_if_i_edit_this(
+        str(repo_root),
+        ("scan_events.md", "openapi.yaml"),
+    )
+
+    assert impact.target_count == 2
+    assert {item.owner.id for item in impact.targets} == {
+        "component:markdown:documents",
+        "component:openapi:specs",
+    }
 
 
 def test_repository_summary_excludes_tracked_artifact_files_from_file_count(service: SuitMcpService, tmp_path: Path) -> None:

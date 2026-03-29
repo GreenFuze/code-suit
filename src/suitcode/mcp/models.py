@@ -273,9 +273,40 @@ class MarkdownDocumentStructureView(StrictModel):
     checklist_items: tuple[MarkdownChecklistItemView, ...]
 
 
+class OpenApiOperationView(StrictModel):
+    path: str
+    method: str
+    operation_id: str | None = None
+    line_start: int | None = None
+    line_end: int | None = None
+
+
+class OpenApiSchemaView(StrictModel):
+    name: str
+    line_start: int | None = None
+    line_end: int | None = None
+
+
+class OpenApiTagView(StrictModel):
+    name: str
+    line_start: int | None = None
+    line_end: int | None = None
+
+
+class OpenApiDocumentStructureView(StrictModel):
+    spec_version: str | None = None
+    path_count: int
+    operations: tuple[OpenApiOperationView, ...]
+    schema_count: int
+    schemas: tuple[OpenApiSchemaView, ...]
+    tag_count: int
+    tags: tuple[OpenApiTagView, ...]
+
+
 class StructuredArtifactView(StrictModel):
     artifact_kind: str
     markdown: MarkdownDocumentStructureView | None = None
+    openapi: OpenApiDocumentStructureView | None = None
     provenance: tuple[ProvenanceView, ...]
 
 

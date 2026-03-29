@@ -2,6 +2,7 @@ from suitcode.providers.architecture_provider_base import ArchitectureProviderBa
 from suitcode.providers.action_provider_base import ActionProviderBase
 from suitcode.providers.code_provider_base import CodeProviderBase
 from suitcode.providers.npm import NPMProvider
+from suitcode.providers.openapi import OpenApiProvider
 from suitcode.providers.provider_base import ProviderBase
 from suitcode.providers.provider_metadata import DetectedProviderSupport, ProviderDescriptor, RepositorySupportResult
 from suitcode.providers.provider_roles import ProviderRole
@@ -18,6 +19,7 @@ __all__ = [
     "CodeProviderBase",
     "DetectedProviderSupport",
     "NPMProvider",
+    "OpenApiProvider",
     "ProviderDescriptor",
     "ProviderBase",
     "ProviderRole",

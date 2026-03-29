@@ -9,6 +9,7 @@ from suitcode.core.workspace import Workspace
 from suitcode.providers.go import GoProvider
 from suitcode.providers.markdown import MarkdownProvider
 from suitcode.providers.npm import NPMProvider
+from suitcode.providers.openapi import OpenApiProvider
 from suitcode.providers.provider_base import ProviderBase
 from suitcode.providers.provider_metadata import ProviderAttachmentCandidate
 from suitcode.providers.provider_roles import ProviderRole
@@ -17,13 +18,13 @@ from suitcode.providers.registry import BUILTIN_PROVIDER_CLASSES, detect_support
 
 
 def test_provider_registry_contains_go_markdown_npm_and_python_providers() -> None:
-    assert BUILTIN_PROVIDER_CLASSES == (GoProvider, MarkdownProvider, NPMProvider, PythonProvider)
+    assert BUILTIN_PROVIDER_CLASSES == (GoProvider, MarkdownProvider, NPMProvider, OpenApiProvider, PythonProvider)
 
 
 def test_workspace_supported_providers_exposes_go_markdown_npm_and_python_descriptors() -> None:
     descriptors = Workspace.supported_providers()
 
-    assert tuple(descriptor.provider_id for descriptor in descriptors) == ('go', 'markdown', 'npm', 'python')
+    assert tuple(descriptor.provider_id for descriptor in descriptors) == ('go', 'markdown', 'npm', 'openapi', 'python')
 
 
 def test_repository_support_for_path_detects_npm_fixture(npm_repo_root: Path) -> None:
@@ -35,6 +36,7 @@ def test_repository_support_for_path_detects_npm_fixture(npm_repo_root: Path) ->
     assert support.detected_providers[0].detected_roles == frozenset(
         {
             ProviderRole.ARCHITECTURE,
+            ProviderRole.CODE,
             ProviderRole.TEST,
         }
     )
@@ -74,6 +76,7 @@ def test_repository_support_for_path_detects_go_fixture(go_repo_root: Path) -> N
     assert support.detected_providers[0].detected_roles == frozenset(
         {
             ProviderRole.ARCHITECTURE,
+            ProviderRole.CODE,
             ProviderRole.TEST,
         }
     )
@@ -131,6 +134,18 @@ def test_markdown_provider_detects_root_markdown_files(tmp_path: Path) -> None:
 
     assert support.provider_ids == ("markdown",)
     assert support.detected_providers[0].provider_id == "markdown"
+    assert tuple(item.attachment_root_rel_path for item in support.detected_providers[0].attachments) == (".",)
+
+
+def test_openapi_provider_detects_well_known_spec_files(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "openapi.yaml").write_text("openapi: 3.1.0\npaths: {}\n", encoding="utf-8")
+
+    support = Repository.support_for_path(repo_root)
+
+    assert support.provider_ids == ("openapi",)
+    assert support.detected_providers[0].provider_id == "openapi"
     assert tuple(item.attachment_root_rel_path for item in support.detected_providers[0].attachments) == (".",)
 
 

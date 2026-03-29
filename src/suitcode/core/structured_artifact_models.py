@@ -11,6 +11,7 @@ from suitcode.core.provenance import ProvenanceEntry
 class StructuredArtifactKind(StrEnum):
     __test__ = False
     MARKDOWN_DOCUMENT = "markdown_document"
+    OPENAPI_DOCUMENT = "openapi_document"
 
 
 class MarkdownSection(StrictModel):
@@ -95,9 +96,74 @@ class MarkdownDocumentStructure(StrictModel):
         return self
 
 
+class OpenApiOperation(StrictModel):
+    path: str
+    method: str
+    operation_id: str | None = None
+    line_start: int | None = None
+    line_end: int | None = None
+
+    @field_validator("path", "method")
+    @classmethod
+    def _validate_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("text fields must not be empty")
+        return value.strip()
+
+
+class OpenApiSchema(StrictModel):
+    name: str
+    line_start: int | None = None
+    line_end: int | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("name must not be empty")
+        return value.strip()
+
+
+class OpenApiTag(StrictModel):
+    name: str
+    line_start: int | None = None
+    line_end: int | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("name must not be empty")
+        return value.strip()
+
+
+class OpenApiDocumentStructure(StrictModel):
+    spec_version: str | None = None
+    path_count: int
+    operations: tuple[OpenApiOperation, ...]
+    schema_count: int
+    schemas: tuple[OpenApiSchema, ...]
+    tag_count: int
+    tags: tuple[OpenApiTag, ...]
+    provenance: tuple[ProvenanceEntry, ...]
+
+    @model_validator(mode="after")
+    def _validate_counts(self) -> "OpenApiDocumentStructure":
+        if self.path_count != len({item.path for item in self.operations}):
+            raise ValueError("path_count must match unique operation paths length")
+        if self.schema_count != len(self.schemas):
+            raise ValueError("schema_count must match schemas length")
+        if self.tag_count != len(self.tags):
+            raise ValueError("tag_count must match tags length")
+        if not self.provenance:
+            raise ValueError("provenance must not be empty")
+        return self
+
+
 class StructuredArtifact(StrictModel):
     artifact_kind: StructuredArtifactKind
     markdown: MarkdownDocumentStructure | None = None
+    openapi: OpenApiDocumentStructure | None = None
     provenance: tuple[ProvenanceEntry, ...]
 
     @model_validator(mode="after")
@@ -106,4 +172,6 @@ class StructuredArtifact(StrictModel):
             raise ValueError("provenance must not be empty")
         if self.artifact_kind == StructuredArtifactKind.MARKDOWN_DOCUMENT and self.markdown is None:
             raise ValueError("markdown payload is required for markdown_document artifacts")
+        if self.artifact_kind == StructuredArtifactKind.OPENAPI_DOCUMENT and self.openapi is None:
+            raise ValueError("openapi payload is required for openapi_document artifacts")
         return self

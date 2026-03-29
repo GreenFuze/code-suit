@@ -28,6 +28,7 @@ from suitcode.core.repository_models import OwnedNodeInfo
 from suitcode.core.tests.models import ResolvedRelatedTest, RelatedTestTarget, TestTargetDescription
 from suitcode.core.tests.models import DiscoveredTestDefinition, RelatedTestMatch
 from suitcode.core.intelligence_models import ComponentDependencyEdge
+from suitcode.core.structured_artifact_models import StructuredArtifact
 
 
 @dataclass(frozen=True)
@@ -726,7 +727,12 @@ class MinimumVerifiedChangeSetService:
 
     def get_minimum_verified_change_set(self, target: ChangeTarget) -> MinimumVerifiedChangeSet:
         resolved = self._candidate_resolver.resolve_target(target)
-        dependent_components = self._candidate_resolver.direct_dependent_components(resolved)
+        structured_artifacts = self._structured_artifacts_for_target(resolved)
+        dependent_components = (
+            tuple()
+            if structured_artifacts
+            else self._candidate_resolver.direct_dependent_components(resolved)
+        )
 
         related_tests = self._candidate_resolver.related_tests(resolved)
         tests, test_exclusions = self._minimizer.minimize_tests(
@@ -768,7 +774,7 @@ class MinimumVerifiedChangeSetService:
                 owner=resolved.owner,
                 actions=self._candidate_resolver.runner_actions(resolved.owner.id),
             )
-        else:
+        elif not structured_artifacts:
             for runner_id in self._candidate_resolver.related_runner_ids(resolved):
                 runner = self._repository.describe_runner(runner_id)
                 runner_exclusions.append(
@@ -816,6 +822,7 @@ class MinimumVerifiedChangeSetService:
             runner_actions=runner_actions,
             quality_validation_operations=quality_validation_operations,
             quality_hygiene_operations=quality_hygiene_operations,
+            availability_exclusions=availability_exclusions,
         )
 
         return MinimumVerifiedChangeSet(
@@ -865,6 +872,7 @@ class MinimumVerifiedChangeSetService:
         runner_actions: tuple[MinimumVerifiedRunnerAction, ...],
         quality_validation_operations: tuple[MinimumVerifiedQualityOperation, ...],
         quality_hygiene_operations: tuple[MinimumVerifiedQualityOperation, ...],
+        availability_exclusions: tuple[ExcludedMinimumVerifiedItem, ...],
     ) -> None:
         if any(
             (
@@ -875,6 +883,8 @@ class MinimumVerifiedChangeSetService:
                 quality_hygiene_operations,
             )
         ):
+            return
+        if availability_exclusions:
             return
         target_descriptor = resolved.evidence_path or resolved.owner.id
         raise ValueError(
@@ -892,6 +902,33 @@ class MinimumVerifiedChangeSetService:
         quality_validation_operations: tuple[MinimumVerifiedQualityOperation, ...],
         quality_hygiene_operations: tuple[MinimumVerifiedQualityOperation, ...],
     ) -> tuple[ExcludedMinimumVerifiedItem, ...]:
+        structured_artifacts = self._structured_artifacts_for_target(resolved)
+        if structured_artifacts:
+            evidence_paths = resolved.relevant_files[:10] or ((resolved.evidence_path,) if resolved.evidence_path is not None else tuple())
+            artifact_labels = tuple(sorted({artifact.artifact_kind.value for artifact in structured_artifacts}))
+            if len(artifact_labels) == 1:
+                artifact_label = artifact_labels[0]
+            else:
+                artifact_label = ", ".join(artifact_labels)
+            return (
+                self._evidence_assembler.exclusion(
+                    item_kind=MinimumVerifiedItemKind.VALIDATION_SURFACE,
+                    item_id=f"validation_surface:{resolved.evidence_path or resolved.owner.id}",
+                    reason_code=MinimumVerifiedExclusionReason.NO_DETERMINISTIC_VALIDATION_SURFACES_FOR_PROVIDER_OWNED_ARTIFACT,
+                    reason=(
+                        "target is provider-owned structured artifact content and exposes no deterministic validation surface; "
+                        f"supported artifact kinds: {artifact_label}"
+                    ),
+                    provenance=(
+                        derived_summary_provenance(
+                            source_kind=SourceKind.DOCUMENT,
+                            source_tool="structured_artifact",
+                            evidence_summary="provider-owned structured artifact target has no deterministic validation surface",
+                            evidence_paths=evidence_paths,
+                        ),
+                    ),
+                ),
+            )
         if tests:
             return tuple()
         remaining_surfaces: list[str] = []
@@ -928,6 +965,20 @@ class MinimumVerifiedChangeSetService:
                 ),
             ),
         )
+
+    def _structured_artifacts_for_target(
+        self,
+        resolved: _ResolvedMinimumTarget,
+    ) -> tuple[StructuredArtifact, ...]:
+        if not resolved.relevant_files:
+            return tuple()
+        artifacts: list[StructuredArtifact] = []
+        for repository_rel_path in resolved.relevant_files:
+            artifact = self._repository.describe_structured_artifact(repository_rel_path)
+            if artifact is None:
+                return tuple()
+            artifacts.append(artifact)
+        return tuple(artifacts)
 
 
 from typing import TYPE_CHECKING

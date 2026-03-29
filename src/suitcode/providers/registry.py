@@ -5,6 +5,7 @@ from pathlib import Path
 from suitcode.providers.go import GoProvider
 from suitcode.providers.markdown import MarkdownProvider
 from suitcode.providers.npm import NPMProvider
+from suitcode.providers.openapi import OpenApiProvider
 from suitcode.providers.provider_base import ProviderBase
 from suitcode.providers.provider_metadata import (
     DetectedProviderAttachment,
@@ -15,7 +16,7 @@ from suitcode.providers.provider_metadata import (
 )
 from suitcode.providers.python import PythonProvider
 
-BUILTIN_PROVIDER_CLASSES: tuple[type[ProviderBase], ...] = (GoProvider, MarkdownProvider, NPMProvider, PythonProvider)
+BUILTIN_PROVIDER_CLASSES: tuple[type[ProviderBase], ...] = (GoProvider, MarkdownProvider, NPMProvider, OpenApiProvider, PythonProvider)
 
 
 def _normalize_provider_classes(

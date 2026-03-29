@@ -35,6 +35,10 @@ from suitcode.mcp.models import (
     MarkdownFrontmatterView,
     MarkdownLinkView,
     MarkdownSectionView,
+    OpenApiDocumentStructureView,
+    OpenApiOperationView,
+    OpenApiSchemaView,
+    OpenApiTagView,
     MinimumVerifiedCompactItemView,
     MinimumVerifiedCompactSummaryView,
     MinimumVerifiedBuildTargetView,
@@ -159,6 +163,7 @@ class IntelligencePresenter:
 
     def structured_artifact_view(self, artifact: StructuredArtifact) -> StructuredArtifactView:
         markdown = None
+        openapi = None
         if artifact.artifact_kind == StructuredArtifactKind.MARKDOWN_DOCUMENT and artifact.markdown is not None:
             markdown = MarkdownDocumentStructureView(
                 section_count=artifact.markdown.section_count,
@@ -211,9 +216,43 @@ class IntelligencePresenter:
                     for item in artifact.markdown.checklist_items
                 ),
             )
+        if artifact.artifact_kind == StructuredArtifactKind.OPENAPI_DOCUMENT and artifact.openapi is not None:
+            openapi = OpenApiDocumentStructureView(
+                spec_version=artifact.openapi.spec_version,
+                path_count=artifact.openapi.path_count,
+                operations=tuple(
+                    OpenApiOperationView(
+                        path=item.path,
+                        method=item.method,
+                        operation_id=item.operation_id,
+                        line_start=item.line_start,
+                        line_end=item.line_end,
+                    )
+                    for item in artifact.openapi.operations
+                ),
+                schema_count=artifact.openapi.schema_count,
+                schemas=tuple(
+                    OpenApiSchemaView(
+                        name=item.name,
+                        line_start=item.line_start,
+                        line_end=item.line_end,
+                    )
+                    for item in artifact.openapi.schemas
+                ),
+                tag_count=artifact.openapi.tag_count,
+                tags=tuple(
+                    OpenApiTagView(
+                        name=item.name,
+                        line_start=item.line_start,
+                        line_end=item.line_end,
+                    )
+                    for item in artifact.openapi.tags
+                ),
+            )
         return StructuredArtifactView(
             artifact_kind=artifact.artifact_kind.value,
             markdown=markdown,
+            openapi=openapi,
             provenance=provenance_views(artifact.provenance),
         )
 
