@@ -81,6 +81,7 @@ class ContextService:
         for repository_rel_path in repository_rel_paths:
             file_owner = self._ownership_index.owner_for_file(repository_rel_path)
             symbols = self._repository.code.list_symbols_in_file(repository_rel_path)
+            reference_sites = self._code_reference_service.references_for_file(repository_rel_path)
             dependency_files = self._repository.code.get_file_relationships(
                 repository_rel_path,
                 relationship_kind=FileRelationshipKind.IMPORTS,
@@ -97,6 +98,8 @@ class ContextService:
                 repository_rel_path,
                 relationship_kind=RenderEdgeKind.RENDERED_BY,
             )
+            invariant_findings = self._repository.code.get_file_invariant_findings(repository_rel_path)
+            local_flow_edges = self._repository.code.get_file_local_flow_edges(repository_rel_path)
             implementation_locations = self._repository.code.get_file_implementation_locations(repository_rel_path)
             related_tests = self._repository.tests.get_related_tests(RelatedTestTarget(repository_rel_path=repository_rel_path))
             contexts.append(
@@ -105,6 +108,8 @@ class ContextService:
                     owner=file_owner.owner,
                     symbol_count=len(symbols),
                     symbols_preview=symbols[:symbol_preview_limit],
+                    reference_site_count=len(reference_sites),
+                    reference_sites_preview=reference_sites[:symbol_preview_limit],
                     dependency_file_count=len(dependency_files),
                     dependency_files_preview=dependency_files[:symbol_preview_limit],
                     dependent_file_count=len(dependent_files),
@@ -113,6 +118,10 @@ class ContextService:
                     render_children_preview=render_children[:symbol_preview_limit],
                     render_parent_count=len(render_parents),
                     render_parents_preview=render_parents[:symbol_preview_limit],
+                    invariant_finding_count=len(invariant_findings),
+                    invariant_findings_preview=invariant_findings[:symbol_preview_limit],
+                    local_flow_edge_count=len(local_flow_edges),
+                    local_flow_edges_preview=local_flow_edges[:symbol_preview_limit],
                     implementation_location_count=len(implementation_locations),
                     implementation_locations_preview=implementation_locations[:symbol_preview_limit],
                     related_test_count=len(related_tests),
@@ -123,10 +132,13 @@ class ContextService:
                     provenance=self._file_context_provenance(
                         repository_rel_path,
                         symbols,
+                        reference_sites,
                         dependency_files,
                         dependent_files,
                         render_children,
                         render_parents,
+                        invariant_findings,
+                        local_flow_edges,
                         implementation_locations,
                         related_tests,
                     ),
@@ -196,10 +208,13 @@ class ContextService:
         self,
         repository_rel_path: str,
         symbols,
+        reference_sites,
         dependency_files,
         dependent_files,
         render_children,
         render_parents,
+        invariant_findings,
+        local_flow_edges,
         implementation_locations,
         related_tests,
     ) -> tuple[ProvenanceEntry, ...]:
@@ -215,6 +230,15 @@ class ContextService:
                     source_tool=self._lsp_tool_for_path(repository_rel_path),
                     evidence_summary=f"file symbols derived from LSP document symbols for `{repository_rel_path}`",
                     evidence_paths=(repository_rel_path,),
+                )
+            )
+        if reference_sites:
+            entries.append(
+                derived_summary_provenance(
+                    source_kind=SourceKind.LSP,
+                    source_tool=self._reference_source_tool(repository_rel_path, reference_sites),
+                    evidence_summary=f"exact reference sites derived from deterministic symbol-reference queries for `{repository_rel_path}`",
+                    evidence_paths=self._summarized_reference_paths(repository_rel_path, reference_sites),
                 )
             )
         if dependency_files or dependent_files:
@@ -244,6 +268,21 @@ class ContextService:
                         repository_rel_path,
                         render_children,
                         render_parents,
+                    ),
+                )
+            )
+        if invariant_findings or local_flow_edges:
+            entries.append(
+                derived_summary_provenance(
+                    source_kind=SourceKind.DEPENDENCY_GRAPH,
+                    source_tool=self._static_analysis_source_tool(repository_rel_path, invariant_findings, local_flow_edges),
+                    evidence_summary=(
+                        f"file context includes deterministic TypeScript static analysis findings for `{repository_rel_path}`"
+                    ),
+                    evidence_paths=self._summarized_static_analysis_paths(
+                        repository_rel_path,
+                        invariant_findings,
+                        local_flow_edges,
                     ),
                 )
             )
@@ -294,6 +333,18 @@ class ContextService:
         return tuple(paths[:10])
 
     @staticmethod
+    def _summarized_reference_paths(repository_rel_path: str, reference_sites) -> tuple[str, ...]:
+        paths: list[str] = [repository_rel_path]
+        for item in reference_sites:
+            if item.repository_rel_path not in paths:
+                paths.append(item.repository_rel_path)
+            for provenance in item.provenance:
+                for path in provenance.evidence_paths:
+                    if path not in paths:
+                        paths.append(path)
+        return tuple(paths[:10])
+
+    @staticmethod
     def _summarized_render_paths(repository_rel_path: str, render_children, render_parents) -> tuple[str, ...]:
         paths: list[str] = [repository_rel_path]
         for item in (*render_children, *render_parents):
@@ -315,6 +366,20 @@ class ContextService:
                 for path in provenance.evidence_paths:
                     if path not in paths:
                         paths.append(path)
+        return tuple(paths[:10])
+
+    @staticmethod
+    def _summarized_static_analysis_paths(repository_rel_path: str, invariant_findings, local_flow_edges) -> tuple[str, ...]:
+        paths: list[str] = [repository_rel_path]
+        for item in invariant_findings:
+            if item.repository_rel_path not in paths:
+                paths.append(item.repository_rel_path)
+            for producer in item.producer_sites_preview:
+                if producer.repository_rel_path not in paths:
+                    paths.append(producer.repository_rel_path)
+        for item in local_flow_edges:
+            if item.repository_rel_path not in paths:
+                paths.append(item.repository_rel_path)
         return tuple(paths[:10])
 
     @staticmethod
@@ -354,10 +419,28 @@ class ContextService:
         return preferred_source_tool(provenance) if provenance else ContextService._lsp_tool_for_path(repository_rel_path)
 
     @staticmethod
+    def _reference_source_tool(repository_rel_path: str, reference_sites) -> str | None:
+        provenance = tuple(
+            entry
+            for item in reference_sites
+            for entry in item.provenance
+        )
+        return preferred_source_tool(provenance) if provenance else ContextService._lsp_tool_for_path(repository_rel_path)
+
+    @staticmethod
     def _render_source_tool(repository_rel_path: str, render_children, render_parents) -> str | None:
         provenance = tuple(
             entry
             for item in (*render_children, *render_parents)
+            for entry in item.provenance
+        )
+        return preferred_source_tool(provenance) if provenance else ContextService._lsp_tool_for_path(repository_rel_path)
+
+    @staticmethod
+    def _static_analysis_source_tool(repository_rel_path: str, invariant_findings, local_flow_edges) -> str | None:
+        provenance = tuple(
+            entry
+            for item in (*invariant_findings, *local_flow_edges)
             for entry in item.provenance
         )
         return preferred_source_tool(provenance) if provenance else ContextService._lsp_tool_for_path(repository_rel_path)

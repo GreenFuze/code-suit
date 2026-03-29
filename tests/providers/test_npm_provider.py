@@ -16,8 +16,13 @@ from suitcode.core.intelligence_models import (
     DependencyRef,
     FileRelationshipKind,
     FileRelationshipRef,
+    InvariantAccessKind,
+    InvariantFindingKind,
+    InvariantFindingRef,
     RenderEdgeKind,
     RenderEdgeRef,
+    StaticFlowEdgeKind,
+    StaticFlowEdgeRef,
 )
 from suitcode.core.runner_service import RunnerService
 from suitcode.core.provenance import SourceKind
@@ -47,6 +52,7 @@ from suitcode.providers.npm.models import (
     NpmRunnerAnalysis,
     NpmTestAnalysis,
 )
+from suitcode.providers.npm.static_analysis_service import NpmStaticAnalysisService
 from suitcode.providers.npm.symbol_models import NpmWorkspaceSymbol
 from suitcode.providers.runtime_capability_models import RuntimeCapabilityAvailability
 from tests.providers.npm.expected_npm_provider_data import (
@@ -287,6 +293,146 @@ def test_npm_provider_returns_render_edges_from_provider_service(npm_provider: N
     assert edges[0].relationship_kind == RenderEdgeKind.RENDERS
     assert edges[0].repository_rel_path == "packages/ui/src/Button.tsx"
     assert edges[0].prop_names == ("label", "onClick")
+
+
+def test_npm_provider_returns_static_analysis_from_provider_service(npm_provider: NPMProvider) -> None:
+    class _FakeStaticAnalysisService:
+        def get_file_analysis(self, repository_rel_path: str):
+            assert repository_rel_path == "packages/core/src/index.tsx"
+            findings = (
+                InvariantFindingRef(
+                    repository_rel_path="packages/core/src/index.tsx",
+                    finding_kind=InvariantFindingKind.MAYBE_MISSING_FIELD_ACCESS,
+                    access_kind=InvariantAccessKind.METHOD_CALL,
+                    line_start=24,
+                    column_start=9,
+                    field_name="status",
+                    subject_label="integration",
+                    declared_type="string | undefined",
+                    producer_site_count=0,
+                    producer_sites_preview=tuple(),
+                    provenance=(
+                        dependency_graph_provenance(
+                            source_tool="typescript",
+                            evidence_summary="deterministic TS analysis found maybe-missing field access",
+                            evidence_paths=("packages/core/src/index.tsx",),
+                        ),
+                    ),
+                ),
+            )
+            flows = (
+                StaticFlowEdgeRef(
+                    repository_rel_path="packages/core/src/index.tsx",
+                    edge_kind=StaticFlowEdgeKind.PRODUCES_VALUE_FOR,
+                    line_start=30,
+                    column_start=5,
+                    source_label="toStateMap",
+                    target_label="setState",
+                    provenance=(
+                        dependency_graph_provenance(
+                            source_tool="typescript",
+                            evidence_summary="deterministic TS analysis found local flow edge",
+                            evidence_paths=("packages/core/src/index.tsx",),
+                        ),
+                    ),
+                ),
+            )
+            return findings, flows
+
+    npm_provider._static_analysis_service = _FakeStaticAnalysisService()  # type: ignore[assignment]
+
+    findings = npm_provider.get_file_invariant_findings("packages/core/src/index.tsx")
+    flows = npm_provider.get_file_local_flow_edges("packages/core/src/index.tsx")
+
+    assert len(findings) == 1
+    assert findings[0].field_name == "status"
+    assert findings[0].access_kind == InvariantAccessKind.METHOD_CALL
+    assert len(flows) == 1
+    assert flows[0].source_label == "toStateMap"
+    assert flows[0].target_label == "setState"
+
+
+def test_static_analysis_service_coerces_findings_with_producer_sites() -> None:
+    findings = NpmStaticAnalysisService._coerce_findings(
+        [
+            {
+                "path": "packages/core/src/index.tsx",
+                "access_kind": "method_call",
+                "line_start": 24,
+                "column_start": 9,
+                "field_name": "status",
+                "subject_label": "integration",
+                "declared_type": "string | undefined",
+                "producer_sites": [
+                    {
+                        "path": "packages/core/src/index.tsx",
+                        "line_start": 12,
+                        "column_start": 3,
+                        "label": "toStateMap",
+                    }
+                ],
+            }
+        ]
+    )
+
+    assert len(findings) == 1
+    assert findings[0]["producer_sites"][0]["label"] == "toStateMap"
+
+
+def test_static_analysis_service_detects_optional_field_access_and_local_flow(tmp_path) -> None:
+    repo_root = tmp_path / "frontend"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "tsconfig.json").write_text(
+        """
+        {
+          "compilerOptions": {
+            "target": "ES2020",
+            "module": "ESNext",
+            "moduleResolution": "Node",
+            "strict": true
+          },
+          "include": ["src/**/*"]
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "analysis.ts").write_text(
+        """
+        type Item = { status?: string };
+
+        function buildItem(): Item {
+          return {};
+        }
+
+        function formatItem(item: Item): string {
+          return item.status.replace(/_/g, " ");
+        }
+
+        const next = buildItem();
+        export const label = formatItem(next);
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    service = NpmStaticAnalysisService(
+        repository_root=repo_root,
+        attachment_root=repo_root,
+    )
+
+    findings, flows = service.get_file_analysis("src/analysis.ts")
+
+    assert any(item.field_name == "status" for item in findings)
+    assert any(item.source_label == "buildItem" and item.target_label == "next" for item in flows)
 
 
 def test_npm_provider_internal_symbol_analysis_stays_npm_specific(npm_provider: NPMProvider) -> None:

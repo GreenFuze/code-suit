@@ -236,6 +236,37 @@ class RenderEdgeView(StrictModel):
     provenance: tuple[ProvenanceView, ...]
 
 
+class StaticAnalysisSiteView(StrictModel):
+    path: str
+    line_start: int
+    column_start: int
+    label: str
+    provenance: tuple[ProvenanceView, ...]
+
+
+class InvariantFindingView(StrictModel):
+    path: str
+    line_start: int
+    column_start: int
+    field_name: str
+    access_kind: str
+    subject_label: str
+    declared_type: str | None = None
+    producer_site_count: int
+    producer_sites_preview: tuple[StaticAnalysisSiteView, ...]
+    provenance: tuple[ProvenanceView, ...]
+
+
+class StaticFlowEdgeView(StrictModel):
+    path: str
+    line_start: int
+    column_start: int
+    edge_kind: str
+    source_label: str
+    target_label: str
+    provenance: tuple[ProvenanceView, ...]
+
+
 class MarkdownSectionView(StrictModel):
     heading: str
     depth: int
@@ -461,6 +492,8 @@ class FileContextView(StrictModel):
     owner: OwnerView
     symbol_count: int
     symbols_preview: tuple[SymbolView, ...]
+    reference_site_count: int
+    reference_sites_preview: tuple[LocationView, ...]
     dependency_file_count: int
     dependency_files_preview: tuple[FileRelationshipView, ...]
     dependent_file_count: int
@@ -469,6 +502,10 @@ class FileContextView(StrictModel):
     render_children_preview: tuple[RenderEdgeView, ...]
     render_parent_count: int
     render_parents_preview: tuple[RenderEdgeView, ...]
+    invariant_finding_count: int
+    invariant_findings_preview: tuple[InvariantFindingView, ...]
+    local_flow_edge_count: int
+    local_flow_edges_preview: tuple[StaticFlowEdgeView, ...]
     implementation_location_count: int
     implementation_locations_preview: tuple[LocationView, ...]
     related_test_count: int
@@ -550,6 +587,8 @@ class ChangeImpactView(StrictModel):
     dependent_files: tuple[FileRelationshipView, ...]
     render_children: tuple[RenderEdgeView, ...]
     render_parents: tuple[RenderEdgeView, ...]
+    invariant_findings: tuple[InvariantFindingView, ...]
+    local_flow_edges: tuple[StaticFlowEdgeView, ...]
     implementation_locations: tuple[LocationView, ...]
     implementation_components: tuple[ComponentView, ...]
     dependent_components: tuple[ComponentView, ...]
@@ -831,6 +870,8 @@ class FileUnderstandingTargetView(StrictModel):
     detail_level: str
     repository_rel_path: str
     file_owner: FileOwnerView
+    reference_site_count: int
+    reference_sites_preview: tuple[LocationView, ...]
     dependency_file_count: int
     dependency_files_preview: tuple[FileRelationshipView, ...]
     dependent_file_count: int
@@ -839,6 +880,10 @@ class FileUnderstandingTargetView(StrictModel):
     render_children_preview: tuple[RenderEdgeView, ...]
     render_parent_count: int
     render_parents_preview: tuple[RenderEdgeView, ...]
+    invariant_finding_count: int
+    invariant_findings_preview: tuple[InvariantFindingView, ...]
+    local_flow_edge_count: int
+    local_flow_edges_preview: tuple[StaticFlowEdgeView, ...]
     implementation_location_count: int
     implementation_locations_preview: tuple[LocationView, ...]
     related_tests: tuple[RelatedTestView, ...]
@@ -851,6 +896,8 @@ class FileUnderstandingView(StrictModel):
     target_count: int
     targets: tuple[FileUnderstandingTargetView, ...]
     owner_ids: tuple[str, ...]
+    aggregate_reference_site_count: int
+    aggregate_reference_sites_preview: tuple[LocationView, ...]
     aggregate_dependency_file_count: int
     aggregate_dependency_files_preview: tuple[FileRelationshipView, ...]
     aggregate_dependent_file_count: int
@@ -859,6 +906,10 @@ class FileUnderstandingView(StrictModel):
     aggregate_render_children_preview: tuple[RenderEdgeView, ...]
     aggregate_render_parent_count: int
     aggregate_render_parents_preview: tuple[RenderEdgeView, ...]
+    aggregate_invariant_finding_count: int
+    aggregate_invariant_findings_preview: tuple[InvariantFindingView, ...]
+    aggregate_local_flow_edge_count: int
+    aggregate_local_flow_edges_preview: tuple[StaticFlowEdgeView, ...]
     aggregate_implementation_location_count: int
     aggregate_implementation_locations_preview: tuple[LocationView, ...]
     aggregate_related_tests: tuple[RelatedTestView, ...]
@@ -870,6 +921,8 @@ class FileUnderstandingCompactTargetView(StrictModel):
     detail_level: str
     repository_rel_path: str
     file_owner: FileOwnerView
+    reference_site_count: int
+    reference_sites_preview: tuple[LocationView, ...]
     dependency_file_count: int
     dependency_files_preview: tuple[FileRelationshipView, ...]
     dependent_file_count: int
@@ -878,6 +931,10 @@ class FileUnderstandingCompactTargetView(StrictModel):
     render_children_preview: tuple[RenderEdgeView, ...]
     render_parent_count: int
     render_parents_preview: tuple[RenderEdgeView, ...]
+    invariant_finding_count: int
+    invariant_findings_preview: tuple[InvariantFindingView, ...]
+    local_flow_edge_count: int
+    local_flow_edges_preview: tuple[StaticFlowEdgeView, ...]
     related_test_count: int
     related_tests: tuple[RelatedTestView, ...]
     structured_artifact: StructuredArtifactView | None = None
@@ -888,6 +945,8 @@ class FileUnderstandingCompactView(StrictModel):
     target_count: int
     targets: tuple[FileUnderstandingCompactTargetView, ...]
     owner_ids: tuple[str, ...]
+    aggregate_reference_site_count: int
+    aggregate_reference_sites_preview: tuple[LocationView, ...]
     aggregate_dependency_file_count: int
     aggregate_dependency_files_preview: tuple[FileRelationshipView, ...]
     aggregate_dependent_file_count: int
@@ -896,6 +955,10 @@ class FileUnderstandingCompactView(StrictModel):
     aggregate_render_children_preview: tuple[RenderEdgeView, ...]
     aggregate_render_parent_count: int
     aggregate_render_parents_preview: tuple[RenderEdgeView, ...]
+    aggregate_invariant_finding_count: int
+    aggregate_invariant_findings_preview: tuple[InvariantFindingView, ...]
+    aggregate_local_flow_edge_count: int
+    aggregate_local_flow_edges_preview: tuple[StaticFlowEdgeView, ...]
     aggregate_related_tests: tuple[RelatedTestView, ...]
     suggested_follow_ups: tuple[str, ...]
 
@@ -904,6 +967,8 @@ class FileUnderstandingStandardTargetView(StrictModel):
     detail_level: str
     repository_rel_path: str
     file_owner: FileOwnerView
+    reference_site_count: int
+    reference_sites_preview: tuple[LocationView, ...]
     dependency_file_count: int
     dependency_files_preview: tuple[FileRelationshipView, ...]
     dependent_file_count: int
@@ -912,6 +977,10 @@ class FileUnderstandingStandardTargetView(StrictModel):
     render_children_preview: tuple[RenderEdgeView, ...]
     render_parent_count: int
     render_parents_preview: tuple[RenderEdgeView, ...]
+    invariant_finding_count: int
+    invariant_findings_preview: tuple[InvariantFindingView, ...]
+    local_flow_edge_count: int
+    local_flow_edges_preview: tuple[StaticFlowEdgeView, ...]
     implementation_location_count: int
     implementation_locations_preview: tuple[LocationView, ...]
     related_test_count: int
@@ -924,6 +993,8 @@ class FileUnderstandingStandardView(StrictModel):
     target_count: int
     targets: tuple[FileUnderstandingStandardTargetView, ...]
     owner_ids: tuple[str, ...]
+    aggregate_reference_site_count: int
+    aggregate_reference_sites_preview: tuple[LocationView, ...]
     aggregate_dependency_file_count: int
     aggregate_dependency_files_preview: tuple[FileRelationshipView, ...]
     aggregate_dependent_file_count: int
@@ -932,6 +1003,10 @@ class FileUnderstandingStandardView(StrictModel):
     aggregate_render_children_preview: tuple[RenderEdgeView, ...]
     aggregate_render_parent_count: int
     aggregate_render_parents_preview: tuple[RenderEdgeView, ...]
+    aggregate_invariant_finding_count: int
+    aggregate_invariant_findings_preview: tuple[InvariantFindingView, ...]
+    aggregate_local_flow_edge_count: int
+    aggregate_local_flow_edges_preview: tuple[StaticFlowEdgeView, ...]
     aggregate_implementation_location_count: int
     aggregate_implementation_locations_preview: tuple[LocationView, ...]
     aggregate_related_tests: tuple[RelatedTestView, ...]
@@ -948,9 +1023,12 @@ class BatchChangeImpactView(StrictModel):
     target_count: int
     targets: tuple[BatchChangeImpactTargetView, ...]
     owner_ids: tuple[str, ...]
+    reference_sites: tuple[LocationView, ...]
     dependent_files: tuple[FileRelationshipView, ...]
     render_children: tuple[RenderEdgeView, ...]
     render_parents: tuple[RenderEdgeView, ...]
+    invariant_findings: tuple[InvariantFindingView, ...]
+    local_flow_edges: tuple[StaticFlowEdgeView, ...]
     implementation_locations: tuple[LocationView, ...]
     implementation_components: tuple[ComponentView, ...]
     dependent_components: tuple[ComponentView, ...]
@@ -966,9 +1044,12 @@ class BatchChangeImpactCompactTargetView(StrictModel):
     repository_rel_path: str
     owner: OwnerView
     primary_component: ComponentView | None = None
+    reference_sites: tuple[LocationView, ...]
     dependent_files: tuple[FileRelationshipView, ...]
     render_children: tuple[RenderEdgeView, ...]
     render_parents: tuple[RenderEdgeView, ...]
+    invariant_findings: tuple[InvariantFindingView, ...]
+    local_flow_edges: tuple[StaticFlowEdgeView, ...]
     dependent_components: tuple[ComponentView, ...]
     related_tests: tuple[TestImpactView, ...]
     related_runners: tuple[RunnerImpactView, ...]
@@ -980,9 +1061,12 @@ class BatchChangeImpactCompactView(StrictModel):
     target_count: int
     targets: tuple[BatchChangeImpactCompactTargetView, ...]
     owner_ids: tuple[str, ...]
+    reference_sites: tuple[LocationView, ...]
     dependent_files: tuple[FileRelationshipView, ...]
     render_children: tuple[RenderEdgeView, ...]
     render_parents: tuple[RenderEdgeView, ...]
+    invariant_findings: tuple[InvariantFindingView, ...]
+    local_flow_edges: tuple[StaticFlowEdgeView, ...]
     dependent_components: tuple[ComponentView, ...]
     related_tests: tuple[TestImpactView, ...]
     related_runners: tuple[RunnerImpactView, ...]
@@ -994,10 +1078,13 @@ class BatchChangeImpactStandardTargetView(StrictModel):
     repository_rel_path: str
     owner: OwnerView
     primary_component: ComponentView | None = None
+    reference_sites: tuple[LocationView, ...]
     dependency_files: tuple[FileRelationshipView, ...]
     dependent_files: tuple[FileRelationshipView, ...]
     render_children: tuple[RenderEdgeView, ...]
     render_parents: tuple[RenderEdgeView, ...]
+    invariant_findings: tuple[InvariantFindingView, ...]
+    local_flow_edges: tuple[StaticFlowEdgeView, ...]
     implementation_locations: tuple[LocationView, ...]
     implementation_components: tuple[ComponentView, ...]
     dependent_components: tuple[ComponentView, ...]
@@ -1012,9 +1099,12 @@ class BatchChangeImpactStandardView(StrictModel):
     target_count: int
     targets: tuple[BatchChangeImpactStandardTargetView, ...]
     owner_ids: tuple[str, ...]
+    reference_sites: tuple[LocationView, ...]
     dependent_files: tuple[FileRelationshipView, ...]
     render_children: tuple[RenderEdgeView, ...]
     render_parents: tuple[RenderEdgeView, ...]
+    invariant_findings: tuple[InvariantFindingView, ...]
+    local_flow_edges: tuple[StaticFlowEdgeView, ...]
     implementation_locations: tuple[LocationView, ...]
     implementation_components: tuple[ComponentView, ...]
     dependent_components: tuple[ComponentView, ...]

@@ -5,7 +5,17 @@ from pathlib import Path
 
 import pytest
 from suitcode.core.build_service import BuildService
-from suitcode.core.intelligence_models import FileRelationshipKind, FileRelationshipRef, RenderEdgeKind, RenderEdgeRef
+from suitcode.core.intelligence_models import (
+    FileRelationshipKind,
+    FileRelationshipRef,
+    InvariantAccessKind,
+    InvariantFindingKind,
+    InvariantFindingRef,
+    RenderEdgeKind,
+    RenderEdgeRef,
+    StaticFlowEdgeKind,
+    StaticFlowEdgeRef,
+)
 from suitcode.core.provenance_builders import dependency_graph_provenance
 from suitcode.core.runner_service import RunnerService
 from suitcode.mcp.errors import McpNotFoundError, McpUnsupportedRepositoryError, McpValidationError
@@ -59,10 +69,13 @@ def test_service_core_tools_reuse_existing_repository_intelligence(service: Suit
     assert understanding.provenance
     assert file_understanding.target_count == 1
     assert file_understanding.targets[0].file_owner.owner.id == "component:npm:@monorepo/core"
+    assert file_understanding.targets[0].reference_site_count >= 1
+    assert file_understanding.targets[0].reference_sites_preview
     assert file_understanding.aggregate_related_tests
     assert file_understanding.provenance
     assert impact.target_count == 1
     assert impact.targets[0].impact.target_kind == "file"
+    assert impact.reference_sites
     assert impact.provenance
     assert minimum.target_count == 1
     assert minimum.compact_summary.required_validation_count >= 1
@@ -85,8 +98,10 @@ def test_service_core_tools_default_to_compact_detail_level(service: SuitMcpServ
 
     assert file_understanding.detail_level == "compact"
     assert not hasattr(file_understanding, "provenance")
+    assert hasattr(file_understanding.targets[0], "reference_sites_preview")
     assert impact.detail_level == "compact"
     assert not hasattr(impact, "provenance")
+    assert hasattr(impact.targets[0], "reference_sites")
 
 
 def test_core_tools_reject_invalid_detail_level(service: SuitMcpService, npm_repo_root: Path) -> None:
@@ -323,6 +338,37 @@ def test_understand_file_returns_markdown_structure(service: SuitMcpService, tmp
     assert target.structured_artifact.markdown.frontmatter.keys == ("title", "owner")
     assert target.structured_artifact.markdown.checklist_item_count == 2
     assert understanding.suggested_follow_ups == tuple()
+
+
+def test_understand_file_compact_shapes_large_markdown_checklists(service: SuitMcpService, tmp_path: Path) -> None:
+    repo_root = tmp_path / "docs-compact"
+    (repo_root / ".git").mkdir(parents=True)
+    checklist = "".join(f"- [ ] item {index}\n" for index in range(1, 9))
+    (repo_root / "roadmap.md").write_text(
+        "# Checklist\n\n"
+        f"{checklist}",
+        encoding="utf-8",
+    )
+
+    compact = service.understand_file(
+        str(repo_root),
+        ("roadmap.md",),
+        detail_level="compact",
+    )
+    full = service.understand_file(
+        str(repo_root),
+        ("roadmap.md",),
+        detail_level="full",
+    )
+
+    compact_markdown = compact.targets[0].structured_artifact.markdown
+    full_markdown = full.targets[0].structured_artifact.markdown
+
+    assert compact_markdown is not None
+    assert full_markdown is not None
+    assert compact_markdown.checklist_item_count == 8
+    assert len(compact_markdown.checklist_items) == 3
+    assert len(full_markdown.checklist_items) == 8
 
 
 def test_understand_file_returns_openapi_structure(service: SuitMcpService, tmp_path: Path) -> None:
@@ -1167,9 +1213,53 @@ def test_service_exposes_component_file_and_impact_context(service: SuitMcpServi
                 ),
             )
 
+    class _FakeStaticAnalysisService:
+        def get_file_analysis(self, repository_rel_path: str):
+            assert repository_rel_path == "packages/core/src/index.ts"
+            findings = (
+                InvariantFindingRef(
+                    repository_rel_path="packages/core/src/index.ts",
+                    finding_kind=InvariantFindingKind.MAYBE_MISSING_FIELD_ACCESS,
+                    access_kind=InvariantAccessKind.METHOD_CALL,
+                    line_start=14,
+                    column_start=9,
+                    field_name="status",
+                    subject_label="integration",
+                    declared_type="string | undefined",
+                    producer_site_count=0,
+                    producer_sites_preview=tuple(),
+                    provenance=(
+                        dependency_graph_provenance(
+                            source_tool="typescript",
+                            evidence_summary="deterministic TS analysis found maybe-missing field access",
+                            evidence_paths=("packages/core/src/index.ts",),
+                        ),
+                    ),
+                ),
+            )
+            flows = (
+                StaticFlowEdgeRef(
+                    repository_rel_path="packages/core/src/index.ts",
+                    edge_kind=StaticFlowEdgeKind.PRODUCES_VALUE_FOR,
+                    line_start=18,
+                    column_start=5,
+                    source_label="toStateMap",
+                    target_label="setState",
+                    provenance=(
+                        dependency_graph_provenance(
+                            source_tool="typescript",
+                            evidence_summary="deterministic TS analysis found local flow edge",
+                            evidence_paths=("packages/core/src/index.ts",),
+                        ),
+                    ),
+                ),
+            )
+            return findings, flows
+
     provider._file_symbol_service = _FakeFileSymbolService()  # type: ignore[attr-defined]
     provider._file_relationship_service = _FakeRelationshipService()  # type: ignore[attr-defined]
     provider._render_edge_service = _FakeRenderEdgeService()  # type: ignore[attr-defined]
+    provider._static_analysis_service = _FakeStaticAnalysisService()  # type: ignore[attr-defined]
 
     component_contexts = service.describe_components(
         workspace_id,
@@ -1225,6 +1315,8 @@ def test_service_exposes_component_file_and_impact_context(service: SuitMcpServi
     assert [item.path for item in file_contexts[0].dependent_files_preview] == ["packages/utils/src/index.ts"]
     assert [item.path for item in file_contexts[0].render_children_preview] == ["packages/ui/src/Button.tsx"]
     assert file_contexts[0].render_children_preview[0].prop_names == ("label", "variant")
+    assert [item.field_name for item in file_contexts[0].invariant_findings_preview] == ["status"]
+    assert [item.target_label for item in file_contexts[0].local_flow_edges_preview] == ["setState"]
     assert file_contexts[0].file.provenance
     assert symbol_context.symbol.name == "Core"
     assert symbol_context.symbol.provenance
@@ -1241,6 +1333,8 @@ def test_service_exposes_component_file_and_impact_context(service: SuitMcpServi
     assert [item.path for item in change.dependent_files] == ["packages/utils/src/index.ts"]
     assert [item.path for item in change.render_children] == ["packages/ui/src/Button.tsx"]
     assert change.render_children[0].prop_names == ("label", "variant")
+    assert [item.field_name for item in change.invariant_findings] == ["status"]
+    assert [item.target_label for item in change.local_flow_edges] == ["setState"]
     assert change.reference_locations
     assert change.related_tests
     assert isinstance(change.related_runners, tuple)

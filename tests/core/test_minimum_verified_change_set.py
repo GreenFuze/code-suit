@@ -14,6 +14,7 @@ from suitcode.core.minimum_verified_change_set_models import (
     QualityOperationScope,
 )
 from suitcode.core.provenance_builders import heuristic_provenance
+from suitcode.core.tests.models import DiscoveredTestDefinition, RelatedTestMatch, ResolvedRelatedTest
 from suitcode.core.workspace import Workspace
 
 
@@ -179,6 +180,67 @@ def test_minimum_verified_change_set_uses_direct_dependent_build_when_no_tests_e
         "directly dependent buildable component is the narrowest deterministic build surface"
     )
     assert change_set.provenance
+
+
+def test_minimum_verified_change_set_prefers_direct_build_over_dependent_tests(npm_repo_root, monkeypatch) -> None:
+    repository = Workspace(npm_repo_root).repositories[0]
+    service = repository._build_minimum_verified_change_set_service()  # type: ignore[attr-defined]
+
+    dependent_component = next(
+        component
+        for component in repository.arch.get_components()
+        if component.id == "component:npm:@monorepo/utils"
+    )
+    dependency_edges = tuple(
+        edge
+        for edge in repository.arch.get_component_dependency_edges("component:npm:@monorepo/utils")
+        if edge.target_id == "component:npm:@monorepo/core"
+    )
+
+    monkeypatch.setattr(service._candidate_resolver, "related_tests", lambda resolved: tuple())
+    monkeypatch.setattr(
+        service._candidate_resolver,
+        "direct_dependent_components",
+        lambda resolved: (
+            type(
+                "_ResolvedDependentComponent",
+                (),
+                {"component": dependent_component, "dependency_edges": dependency_edges},
+            )(),
+        ),
+    )
+    monkeypatch.setattr(
+        service._candidate_resolver,
+        "related_tests_for_dependent_components",
+        lambda dependents: (
+            (
+                ResolvedRelatedTest(
+                    match=RelatedTestMatch(
+                        test_definition=repository.describe_test_target("test:npm:@monorepo/utils").test_definition,
+                        relation_reason="dependent_component",
+                        matched_owner_id="component:npm:@monorepo/utils",
+                    ),
+                    discovered_test=DiscoveredTestDefinition(
+                        test_definition=repository.describe_test_target("test:npm:@monorepo/utils").test_definition,
+                        provenance=repository.describe_test_target("test:npm:@monorepo/utils").provenance,
+                    ),
+                ),
+                dependency_edges[0].provenance,
+            ),
+        ),
+    )
+
+    change_set = service.get_minimum_verified_change_set(
+        ChangeTarget(repository_rel_path="packages/core/src/index.ts")
+    )
+
+    assert change_set.tests == tuple()
+    assert [item.target.action_id for item in change_set.build_targets] == ["action:npm:build:@monorepo/core"]
+    assert any(
+        item.reason_code.value == "dependent_test_replaced_by_narrower_build"
+        and item.item_id == "test:npm:@monorepo/utils"
+        for item in change_set.excluded_items
+    )
 
 
 def test_minimum_verified_change_set_fails_cleanly_when_no_surfaces_exist(tmp_path: Path) -> None:

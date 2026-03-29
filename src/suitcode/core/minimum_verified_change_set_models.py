@@ -27,6 +27,7 @@ class MinimumVerifiedExclusionReason(StrEnum):
     __test__ = False
     DUPLICATE_REPLACED_BY_STRONGER_MATCH = "duplicate_replaced_by_stronger_match"
     BROAD_TEST_REPLACED_BY_SPECIFIC_TESTS = "broad_test_replaced_by_specific_tests"
+    DEPENDENT_TEST_REPLACED_BY_NARROWER_BUILD = "dependent_test_replaced_by_narrower_build"
     REPOSITORY_BUILD_REPLACED_BY_NARROWER_BUILD = "repository_build_replaced_by_narrower_build"
     RUNNER_NOT_DIRECTLY_VALIDATION_RELEVANT = "runner_not_directly_validation_relevant"
     DUPLICATE_QUALITY_OPERATION_COLLAPSED = "duplicate_quality_operation_collapsed"

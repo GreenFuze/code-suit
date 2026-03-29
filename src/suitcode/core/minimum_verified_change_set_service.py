@@ -739,9 +739,33 @@ class MinimumVerifiedChangeSetService:
             target_anchor_id=resolved.target_anchor_id,
             matches=related_tests,
         )
+
+        build_targets, build_exclusions = self._minimizer.minimize_build_targets(
+            owner=resolved.owner,
+            primary_component=resolved.primary_component,
+            targets=self._candidate_resolver.build_targets(),
+            dependent_components=tuple(),
+        )
+        dependent_test_exclusions: list[ExcludedMinimumVerifiedItem] = []
         if not tests and dependent_components:
             dependent_matches = self._candidate_resolver.related_tests_for_dependent_components(dependent_components)
-            if dependent_matches:
+            if dependent_matches and build_targets:
+                replacement_ids = tuple(item.target.action_id for item in build_targets)
+                for match, dependency_provenance in dependent_matches:
+                    dependent_test_exclusions.append(
+                        self._evidence_assembler.exclusion(
+                            item_kind=MinimumVerifiedItemKind.TEST_TARGET,
+                            item_id=match.test_definition.id,
+                            reason_code=MinimumVerifiedExclusionReason.DEPENDENT_TEST_REPLACED_BY_NARROWER_BUILD,
+                            reason="direct dependent component test replaced by narrower deterministic build surface",
+                            replaced_by_ids=replacement_ids,
+                            provenance=MinimumVerifiedEvidenceAssembler._merged_provenance(
+                                dependency_provenance,
+                                match.provenance,
+                            ),
+                        )
+                    )
+            elif dependent_matches:
                 tests = tuple(
                     self._evidence_assembler.dependent_test_item(
                         target_anchor_id=resolved.target_anchor_id,
@@ -752,13 +776,6 @@ class MinimumVerifiedChangeSetService:
                     )
                     for match, dependency_provenance in dependent_matches
                 )
-
-        build_targets, build_exclusions = self._minimizer.minimize_build_targets(
-            owner=resolved.owner,
-            primary_component=resolved.primary_component,
-            targets=self._candidate_resolver.build_targets(),
-            dependent_components=tuple(),
-        )
         if not tests and not build_targets and dependent_components:
             build_targets, build_exclusions = self._minimizer.minimize_build_targets(
                 owner=resolved.owner,
@@ -812,7 +829,13 @@ class MinimumVerifiedChangeSetService:
             runner_actions=runner_actions,
             quality_validation_operations=quality_validation_operations,
             quality_hygiene_operations=quality_hygiene_operations,
-            has_exclusions=bool(test_exclusions or build_exclusions or runner_exclusions or availability_exclusions),
+            has_exclusions=bool(
+                test_exclusions
+                or dependent_test_exclusions
+                or build_exclusions
+                or runner_exclusions
+                or availability_exclusions
+            ),
         )
 
         self._validate_non_empty_change_set(
@@ -834,7 +857,15 @@ class MinimumVerifiedChangeSetService:
             runner_actions=runner_actions,
             quality_validation_operations=quality_validation_operations,
             quality_hygiene_operations=quality_hygiene_operations,
-            excluded_items=tuple((*test_exclusions, *build_exclusions, *runner_exclusions, *availability_exclusions)),
+            excluded_items=tuple(
+                (
+                    *test_exclusions,
+                    *dependent_test_exclusions,
+                    *build_exclusions,
+                    *runner_exclusions,
+                    *availability_exclusions,
+                )
+            ),
             provenance=provenance,
         )
 

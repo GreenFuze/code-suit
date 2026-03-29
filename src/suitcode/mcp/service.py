@@ -227,6 +227,7 @@ class SuitMcpService:
                     repository,
                     repository_rel_path,
                     related_test_limit=self._detail_preview_limit(validated_detail_level, related_test_limit),
+                    detail_level=validated_detail_level,
                 )
                 for repository_rel_path in normalized_paths
             )
@@ -239,6 +240,17 @@ class SuitMcpService:
                 target_count=len(targets),
                 targets=targets,
                 owner_ids=tuple(sorted({item.file_owner.owner.id for item in targets})),
+                aggregate_reference_site_count=len(
+                    {
+                        (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id)
+                        for target in targets
+                        for item in target.reference_sites_preview
+                    }
+                ),
+                aggregate_reference_sites_preview=self._dedupe_views(
+                    tuple(item for target in targets for item in target.reference_sites_preview),
+                    key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+                ),
                 aggregate_dependency_file_count=len(
                     {item.path for target in targets for item in target.dependency_files_preview}
                 ),
@@ -297,6 +309,42 @@ class SuitMcpService:
                         item.column_start,
                         item.prop_names,
                         item.has_spread_props,
+                    ),
+                ),
+                aggregate_invariant_finding_count=len(
+                    {
+                        (item.path, item.line_start, item.column_start, item.field_name, item.subject_label)
+                        for target in targets
+                        for item in target.invariant_findings_preview
+                    }
+                ),
+                aggregate_invariant_findings_preview=self._dedupe_views(
+                    tuple(item for target in targets for item in target.invariant_findings_preview),
+                    key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
+                ),
+                aggregate_local_flow_edge_count=len(
+                    {
+                        (
+                            item.path,
+                            item.line_start,
+                            item.column_start,
+                            item.edge_kind,
+                            item.source_label,
+                            item.target_label,
+                        )
+                        for target in targets
+                        for item in target.local_flow_edges_preview
+                    }
+                ),
+                aggregate_local_flow_edges_preview=self._dedupe_views(
+                    tuple(item for target in targets for item in target.local_flow_edges_preview),
+                    key=lambda item: (
+                        item.path,
+                        item.line_start,
+                        item.column_start,
+                        item.edge_kind,
+                        item.source_label,
+                        item.target_label,
                     ),
                 ),
                 aggregate_implementation_location_count=len(
@@ -414,6 +462,10 @@ class SuitMcpService:
                 target_count=len(frozen_targets),
                 targets=frozen_targets,
                 owner_ids=tuple(sorted({item.impact.owner.id for item in frozen_targets})),
+                reference_sites=self._dedupe_views(
+                    tuple(item for target in frozen_targets for item in target.impact.reference_locations),
+                    key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+                ),
                 dependent_files=self._dedupe_views(
                     tuple(item for target in frozen_targets for item in target.impact.dependent_files),
                     key=lambda item: item.path,
@@ -436,6 +488,21 @@ class SuitMcpService:
                         item.column_start,
                         item.prop_names,
                         item.has_spread_props,
+                    ),
+                ),
+                invariant_findings=self._dedupe_views(
+                    tuple(item for target in frozen_targets for item in target.impact.invariant_findings),
+                    key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
+                ),
+                local_flow_edges=self._dedupe_views(
+                    tuple(item for target in frozen_targets for item in target.impact.local_flow_edges),
+                    key=lambda item: (
+                        item.path,
+                        item.line_start,
+                        item.column_start,
+                        item.edge_kind,
+                        item.source_label,
+                        item.target_label,
                     ),
                 ),
                 implementation_locations=self._dedupe_views(
@@ -1208,10 +1275,14 @@ class SuitMcpService:
         repository_rel_path: str,
         *,
         related_test_limit: int,
+        detail_level: str,
     ) -> FileUnderstandingTargetView:
         try:
             context = repository.describe_files((repository_rel_path,), symbol_preview_limit=20, test_preview_limit=related_test_limit)[0]
             owner = self._ownership_presenter.file_owner_view(repository.get_file_owner(repository_rel_path))
+            reference_sites_preview = tuple(
+                self._code_presenter.location_view(item) for item in context.reference_sites_preview
+            )
             dependency_files_preview = tuple(
                 self._intelligence_presenter.file_relationship_view(item) for item in context.dependency_files_preview
             )
@@ -1224,6 +1295,14 @@ class SuitMcpService:
             render_parents_preview = tuple(
                 self._intelligence_presenter.render_edge_view(item) for item in context.render_parents_preview
             )
+            invariant_findings_preview = tuple(
+                self._intelligence_presenter.invariant_finding_view(item) for item in context.invariant_findings_preview
+            )
+            local_flow_edges_preview = tuple(
+                self._intelligence_presenter.static_flow_edge_view(item) for item in context.local_flow_edges_preview
+            )
+            if detail_level == "compact":
+                invariant_findings_preview = self._compact_invariant_findings(invariant_findings_preview)
             implementation_locations_preview = tuple(
                 self._code_presenter.location_view(item) for item in context.implementation_locations_preview
             )
@@ -1235,7 +1314,10 @@ class SuitMcpService:
             )
             structured_artifact = repository.describe_structured_artifact(repository_rel_path)
             structured_artifact_view = (
-                self._intelligence_presenter.structured_artifact_view(structured_artifact)
+                self._shape_structured_artifact_view(
+                    self._intelligence_presenter.structured_artifact_view(structured_artifact),
+                    detail_level=detail_level,
+                )
                 if structured_artifact is not None
                 else None
             )
@@ -1247,6 +1329,8 @@ class SuitMcpService:
             detail_level="full",
             repository_rel_path=repository_rel_path,
             file_owner=owner,
+            reference_site_count=context.reference_site_count,
+            reference_sites_preview=reference_sites_preview,
             dependency_file_count=context.dependency_file_count,
             dependency_files_preview=dependency_files_preview,
             dependent_file_count=context.dependent_file_count,
@@ -1255,16 +1339,23 @@ class SuitMcpService:
             render_children_preview=render_children_preview,
             render_parent_count=context.render_parent_count,
             render_parents_preview=render_parents_preview,
+            invariant_finding_count=context.invariant_finding_count,
+            invariant_findings_preview=invariant_findings_preview,
+            local_flow_edge_count=context.local_flow_edge_count,
+            local_flow_edges_preview=local_flow_edges_preview,
             implementation_location_count=context.implementation_location_count,
             implementation_locations_preview=implementation_locations_preview,
             related_tests=related_tests,
             structured_artifact=structured_artifact_view,
             provenance=self._merge_view_provenance(
                 owner.file.provenance,
+                *(item.provenance for item in reference_sites_preview),
                 *(item.provenance for item in dependency_files_preview),
                 *(item.provenance for item in dependent_files_preview),
                 *(item.provenance for item in render_children_preview),
                 *(item.provenance for item in render_parents_preview),
+                *(item.provenance for item in invariant_findings_preview),
+                *(item.provenance for item in local_flow_edges_preview),
                 *(item.provenance for item in implementation_locations_preview),
                 *(item.provenance for item in related_tests),
                 structured_artifact_view.provenance if structured_artifact_view is not None else tuple(),
@@ -1286,6 +1377,43 @@ class SuitMcpService:
             return min(requested_limit, 10)
         return requested_limit
 
+    @staticmethod
+    def _compact_invariant_findings(invariant_findings):
+        return tuple(item for item in invariant_findings if item.producer_site_count > 0)
+
+    @staticmethod
+    def _shape_structured_artifact_view(artifact_view, *, detail_level: str):
+        if artifact_view.markdown is not None:
+            limit = 3 if detail_level == "compact" else 10 if detail_level == "standard" else None
+            if limit is not None:
+                return artifact_view.model_copy(
+                    update={
+                        "markdown": artifact_view.markdown.model_copy(
+                            update={
+                                "sections": artifact_view.markdown.sections[:limit],
+                                "code_blocks": artifact_view.markdown.code_blocks[:limit],
+                                "links": artifact_view.markdown.links[:limit],
+                                "checklist_items": artifact_view.markdown.checklist_items[:limit],
+                            }
+                        )
+                    }
+                )
+        if artifact_view.openapi is not None:
+            limit = 3 if detail_level == "compact" else 10 if detail_level == "standard" else None
+            if limit is not None:
+                return artifact_view.model_copy(
+                    update={
+                        "openapi": artifact_view.openapi.model_copy(
+                            update={
+                                "operations": artifact_view.openapi.operations[:limit],
+                                "schemas": artifact_view.openapi.schemas[:limit],
+                                "tags": artifact_view.openapi.tags[:limit],
+                            }
+                        )
+                    }
+                )
+        return artifact_view
+
     def _compact_file_understanding_view(
         self,
         targets: tuple[FileUnderstandingTargetView, ...],
@@ -1295,6 +1423,8 @@ class SuitMcpService:
                 detail_level="compact",
                 repository_rel_path=target.repository_rel_path,
                 file_owner=target.file_owner,
+                reference_site_count=target.reference_site_count,
+                reference_sites_preview=target.reference_sites_preview[:3],
                 dependency_file_count=target.dependency_file_count,
                 dependency_files_preview=target.dependency_files_preview[:3],
                 dependent_file_count=target.dependent_file_count,
@@ -1303,6 +1433,10 @@ class SuitMcpService:
                 render_children_preview=target.render_children_preview[:3],
                 render_parent_count=target.render_parent_count,
                 render_parents_preview=target.render_parents_preview[:3],
+                invariant_finding_count=len(self._compact_invariant_findings(target.invariant_findings_preview)),
+                invariant_findings_preview=self._compact_invariant_findings(target.invariant_findings_preview)[:3],
+                local_flow_edge_count=target.local_flow_edge_count,
+                local_flow_edges_preview=target.local_flow_edges_preview[:3],
                 related_test_count=len(target.related_tests),
                 related_tests=target.related_tests[:3],
                 structured_artifact=target.structured_artifact,
@@ -1314,6 +1448,17 @@ class SuitMcpService:
             target_count=len(compact_targets),
             targets=compact_targets,
             owner_ids=tuple(sorted({item.file_owner.owner.id for item in compact_targets})),
+            aggregate_reference_site_count=len(
+                {
+                    (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id)
+                    for target in compact_targets
+                    for item in target.reference_sites_preview
+                }
+            ),
+            aggregate_reference_sites_preview=self._dedupe_views(
+                tuple(item for target in compact_targets for item in target.reference_sites_preview),
+                key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+            )[:3],
             aggregate_dependency_file_count=len({item.path for target in compact_targets for item in target.dependency_files_preview}),
             aggregate_dependency_files_preview=self._dedupe_views(
                 tuple(item for target in compact_targets for item in target.dependency_files_preview),
@@ -1370,6 +1515,42 @@ class SuitMcpService:
                     item.has_spread_props,
                 ),
             )[:3],
+            aggregate_invariant_finding_count=len(
+                {
+                    (item.path, item.line_start, item.column_start, item.field_name, item.subject_label)
+                    for target in compact_targets
+                    for item in target.invariant_findings_preview
+                }
+            ),
+            aggregate_invariant_findings_preview=self._dedupe_views(
+                tuple(item for target in compact_targets for item in target.invariant_findings_preview),
+                key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
+            )[:3],
+            aggregate_local_flow_edge_count=len(
+                {
+                    (
+                        item.path,
+                        item.line_start,
+                        item.column_start,
+                        item.edge_kind,
+                        item.source_label,
+                        item.target_label,
+                    )
+                    for target in compact_targets
+                    for item in target.local_flow_edges_preview
+                }
+            ),
+            aggregate_local_flow_edges_preview=self._dedupe_views(
+                tuple(item for target in compact_targets for item in target.local_flow_edges_preview),
+                key=lambda item: (
+                    item.path,
+                    item.line_start,
+                    item.column_start,
+                    item.edge_kind,
+                    item.source_label,
+                    item.target_label,
+                ),
+            )[:3],
             aggregate_related_tests=self._dedupe_views(
                 tuple(item for target in compact_targets for item in target.related_tests),
                 key=lambda item: item.id,
@@ -1394,6 +1575,8 @@ class SuitMcpService:
                 detail_level="standard",
                 repository_rel_path=target.repository_rel_path,
                 file_owner=target.file_owner,
+                reference_site_count=target.reference_site_count,
+                reference_sites_preview=target.reference_sites_preview[:10],
                 dependency_file_count=target.dependency_file_count,
                 dependency_files_preview=target.dependency_files_preview[:10],
                 dependent_file_count=target.dependent_file_count,
@@ -1402,6 +1585,10 @@ class SuitMcpService:
                 render_children_preview=target.render_children_preview[:10],
                 render_parent_count=target.render_parent_count,
                 render_parents_preview=target.render_parents_preview[:10],
+                invariant_finding_count=target.invariant_finding_count,
+                invariant_findings_preview=target.invariant_findings_preview[:10],
+                local_flow_edge_count=target.local_flow_edge_count,
+                local_flow_edges_preview=target.local_flow_edges_preview[:10],
                 implementation_location_count=target.implementation_location_count,
                 implementation_locations_preview=target.implementation_locations_preview[:10],
                 related_test_count=len(target.related_tests),
@@ -1415,6 +1602,17 @@ class SuitMcpService:
             target_count=len(standard_targets),
             targets=standard_targets,
             owner_ids=tuple(sorted({item.file_owner.owner.id for item in standard_targets})),
+            aggregate_reference_site_count=len(
+                {
+                    (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id)
+                    for target in standard_targets
+                    for item in target.reference_sites_preview
+                }
+            ),
+            aggregate_reference_sites_preview=self._dedupe_views(
+                tuple(item for target in standard_targets for item in target.reference_sites_preview),
+                key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+            )[:10],
             aggregate_dependency_file_count=len({item.path for target in standard_targets for item in target.dependency_files_preview}),
             aggregate_dependency_files_preview=self._dedupe_views(
                 tuple(item for target in standard_targets for item in target.dependency_files_preview),
@@ -1471,6 +1669,42 @@ class SuitMcpService:
                     item.has_spread_props,
                 ),
             )[:10],
+            aggregate_invariant_finding_count=len(
+                {
+                    (item.path, item.line_start, item.column_start, item.field_name, item.subject_label)
+                    for target in standard_targets
+                    for item in target.invariant_findings_preview
+                }
+            ),
+            aggregate_invariant_findings_preview=self._dedupe_views(
+                tuple(item for target in standard_targets for item in target.invariant_findings_preview),
+                key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
+            )[:10],
+            aggregate_local_flow_edge_count=len(
+                {
+                    (
+                        item.path,
+                        item.line_start,
+                        item.column_start,
+                        item.edge_kind,
+                        item.source_label,
+                        item.target_label,
+                    )
+                    for target in standard_targets
+                    for item in target.local_flow_edges_preview
+                }
+            ),
+            aggregate_local_flow_edges_preview=self._dedupe_views(
+                tuple(item for target in standard_targets for item in target.local_flow_edges_preview),
+                key=lambda item: (
+                    item.path,
+                    item.line_start,
+                    item.column_start,
+                    item.edge_kind,
+                    item.source_label,
+                    item.target_label,
+                ),
+            )[:10],
             aggregate_implementation_location_count=len(
                 {
                     (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id)
@@ -1507,9 +1741,12 @@ class SuitMcpService:
                 repository_rel_path=target.repository_rel_path,
                 owner=target.impact.owner,
                 primary_component=target.impact.primary_component,
+                reference_sites=target.impact.reference_locations[:3],
                 dependent_files=target.impact.dependent_files[:3],
                 render_children=target.impact.render_children[:3],
                 render_parents=target.impact.render_parents[:3],
+                invariant_findings=self._compact_invariant_findings(target.impact.invariant_findings)[:3],
+                local_flow_edges=target.impact.local_flow_edges[:3],
                 dependent_components=target.impact.dependent_components[:3],
                 related_tests=target.impact.related_tests[:3],
                 related_runners=target.impact.related_runners[:3],
@@ -1522,6 +1759,10 @@ class SuitMcpService:
             target_count=len(compact_targets),
             targets=compact_targets,
             owner_ids=tuple(sorted({item.owner.id for item in compact_targets})),
+            reference_sites=self._dedupe_views(
+                tuple(item for target in compact_targets for item in target.reference_sites),
+                key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+            )[:3],
             dependent_files=self._dedupe_views(
                 tuple(item for target in compact_targets for item in target.dependent_files),
                 key=lambda item: item.path,
@@ -1544,6 +1785,21 @@ class SuitMcpService:
                     item.column_start,
                     item.prop_names,
                     item.has_spread_props,
+                ),
+            )[:3],
+            invariant_findings=self._dedupe_views(
+                tuple(item for target in compact_targets for item in target.invariant_findings),
+                key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
+            )[:3],
+            local_flow_edges=self._dedupe_views(
+                tuple(item for target in compact_targets for item in target.local_flow_edges),
+                key=lambda item: (
+                    item.path,
+                    item.line_start,
+                    item.column_start,
+                    item.edge_kind,
+                    item.source_label,
+                    item.target_label,
                 ),
             )[:3],
             dependent_components=self._dedupe_views(
@@ -1574,10 +1830,13 @@ class SuitMcpService:
                 repository_rel_path=target.repository_rel_path,
                 owner=target.impact.owner,
                 primary_component=target.impact.primary_component,
+                reference_sites=target.impact.reference_locations[:10],
                 dependency_files=target.impact.dependency_files[:10],
                 dependent_files=target.impact.dependent_files[:10],
                 render_children=target.impact.render_children[:10],
                 render_parents=target.impact.render_parents[:10],
+                invariant_findings=target.impact.invariant_findings[:10],
+                local_flow_edges=target.impact.local_flow_edges[:10],
                 implementation_locations=target.impact.implementation_locations[:10],
                 implementation_components=target.impact.implementation_components[:10],
                 dependent_components=target.impact.dependent_components[:10],
@@ -1593,6 +1852,10 @@ class SuitMcpService:
             target_count=len(standard_targets),
             targets=standard_targets,
             owner_ids=tuple(sorted({item.owner.id for item in standard_targets})),
+            reference_sites=self._dedupe_views(
+                tuple(item for target in standard_targets for item in target.reference_sites),
+                key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+            )[:10],
             dependent_files=self._dedupe_views(
                 tuple(item for target in standard_targets for item in target.dependent_files),
                 key=lambda item: item.path,
@@ -1615,6 +1878,21 @@ class SuitMcpService:
                     item.column_start,
                     item.prop_names,
                     item.has_spread_props,
+                ),
+            )[:10],
+            invariant_findings=self._dedupe_views(
+                tuple(item for target in standard_targets for item in target.invariant_findings),
+                key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
+            )[:10],
+            local_flow_edges=self._dedupe_views(
+                tuple(item for target in standard_targets for item in target.local_flow_edges),
+                key=lambda item: (
+                    item.path,
+                    item.line_start,
+                    item.column_start,
+                    item.edge_kind,
+                    item.source_label,
+                    item.target_label,
                 ),
             )[:10],
             implementation_locations=self._dedupe_views(

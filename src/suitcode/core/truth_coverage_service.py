@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from suitcode.core.change_models import ChangeImpact, QualityGateInfo, RunnerImpact, TestImpact
 from suitcode.core.code.models import CodeLocation
 from suitcode.core.intelligence_models import ComponentContext, FileContext, SymbolContext
-from suitcode.core.intelligence_models import FileRelationshipRef, RenderEdgeRef
+from suitcode.core.intelligence_models import FileRelationshipRef, InvariantFindingRef, RenderEdgeRef, StaticFlowEdgeRef
 from suitcode.core.models import Component, EntityInfo, ExternalPackage, FileInfo, PackageManager, Runner, TestDefinition
 from suitcode.core.provenance import ConfidenceMode, ProvenanceEntry, SourceKind
 from suitcode.core.provenance_builders import derived_summary_provenance
@@ -127,6 +127,8 @@ class TruthCoverageService:
             dependent_files=impact.dependent_files,
             render_children=impact.render_children,
             render_parents=impact.render_parents,
+            invariant_findings=impact.invariant_findings,
+            local_flow_edges=impact.local_flow_edges,
             implementation_locations=impact.implementation_locations,
             implementation_components=impact.implementation_components,
             reference_locations=impact.reference_locations,
@@ -149,6 +151,8 @@ class TruthCoverageService:
         dependent_files: tuple[FileRelationshipRef, ...],
         render_children: tuple[RenderEdgeRef, ...],
         render_parents: tuple[RenderEdgeRef, ...],
+        invariant_findings: tuple[InvariantFindingRef, ...],
+        local_flow_edges: tuple[StaticFlowEdgeRef, ...],
         implementation_locations: tuple[CodeLocation, ...],
         implementation_components: tuple[Component, ...],
         dependent_components: tuple[Component, ...],
@@ -179,6 +183,8 @@ class TruthCoverageService:
             code.add_provenance_item(relationship.provenance)
         for edge in (*render_children, *render_parents):
             code.add_provenance_item(edge.provenance)
+        for item in (*invariant_findings, *local_flow_edges):
+            code.add_provenance_item(item.provenance)
         for item in (*implementation_locations, *implementation_components):
             code.add_provenance_item(item.provenance)
         code.availability = self._artifact_domain_availability(code)

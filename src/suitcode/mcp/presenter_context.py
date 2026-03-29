@@ -3,7 +3,18 @@ from __future__ import annotations
 import shlex
 
 from suitcode.core.change_models import ChangeEvidenceEdge, ChangeEvidencePreview, ChangeImpact, QualityGateInfo, RunnerImpact, TestImpact
-from suitcode.core.intelligence_models import ComponentContext, ComponentDependencyEdge, DependencyRef, FileContext, ImpactSummary, RenderEdgeRef, SymbolContext
+from suitcode.core.intelligence_models import (
+    ComponentContext,
+    ComponentDependencyEdge,
+    DependencyRef,
+    FileContext,
+    ImpactSummary,
+    InvariantFindingRef,
+    RenderEdgeRef,
+    StaticAnalysisSiteRef,
+    StaticFlowEdgeRef,
+    SymbolContext,
+)
 from suitcode.core.minimum_verified_change_set_models import (
     ExcludedMinimumVerifiedItem,
     MinimumVerifiedBuildTarget,
@@ -29,6 +40,7 @@ from suitcode.mcp.models import (
     FileContextView,
     FileRelationshipView,
     ImpactSummaryView,
+    InvariantFindingView,
     MarkdownChecklistItemView,
     MarkdownCodeBlockView,
     MarkdownDocumentStructureView,
@@ -52,6 +64,8 @@ from suitcode.mcp.models import (
     RenderEdgeView,
     RepositorySummaryView,
     RunnerImpactView,
+    StaticAnalysisSiteView,
+    StaticFlowEdgeView,
     StructuredArtifactView,
     SymbolContextView,
     TestImpactView,
@@ -153,12 +167,52 @@ class IntelligencePresenter:
             provenance=provenance_views(edge.provenance),
         )
 
+    @staticmethod
+    def static_analysis_site_view(site: StaticAnalysisSiteRef) -> StaticAnalysisSiteView:
+        return StaticAnalysisSiteView(
+            path=site.repository_rel_path,
+            line_start=site.line_start,
+            column_start=site.column_start,
+            label=site.label,
+            provenance=provenance_views(site.provenance),
+        )
+
+    def invariant_finding_view(self, finding: InvariantFindingRef) -> InvariantFindingView:
+        return InvariantFindingView(
+            path=finding.repository_rel_path,
+            line_start=finding.line_start,
+            column_start=finding.column_start,
+            field_name=finding.field_name,
+            access_kind=finding.access_kind.value,
+            subject_label=finding.subject_label,
+            declared_type=finding.declared_type,
+            producer_site_count=finding.producer_site_count,
+            producer_sites_preview=tuple(self.static_analysis_site_view(item) for item in finding.producer_sites_preview),
+            provenance=provenance_views(finding.provenance),
+        )
+
+    @staticmethod
+    def static_flow_edge_view(edge: StaticFlowEdgeRef) -> StaticFlowEdgeView:
+        return StaticFlowEdgeView(
+            path=edge.repository_rel_path,
+            line_start=edge.line_start,
+            column_start=edge.column_start,
+            edge_kind=edge.edge_kind.value,
+            source_label=edge.source_label,
+            target_label=edge.target_label,
+            provenance=provenance_views(edge.provenance),
+        )
+
     def file_context_view(self, context: FileContext) -> FileContextView:
         return FileContextView(
             file=self._architecture_presenter.file_view(context.file_info),
             owner=self._ownership_presenter.owner_view(context.owner),
             symbol_count=context.symbol_count,
             symbols_preview=tuple(self._code_presenter.symbol_view(item) for item in context.symbols_preview),
+            reference_site_count=context.reference_site_count,
+            reference_sites_preview=tuple(
+                self._code_presenter.location_view(item) for item in context.reference_sites_preview
+            ),
             dependency_file_count=context.dependency_file_count,
             dependency_files_preview=tuple(self.file_relationship_view(item) for item in context.dependency_files_preview),
             dependent_file_count=context.dependent_file_count,
@@ -167,6 +221,14 @@ class IntelligencePresenter:
             render_children_preview=tuple(self.render_edge_view(item) for item in context.render_children_preview),
             render_parent_count=context.render_parent_count,
             render_parents_preview=tuple(self.render_edge_view(item) for item in context.render_parents_preview),
+            invariant_finding_count=context.invariant_finding_count,
+            invariant_findings_preview=tuple(
+                self.invariant_finding_view(item) for item in context.invariant_findings_preview
+            ),
+            local_flow_edge_count=context.local_flow_edge_count,
+            local_flow_edges_preview=tuple(
+                self.static_flow_edge_view(item) for item in context.local_flow_edges_preview
+            ),
             implementation_location_count=context.implementation_location_count,
             implementation_locations_preview=tuple(
                 self._code_presenter.location_view(item) for item in context.implementation_locations_preview
@@ -523,11 +585,22 @@ class ChangeImpactPresenter:
         quality_hygiene_operations: tuple[MinimumVerifiedQualityOperationView, ...],
         excluded_items: tuple[ExcludedMinimumVerifiedItemView, ...],
     ) -> MinimumVerifiedCompactSummaryView:
+        build_heavy_provider_ids = {item.provider_id for item in build_targets}
+        emphasized_quality_validation_operations = tuple(
+            item
+            for item in quality_validation_operations
+            if not (
+                item.provider_id in build_heavy_provider_ids
+                and item.provider_id == "npm"
+                and item.operation == "lint"
+                and len(item.repository_rel_paths) == 1
+            )
+        )
         required_validation = (
             *(self._compact_test_item_view(item) for item in tests),
             *(self._compact_build_item_view(item) for item in build_targets),
             *(self._compact_runner_item_view(item) for item in runner_actions),
-            *(self._compact_quality_item_view(item) for item in quality_validation_operations),
+            *(self._compact_quality_item_view(item) for item in emphasized_quality_validation_operations),
         )
         optional_hygiene = tuple(self._compact_quality_item_view(item) for item in quality_hygiene_operations)
         exclusions = tuple(
@@ -626,6 +699,12 @@ class ChangeImpactPresenter:
             ),
             render_parents=tuple(
                 self._intelligence_presenter.render_edge_view(item) for item in impact.render_parents
+            ),
+            invariant_findings=tuple(
+                self._intelligence_presenter.invariant_finding_view(item) for item in impact.invariant_findings
+            ),
+            local_flow_edges=tuple(
+                self._intelligence_presenter.static_flow_edge_view(item) for item in impact.local_flow_edges
             ),
             implementation_locations=tuple(
                 self._code_presenter.location_view(item) for item in impact.implementation_locations

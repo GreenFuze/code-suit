@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 from suitcode.core.code.models import CodeLocation, SymbolLookupTarget
-from suitcode.core.intelligence_models import FileRelationshipKind, FileRelationshipRef, RenderEdgeKind, RenderEdgeRef
+from suitcode.core.intelligence_models import (
+    FileRelationshipKind,
+    FileRelationshipRef,
+    InvariantFindingRef,
+    RenderEdgeKind,
+    RenderEdgeRef,
+    StaticFlowEdgeRef,
+)
 from suitcode.core.models import EntityInfo
 from suitcode.core.models.ids import normalize_repository_relative_path
 from suitcode.core.provenance import ProvenanceEntry, SourceKind
@@ -163,6 +170,93 @@ class CodeIntelligence:
                     item.column_start,
                     item.prop_names,
                     item.has_spread_props,
+                ),
+            )
+        )
+
+    def get_file_invariant_findings(self, repository_rel_path: str) -> tuple[InvariantFindingRef, ...]:
+        normalized_path = normalize_repository_relative_path(repository_rel_path)
+        merged: dict[tuple[str, int, int, str, str], InvariantFindingRef] = {}
+        for provider in self._providers_for_file(normalized_path):
+            try:
+                items = provider.get_file_invariant_findings(normalized_path)
+            except ValueError:
+                continue
+            for item in items:
+                key = (
+                    item.repository_rel_path,
+                    item.line_start,
+                    item.column_start,
+                    item.field_name,
+                    item.subject_label,
+                )
+                existing = merged.get(key)
+                if existing is None:
+                    merged[key] = item
+                    continue
+                merged_sites: list = []
+                for site in (*existing.producer_sites_preview, *item.producer_sites_preview):
+                    site_key = (site.repository_rel_path, site.line_start, site.column_start, site.label)
+                    if any(
+                        (current.repository_rel_path, current.line_start, current.column_start, current.label) == site_key
+                        for current in merged_sites
+                    ):
+                        continue
+                    merged_sites.append(site)
+                merged[key] = item.model_copy(
+                    update={
+                        "producer_site_count": len(merged_sites),
+                        "producer_sites_preview": tuple(merged_sites),
+                        "provenance": tuple(dict.fromkeys((*existing.provenance, *item.provenance))),
+                    }
+                )
+        return tuple(
+            sorted(
+                merged.values(),
+                key=lambda item: (
+                    item.repository_rel_path,
+                    item.line_start,
+                    item.column_start,
+                    item.field_name,
+                    item.subject_label,
+                ),
+            )
+        )
+
+    def get_file_local_flow_edges(self, repository_rel_path: str) -> tuple[StaticFlowEdgeRef, ...]:
+        normalized_path = normalize_repository_relative_path(repository_rel_path)
+        merged: dict[tuple[str, int, int, str, str, str], StaticFlowEdgeRef] = {}
+        for provider in self._providers_for_file(normalized_path):
+            try:
+                items = provider.get_file_local_flow_edges(normalized_path)
+            except ValueError:
+                continue
+            for item in items:
+                key = (
+                    item.repository_rel_path,
+                    item.line_start,
+                    item.column_start,
+                    item.edge_kind.value,
+                    item.source_label,
+                    item.target_label,
+                )
+                existing = merged.get(key)
+                if existing is None:
+                    merged[key] = item
+                    continue
+                merged[key] = item.model_copy(
+                    update={"provenance": tuple(dict.fromkeys((*existing.provenance, *item.provenance)))}
+                )
+        return tuple(
+            sorted(
+                merged.values(),
+                key=lambda item: (
+                    item.repository_rel_path,
+                    item.line_start,
+                    item.column_start,
+                    item.edge_kind.value,
+                    item.source_label,
+                    item.target_label,
                 ),
             )
         )

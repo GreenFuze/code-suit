@@ -12,6 +12,13 @@ from suitcode.core.provenance_builders import dependency_graph_provenance, deriv
 from suitcode.core.provenance_builders import lsp_delta_provenance, quality_tool_provenance
 from suitcode.core.provenance import SourceKind
 from suitcode.core.tests.models import RelatedTestTarget
+from suitcode.mcp.models import (
+    MinimumVerifiedBuildTargetView,
+    MinimumVerifiedCommandSummaryView,
+    MinimumVerifiedEvidenceEdgeView,
+    MinimumVerifiedQualityOperationView,
+    ProvenanceView,
+)
 from suitcode.mcp.presenters import AnalyticsPresenter, ArchitecturePresenter, BuildPresenter, ChangeImpactPresenter, CodePresenter, ProviderPresenter, QualityPresenter, RepositoryPresenter, RunnerPresenter, TestPresenter as McpTestPresenter, WorkspacePresenter
 from suitcode.providers.quality_models import QualityDiagnostic, QualityEntityDelta, QualityFileResult
 from suitcode.providers.npm import NPMProvider
@@ -266,6 +273,8 @@ def test_change_impact_presenter_maps_composed_artifact(npm_repo_root) -> None:
         ),
         render_children=tuple(),
         render_parents=tuple(),
+        invariant_findings=tuple(),
+        local_flow_edges=tuple(),
         implementation_locations=tuple(),
         implementation_components=tuple(),
         dependent_components=(
@@ -384,6 +393,78 @@ def test_change_impact_presenter_maps_minimum_verified_change_set(npm_repo_root)
     assert view.quality_validation_operations[0].repository_rel_paths == ("packages/core/src/index.ts",)
     assert view.quality_validation_operations[0].proof_edges[0].provenance
     assert view.provenance
+
+
+def test_change_impact_presenter_compact_summary_deemphasizes_npm_file_lint_when_build_exists() -> None:
+    presenter = ChangeImpactPresenter()
+    provenance = (
+        ProvenanceView(
+            confidence_mode="high",
+            source_kind="manifest",
+            source_tool="npm",
+            evidence_summary="deterministic provider-backed evidence",
+            evidence_paths=("server/frontend/src/components/settings/IntegrationsTab.tsx",),
+        ),
+    )
+    proof_edges = (
+        MinimumVerifiedEvidenceEdgeView(
+            source_node_kind="change_target",
+            source_node_id="change_target:file:server/frontend/src/components/settings/IntegrationsTab.tsx",
+            target_node_kind="build_target",
+            target_node_id="action:npm:build:mga-frontend",
+            edge_kind="owner_build_target",
+            reason="component-scoped build target is the narrowest deterministic build surface",
+            provenance=provenance,
+        ),
+    )
+    build_targets = (
+        MinimumVerifiedBuildTargetView(
+            action_id="action:npm:build:mga-frontend",
+            name="build",
+            provider_id="npm",
+            target_id="component:npm:mga-frontend",
+            target_kind="component",
+            owner_ids=("component:npm:mga-frontend",),
+            invocation=MinimumVerifiedCommandSummaryView(
+                argv_preview=("npm", "run", "build"),
+                total_arg_count=3,
+                truncated=False,
+                cwd="server/frontend",
+            ),
+            dry_run_supported=False,
+            inclusion_reason="component-scoped build target is the narrowest deterministic build surface",
+            inclusion_confidence_mode="high",
+            proof_edges=proof_edges,
+            provenance=provenance,
+        ),
+    )
+    quality_validation_operations = (
+        MinimumVerifiedQualityOperationView(
+            id="quality_op:npm:lint",
+            provider_id="npm",
+            operation="lint",
+            scope="validation",
+            repository_rel_paths=("server/frontend/src/components/settings/IntegrationsTab.tsx",),
+            mcp_tool_name="lint_file",
+            is_fix=False,
+            is_mutating=False,
+            inclusion_reason="non-mutating lint validation applies to the exact affected file set",
+            inclusion_confidence_mode="high",
+            proof_edges=proof_edges,
+            provenance=provenance,
+        ),
+    )
+
+    summary = presenter.minimum_verified_compact_summary_view(
+        tests=tuple(),
+        build_targets=build_targets,
+        runner_actions=tuple(),
+        quality_validation_operations=quality_validation_operations,
+        quality_hygiene_operations=tuple(),
+        excluded_items=tuple(),
+    )
+
+    assert [item.item_kind for item in summary.required_validation] == ["build_target"]
 
 
 def test_runner_presenter_maps_runner_context_and_execution(npm_repo_root) -> None:

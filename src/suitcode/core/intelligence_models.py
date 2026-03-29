@@ -193,11 +193,131 @@ class RenderEdgeRef(StrictModel):
         return self
 
 
+class StaticAnalysisSiteRef(StrictModel):
+    repository_rel_path: str
+    line_start: int
+    column_start: int
+    label: str
+    provenance: tuple[ProvenanceEntry, ...]
+
+    @field_validator("repository_rel_path", "label")
+    @classmethod
+    def _validate_non_empty(cls, value: str, info) -> str:
+        if not value.strip():
+            raise ValueError(f"{info.field_name} must not be empty")
+        return value.strip()
+
+    @field_validator("line_start", "column_start")
+    @classmethod
+    def _validate_position(cls, value: int, info) -> int:
+        if value < 1:
+            raise ValueError(f"{info.field_name} must be >= 1")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_provenance(self) -> "StaticAnalysisSiteRef":
+        if not self.provenance:
+            raise ValueError("provenance must not be empty")
+        if any(item.source_kind == SourceKind.HEURISTIC for item in self.provenance):
+            raise ValueError("static analysis site provenance must not be heuristic")
+        return self
+
+
+class InvariantFindingKind(StrEnum):
+    __test__ = False
+    MAYBE_MISSING_FIELD_ACCESS = "maybe_missing_field_access"
+
+
+class InvariantAccessKind(StrEnum):
+    __test__ = False
+    PROPERTY_READ = "property_read"
+    METHOD_CALL = "method_call"
+
+
+class InvariantFindingRef(StrictModel):
+    repository_rel_path: str
+    finding_kind: InvariantFindingKind
+    access_kind: InvariantAccessKind
+    line_start: int
+    column_start: int
+    field_name: str
+    subject_label: str
+    declared_type: str | None = None
+    producer_site_count: int
+    producer_sites_preview: tuple[StaticAnalysisSiteRef, ...]
+    provenance: tuple[ProvenanceEntry, ...]
+
+    @field_validator("repository_rel_path", "field_name", "subject_label")
+    @classmethod
+    def _validate_non_empty(cls, value: str, info) -> str:
+        if not value.strip():
+            raise ValueError(f"{info.field_name} must not be empty")
+        return value.strip()
+
+    @field_validator("line_start", "column_start", "producer_site_count")
+    @classmethod
+    def _validate_non_negative(cls, value: int, info) -> int:
+        minimum = 0 if info.field_name == "producer_site_count" else 1
+        if value < minimum:
+            raise ValueError(f"{info.field_name} must be >= {minimum}")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_shape(self) -> "InvariantFindingRef":
+        if self.producer_site_count != len(self.producer_sites_preview):
+            raise ValueError("producer_site_count must match producer_sites_preview length")
+        if not self.provenance:
+            raise ValueError("provenance must not be empty")
+        if any(item.source_kind == SourceKind.HEURISTIC for item in self.provenance):
+            raise ValueError("invariant finding provenance must not be heuristic")
+        return self
+
+
+class StaticFlowEdgeKind(StrEnum):
+    __test__ = False
+    CALLS_LOCAL_SYMBOL = "calls_local_symbol"
+    PRODUCES_VALUE_FOR = "produces_value_for"
+
+
+class StaticFlowEdgeRef(StrictModel):
+    repository_rel_path: str
+    edge_kind: StaticFlowEdgeKind
+    line_start: int
+    column_start: int
+    source_label: str
+    target_label: str
+    provenance: tuple[ProvenanceEntry, ...]
+
+    @field_validator("repository_rel_path", "source_label", "target_label")
+    @classmethod
+    def _validate_non_empty(cls, value: str, info) -> str:
+        if not value.strip():
+            raise ValueError(f"{info.field_name} must not be empty")
+        return value.strip()
+
+    @field_validator("line_start", "column_start")
+    @classmethod
+    def _validate_position(cls, value: int, info) -> int:
+        if value < 1:
+            raise ValueError(f"{info.field_name} must be >= 1")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_shape(self) -> "StaticFlowEdgeRef":
+        if not self.provenance:
+            raise ValueError("provenance must not be empty")
+        if any(item.source_kind == SourceKind.HEURISTIC for item in self.provenance):
+            raise ValueError("static flow provenance must not be heuristic")
+        return self
+
+
 class FileContext(StrictModel):
     file_info: FileInfo
     owner: OwnedNodeInfo
     symbol_count: int
     symbols_preview: tuple[EntityInfo, ...]
+    reference_site_count: int
+    reference_sites_preview: tuple[CodeLocation, ...]
     dependency_file_count: int
     dependency_files_preview: tuple[FileRelationshipRef, ...]
     dependent_file_count: int
@@ -206,6 +326,10 @@ class FileContext(StrictModel):
     render_children_preview: tuple[RenderEdgeRef, ...]
     render_parent_count: int
     render_parents_preview: tuple[RenderEdgeRef, ...]
+    invariant_finding_count: int
+    invariant_findings_preview: tuple[InvariantFindingRef, ...]
+    local_flow_edge_count: int
+    local_flow_edges_preview: tuple[StaticFlowEdgeRef, ...]
     implementation_location_count: int
     implementation_locations_preview: tuple[CodeLocation, ...]
     related_test_count: int
@@ -217,10 +341,10 @@ class FileContext(StrictModel):
     def _validate_provenance(self) -> "FileContext":
         if not self.provenance:
             raise ValueError("provenance must not be empty")
-        if (self.symbol_count > 0 or self.implementation_location_count > 0) and not any(
+        if (self.symbol_count > 0 or self.reference_site_count > 0 or self.implementation_location_count > 0) and not any(
             item.source_kind == SourceKind.LSP for item in self.provenance
         ):
-            raise ValueError("file contexts with symbol or implementation evidence must include LSP provenance")
+            raise ValueError("file contexts with symbol, reference, or implementation evidence must include LSP provenance")
         return self
 
 

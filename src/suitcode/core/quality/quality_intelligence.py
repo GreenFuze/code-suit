@@ -59,6 +59,8 @@ class QualityIntelligence:
         provider_ids: list[str] = []
         providers: list[QualityProviderBase] = []
         for repository_rel_path in repository_rel_paths:
+            if not self._is_quality_relevant_file(repository_rel_path):
+                continue
             for provider in self._repository.get_providers_for_file_role(repository_rel_path, ProviderRole.QUALITY):
                 key = (provider.__class__.descriptor().provider_id, provider.attachment.attachment_root_rel_path)
                 if key in provider_ids:
@@ -82,6 +84,23 @@ class QualityIntelligence:
                 f"provider `{provider_id}` does not support quality for `{repository_rel_path}` in repository `{self._repository.root}`"
             )
         return matches[0]
+
+    def _is_quality_relevant_file(self, repository_rel_path: str) -> bool:
+        try:
+            owner = self._repository.get_file_owner(repository_rel_path).owner
+        except ValueError:
+            return True
+        if owner.kind != "component":
+            return True
+        component = next((item for item in self._repository.arch.get_components() if item.id == owner.id), None)
+        if component is None:
+            return True
+        normalized = repository_rel_path.replace("\\", "/").strip().removeprefix("./")
+        if any(normalized == root or normalized.startswith(f"{root}/") for root in component.source_roots):
+            return True
+        if any(normalized == path or normalized.startswith(f"{path}/") for path in component.artifact_paths):
+            return False
+        return True
 
 
 from typing import TYPE_CHECKING

@@ -2,7 +2,17 @@ from __future__ import annotations
 
 from suitcode.core.change_models import ChangeTarget
 from suitcode.core.code.models import CodeLocation
-from suitcode.core.intelligence_models import FileRelationshipKind, FileRelationshipRef, RenderEdgeKind, RenderEdgeRef
+from suitcode.core.intelligence_models import (
+    FileRelationshipKind,
+    FileRelationshipRef,
+    InvariantAccessKind,
+    InvariantFindingKind,
+    InvariantFindingRef,
+    RenderEdgeKind,
+    RenderEdgeRef,
+    StaticFlowEdgeKind,
+    StaticFlowEdgeRef,
+)
 from suitcode.core.provenance_builders import dependency_graph_provenance, lsp_location_provenance
 from suitcode.core.workspace import Workspace
 
@@ -113,9 +123,53 @@ def test_change_impact_for_npm_file_target(npm_repo_root) -> None:
                 ),
             )
 
+    class _FakeStaticAnalysisService:
+        def get_file_analysis(self, repository_rel_path: str):
+            assert repository_rel_path == "packages/core/src/index.ts"
+            findings = (
+                InvariantFindingRef(
+                    repository_rel_path="packages/core/src/index.ts",
+                    finding_kind=InvariantFindingKind.MAYBE_MISSING_FIELD_ACCESS,
+                    access_kind=InvariantAccessKind.METHOD_CALL,
+                    line_start=15,
+                    column_start=7,
+                    field_name="status",
+                    subject_label="integration",
+                    declared_type="string | undefined",
+                    producer_site_count=0,
+                    producer_sites_preview=tuple(),
+                    provenance=(
+                        dependency_graph_provenance(
+                            source_tool="typescript",
+                            evidence_summary="deterministic TS analysis found maybe-missing field access",
+                            evidence_paths=("packages/core/src/index.ts",),
+                        ),
+                    ),
+                ),
+            )
+            flows = (
+                StaticFlowEdgeRef(
+                    repository_rel_path="packages/core/src/index.ts",
+                    edge_kind=StaticFlowEdgeKind.PRODUCES_VALUE_FOR,
+                    line_start=18,
+                    column_start=5,
+                    source_label="toStateMap",
+                    target_label="setState",
+                    provenance=(
+                        dependency_graph_provenance(
+                            source_tool="typescript",
+                            evidence_summary="deterministic TS analysis found local flow edge",
+                            evidence_paths=("packages/core/src/index.ts",),
+                        ),
+                    ),
+                ),
+            )
+            return findings, flows
+
     provider._file_symbol_service = _FakeFileSymbolService()  # type: ignore[attr-defined]
     provider._file_relationship_service = _FakeRelationshipService()  # type: ignore[attr-defined]
     provider._render_edge_service = _FakeRenderEdgeService()  # type: ignore[attr-defined]
+    provider._static_analysis_service = _FakeStaticAnalysisService()  # type: ignore[attr-defined]
 
     impact = repository.analyze_change(ChangeTarget(repository_rel_path="packages/core/src/index.ts"))
 
@@ -129,6 +183,8 @@ def test_change_impact_for_npm_file_target(npm_repo_root) -> None:
     assert [item.repository_rel_path for item in impact.render_children] == ["packages/ui/src/Button.tsx"]
     assert impact.render_children[0].prop_names == ("label",)
     assert impact.render_parents == tuple()
+    assert [item.field_name for item in impact.invariant_findings] == ["status"]
+    assert [item.target_label for item in impact.local_flow_edges] == ["setState"]
     assert any(component.id == "component:npm:@monorepo/utils" for component in impact.dependent_components)
     assert any(test.related_test.test_definition.id == "test:npm:@monorepo/core" for test in impact.related_tests)
     assert impact.quality_gates

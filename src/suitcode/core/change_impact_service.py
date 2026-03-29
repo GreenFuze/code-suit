@@ -8,7 +8,15 @@ from suitcode.core.code.models import CodeLocation
 from suitcode.core.code_reference_service import CodeReferenceService
 from suitcode.core.component_context_resolver import ComponentContextResolver
 from suitcode.core.context_service import ContextService
-from suitcode.core.intelligence_models import ComponentDependencyEdge, FileRelationshipKind, FileRelationshipRef, RenderEdgeKind, RenderEdgeRef
+from suitcode.core.intelligence_models import (
+    ComponentDependencyEdge,
+    FileRelationshipKind,
+    FileRelationshipRef,
+    InvariantFindingRef,
+    RenderEdgeKind,
+    RenderEdgeRef,
+    StaticFlowEdgeRef,
+)
 from suitcode.core.impact_target_resolution import ImpactTargetResolver
 from suitcode.core.intelligence_models import ComponentContext
 from suitcode.core.models import Component, Runner
@@ -103,6 +111,8 @@ class ChangeImpactService:
         dependent_components = self._dependent_components(primary_component, dependent_preview_limit)
         dependency_files, dependent_files = self._file_relationships(resolved.evidence_path)
         render_children, render_parents = self._render_edges(resolved.evidence_path)
+        invariant_findings = self._invariant_findings(resolved.evidence_path)
+        local_flow_edges = self._local_flow_edges(resolved.evidence_path)
         implementation_locations = self._implementation_locations(resolved.evidence_path)
         implementation_components = self._implementation_components(implementation_locations)
         related_tests = self._test_impacts(resolved.related_tests)
@@ -126,6 +136,8 @@ class ChangeImpactService:
             dependent_files=dependent_files,
             render_children=render_children,
             render_parents=render_parents,
+            invariant_findings=invariant_findings,
+            local_flow_edges=local_flow_edges,
             implementation_locations=implementation_locations,
             implementation_components=implementation_components,
             dependent_components=dependent_components,
@@ -144,6 +156,8 @@ class ChangeImpactService:
                 dependent_files=dependent_files,
                 render_children=render_children,
                 render_parents=render_parents,
+                invariant_findings=invariant_findings,
+                local_flow_edges=local_flow_edges,
                 implementation_locations=implementation_locations,
                 implementation_components=implementation_components,
                 dependent_components=dependent_components,
@@ -164,6 +178,8 @@ class ChangeImpactService:
                 dependent_files=dependent_files,
                 render_children=render_children,
                 render_parents=render_parents,
+                invariant_findings=invariant_findings,
+                local_flow_edges=local_flow_edges,
                 implementation_locations=implementation_locations,
                 implementation_components=implementation_components,
                 dependent_components=dependent_components,
@@ -178,6 +194,8 @@ class ChangeImpactService:
                 dependent_files=dependent_files,
                 render_children=render_children,
                 render_parents=render_parents,
+                invariant_findings=invariant_findings,
+                local_flow_edges=local_flow_edges,
                 implementation_locations=implementation_locations,
                 implementation_components=implementation_components,
                 dependent_components=dependent_components,
@@ -260,6 +278,16 @@ class ChangeImpactService:
                 relationship_kind=RenderEdgeKind.RENDERED_BY,
             ),
         )
+
+    def _invariant_findings(self, evidence_path: str | None) -> tuple[InvariantFindingRef, ...]:
+        if evidence_path is None:
+            return tuple()
+        return self._repository.code.get_file_invariant_findings(evidence_path)
+
+    def _local_flow_edges(self, evidence_path: str | None) -> tuple[StaticFlowEdgeRef, ...]:
+        if evidence_path is None:
+            return tuple()
+        return self._repository.code.get_file_local_flow_edges(evidence_path)
 
     def _implementation_components(
         self,
@@ -440,6 +468,8 @@ class ChangeImpactService:
         dependent_files: tuple[FileRelationshipRef, ...],
         render_children: tuple[RenderEdgeRef, ...],
         render_parents: tuple[RenderEdgeRef, ...],
+        invariant_findings: tuple[InvariantFindingRef, ...],
+        local_flow_edges: tuple[StaticFlowEdgeRef, ...],
         dependent_components: tuple[Component, ...],
         reference_locations: tuple[CodeLocation, ...],
         related_tests: tuple[TestImpact, ...],
@@ -493,6 +523,27 @@ class ChangeImpactService:
                     source_tool=self._render_source_tool((*render_children, *render_parents), evidence_path),
                     evidence_summary="change analysis includes deterministic JSX render-edge evidence",
                     evidence_paths=tuple(render_paths[:10]),
+                )
+            )
+        if invariant_findings or local_flow_edges:
+            static_paths: list[str] = []
+            if evidence_path is not None:
+                static_paths.append(evidence_path)
+            for item in invariant_findings:
+                if item.repository_rel_path not in static_paths:
+                    static_paths.append(item.repository_rel_path)
+                for producer in item.producer_sites_preview:
+                    if producer.repository_rel_path not in static_paths:
+                        static_paths.append(producer.repository_rel_path)
+            for item in local_flow_edges:
+                if item.repository_rel_path not in static_paths:
+                    static_paths.append(item.repository_rel_path)
+            entries.append(
+                derived_summary_provenance(
+                    source_kind=SourceKind.DEPENDENCY_GRAPH,
+                    source_tool=self._static_analysis_source_tool((*invariant_findings, *local_flow_edges), evidence_path),
+                    evidence_summary="change analysis includes deterministic TypeScript static-analysis evidence",
+                    evidence_paths=tuple(static_paths[:10]),
                 )
             )
         if implementation_locations or implementation_components:
@@ -565,6 +616,22 @@ class ChangeImpactService:
     ) -> str | None:
         for relationship in render_edges:
             for provenance in relationship.provenance:
+                if provenance.source_tool is not None:
+                    return provenance.source_tool
+        if evidence_path is None:
+            return None
+        lowered = evidence_path.lower()
+        if lowered.endswith((".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs")):
+            return "typescript"
+        return None
+
+    @staticmethod
+    def _static_analysis_source_tool(
+        items: tuple[InvariantFindingRef | StaticFlowEdgeRef, ...],
+        evidence_path: str | None,
+    ) -> str | None:
+        for item in items:
+            for provenance in item.provenance:
                 if provenance.source_tool is not None:
                     return provenance.source_tool
         if evidence_path is None:

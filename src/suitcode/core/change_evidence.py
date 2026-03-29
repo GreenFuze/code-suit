@@ -11,7 +11,16 @@ from suitcode.core.change_models import (
     TestImpact,
 )
 from suitcode.core.code.models import CodeLocation
-from suitcode.core.intelligence_models import ComponentDependencyEdge, FileRelationshipKind, FileRelationshipRef, RenderEdgeKind, RenderEdgeRef
+from suitcode.core.intelligence_models import (
+    ComponentDependencyEdge,
+    FileRelationshipKind,
+    FileRelationshipRef,
+    InvariantFindingRef,
+    RenderEdgeKind,
+    RenderEdgeRef,
+    StaticFlowEdgeKind,
+    StaticFlowEdgeRef,
+)
 from suitcode.core.models import Component
 from suitcode.core.repository_models import OwnedNodeInfo
 
@@ -26,6 +35,8 @@ class ChangeEvidenceAssembler:
         ChangeEvidenceEdgeKind.TARGET_DEPENDENT_FILE,
         ChangeEvidenceEdgeKind.TARGET_RENDER_CHILD,
         ChangeEvidenceEdgeKind.TARGET_RENDER_PARENT,
+        ChangeEvidenceEdgeKind.TARGET_INVARIANT_FINDING,
+        ChangeEvidenceEdgeKind.TARGET_LOCAL_FLOW_EDGE,
         ChangeEvidenceEdgeKind.TARGET_IMPLEMENTATION_LOCATION,
         ChangeEvidenceEdgeKind.COMPONENT_IMPLEMENTATION_COMPONENT,
         ChangeEvidenceEdgeKind.COMPONENT_DEPENDENT_COMPONENT,
@@ -47,6 +58,8 @@ class ChangeEvidenceAssembler:
         dependent_files: tuple[FileRelationshipRef, ...],
         render_children: tuple[RenderEdgeRef, ...],
         render_parents: tuple[RenderEdgeRef, ...],
+        invariant_findings: tuple[InvariantFindingRef, ...],
+        local_flow_edges: tuple[StaticFlowEdgeRef, ...],
         implementation_locations: tuple[CodeLocation, ...],
         implementation_components: tuple[Component, ...],
         dependent_components: tuple[Component, ...],
@@ -64,6 +77,8 @@ class ChangeEvidenceAssembler:
             *self._relationship_edges(target_node_id, dependent_files),
             *self._render_edges(target_node_id, render_children),
             *self._render_edges(target_node_id, render_parents),
+            *self._invariant_edges(target_node_id, invariant_findings),
+            *self._local_flow_edges(target_node_id, local_flow_edges),
             *self._implementation_location_edges(target_node_id, implementation_locations),
             *self._implementation_component_edges(primary_component, implementation_components),
             *self._dependent_component_edges(primary_component, dependent_components, dependent_edges),
@@ -216,6 +231,50 @@ class ChangeEvidenceAssembler:
                 provenance=location.provenance,
             )
             for location in implementation_locations
+        )
+
+    def _invariant_edges(
+        self,
+        target_node_id: str,
+        invariant_findings: tuple[InvariantFindingRef, ...],
+    ) -> tuple[ChangeEvidenceEdge, ...]:
+        return tuple(
+            ChangeEvidenceEdge(
+                source_node_kind="change_target",
+                source_node_id=target_node_id,
+                target_node_kind="invariant_finding",
+                target_node_id=(
+                    f"invariant:{item.repository_rel_path}:{item.line_start}:{item.column_start}:{item.field_name}"
+                ),
+                edge_kind=ChangeEvidenceEdgeKind.TARGET_INVARIANT_FINDING,
+                reason="field invariant finding discovered from deterministic TypeScript static analysis",
+                provenance=item.provenance,
+            )
+            for item in invariant_findings
+        )
+
+    def _local_flow_edges(
+        self,
+        target_node_id: str,
+        local_flow_edges: tuple[StaticFlowEdgeRef, ...],
+    ) -> tuple[ChangeEvidenceEdge, ...]:
+        return tuple(
+            ChangeEvidenceEdge(
+                source_node_kind="change_target",
+                source_node_id=target_node_id,
+                target_node_kind="local_flow_edge",
+                target_node_id=(
+                    f"flow:{item.repository_rel_path}:{item.line_start}:{item.column_start}:{item.source_label}:{item.target_label}"
+                ),
+                edge_kind=ChangeEvidenceEdgeKind.TARGET_LOCAL_FLOW_EDGE,
+                reason=(
+                    "local static flow edge discovered from deterministic TypeScript analysis"
+                    if item.edge_kind == StaticFlowEdgeKind.CALLS_LOCAL_SYMBOL
+                    else "local producer-to-consumer flow discovered from deterministic TypeScript analysis"
+                ),
+                provenance=item.provenance,
+            )
+            for item in local_flow_edges
         )
 
     def _implementation_component_edges(
