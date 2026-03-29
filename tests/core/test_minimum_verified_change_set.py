@@ -75,6 +75,7 @@ def test_minimum_verified_change_set_for_npm_file_target(npm_repo_root) -> None:
     assert change_set.quality_validation_operations[0].proof_edges[0].edge_kind == (
         MinimumVerifiedEvidenceEdgeKind.TARGET_QUALITY_VALIDATION
     )
+    assert not any(item.reason_code.value == "runner_not_directly_validation_relevant" for item in change_set.excluded_items)
     assert change_set.provenance
 
 

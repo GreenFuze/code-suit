@@ -785,24 +785,11 @@ class MinimumVerifiedChangeSetService:
             )
 
         runner_actions: tuple[MinimumVerifiedRunnerAction, ...] = tuple()
-        runner_exclusions: list[ExcludedMinimumVerifiedItem] = []
         if resolved.owner.kind == "runner":
             runner_actions = self._minimizer.runner_items(
                 owner=resolved.owner,
                 actions=self._candidate_resolver.runner_actions(resolved.owner.id),
             )
-        elif not structured_artifacts:
-            for runner_id in self._candidate_resolver.related_runner_ids(resolved):
-                runner = self._repository.describe_runner(runner_id)
-                runner_exclusions.append(
-                    self._evidence_assembler.exclusion(
-                        item_kind=MinimumVerifiedItemKind.RUNNER_ACTION,
-                        item_id=runner.action_id,
-                        reason_code=MinimumVerifiedExclusionReason.RUNNER_NOT_DIRECTLY_VALIDATION_RELEVANT,
-                        reason="runner is operationally related but not required for the minimum validation set",
-                        provenance=runner.provenance,
-                    )
-                )
 
         quality_validation_operations: tuple[MinimumVerifiedQualityOperation, ...] = tuple()
         quality_hygiene_operations: tuple[MinimumVerifiedQualityOperation, ...] = tuple()
@@ -833,7 +820,6 @@ class MinimumVerifiedChangeSetService:
                 test_exclusions
                 or dependent_test_exclusions
                 or build_exclusions
-                or runner_exclusions
                 or availability_exclusions
             ),
         )
@@ -862,7 +848,6 @@ class MinimumVerifiedChangeSetService:
                     *test_exclusions,
                     *dependent_test_exclusions,
                     *build_exclusions,
-                    *runner_exclusions,
                     *availability_exclusions,
                 )
             ),

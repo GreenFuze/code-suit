@@ -19,9 +19,35 @@ from suitcode.core.intelligence_models import (
 from suitcode.core.provenance_builders import dependency_graph_provenance
 from suitcode.core.runner_service import RunnerService
 from suitcode.mcp.errors import McpNotFoundError, McpUnsupportedRepositoryError, McpValidationError
+from suitcode.mcp.models import (
+    BatchChangeImpactTargetView,
+    ChangeEvidencePreviewView,
+    ChangeImpactView,
+    FileOwnerView,
+    FileRelationshipView,
+    FileUnderstandingTargetView,
+    FileView,
+    LocationView,
+    OwnerView,
+    ProvenanceView,
+    TruthCoverageByDomainView,
+    TruthCoverageSummaryView,
+)
 from suitcode.mcp.service import SuitMcpService
 from suitcode.mcp.state import WorkspaceRegistry
 from suitcode.providers.shared.action_execution import ActionExecutionResult, ActionExecutionStatus
+
+
+def _provenance_view(*paths: str) -> tuple[ProvenanceView, ...]:
+    return (
+        ProvenanceView(
+            confidence_mode="high",
+            source_kind="dependency_graph",
+            source_tool="typescript",
+            evidence_summary="deterministic test evidence",
+            evidence_paths=paths or ("src/index.ts",),
+        ),
+    )
 
 
 def test_service_open_workspace_and_list_repositories(service: SuitMcpService, npm_repo_root: Path) -> None:
@@ -577,6 +603,11 @@ def test_mixed_code_and_docs_targets_include_validations_and_exclusions(service:
         item.reason_code == "no_deterministic_validation_surfaces_for_provider_owned_artifact"
         for item in minimum.excluded_items
     )
+    assert not any(item.reason_code == "runner_not_directly_validation_relevant" for item in minimum.excluded_items)
+    assert not any(
+        item.item_kind == "runner_action"
+        for item in minimum.compact_summary.exclusions
+    )
 
 
 def test_docs_only_validation_exclusions_omit_runner_noise_in_mixed_repo(
@@ -601,6 +632,248 @@ def test_docs_only_validation_exclusions_omit_runner_noise_in_mixed_repo(
     assert [item.reason_code for item in minimum.excluded_items] == [
         "no_deterministic_validation_surfaces_for_provider_owned_artifact"
     ]
+
+
+def test_compact_file_understanding_aggregate_ranks_by_shared_reference_sites(service: SuitMcpService) -> None:
+    shared = LocationView(
+        path="src/shared.ts",
+        line_start=10,
+        line_end=10,
+        column_start=2,
+        column_end=8,
+        symbol_id="symbol:shared",
+        provenance=_provenance_view("src/a.ts", "src/shared.ts"),
+    )
+    first_only = LocationView(
+        path="src/first.ts",
+        line_start=5,
+        line_end=5,
+        column_start=1,
+        column_end=4,
+        symbol_id="symbol:first",
+        provenance=_provenance_view("src/a.ts", "src/first.ts"),
+    )
+    second_only = LocationView(
+        path="src/second.ts",
+        line_start=6,
+        line_end=6,
+        column_start=1,
+        column_end=4,
+        symbol_id="symbol:second",
+        provenance=_provenance_view("src/b.ts", "src/second.ts"),
+    )
+    third_only = LocationView(
+        path="src/third.ts",
+        line_start=7,
+        line_end=7,
+        column_start=1,
+        column_end=4,
+        symbol_id="symbol:third",
+        provenance=_provenance_view("src/c.ts", "src/third.ts"),
+    )
+    owner = FileOwnerView(
+        file=FileView(
+            id="file:src/a.ts",
+            path="src/a.ts",
+            language="typescript",
+            owner_id="component:npm:demo",
+            provenance=_provenance_view("src/a.ts"),
+        ),
+        owner=OwnerView(id="component:npm:demo", kind="component", name="demo"),
+    )
+    targets = (
+        FileUnderstandingTargetView(
+            detail_level="full",
+            repository_rel_path="src/a.ts",
+            file_owner=owner,
+            reference_site_count=2,
+            reference_sites_preview=(shared, first_only),
+            dependency_file_count=0,
+            dependency_files_preview=tuple(),
+            dependent_file_count=0,
+            dependent_files_preview=tuple(),
+            render_child_count=0,
+            render_children_preview=tuple(),
+            render_parent_count=0,
+            render_parents_preview=tuple(),
+            invariant_finding_count=0,
+            invariant_findings_preview=tuple(),
+            local_flow_edge_count=0,
+            local_flow_edges_preview=tuple(),
+            implementation_location_count=0,
+            implementation_locations_preview=tuple(),
+            related_tests=tuple(),
+            provenance=_provenance_view("src/a.ts"),
+        ),
+        FileUnderstandingTargetView(
+            detail_level="full",
+            repository_rel_path="src/b.ts",
+            file_owner=owner.model_copy(
+                update={
+                    "file": FileView(
+                        id="file:src/b.ts",
+                        path="src/b.ts",
+                        language="typescript",
+                        owner_id="component:npm:demo",
+                        provenance=_provenance_view("src/b.ts"),
+                    )
+                }
+            ),
+            reference_site_count=2,
+            reference_sites_preview=(shared, second_only),
+            dependency_file_count=0,
+            dependency_files_preview=tuple(),
+            dependent_file_count=0,
+            dependent_files_preview=tuple(),
+            render_child_count=0,
+            render_children_preview=tuple(),
+            render_parent_count=0,
+            render_parents_preview=tuple(),
+            invariant_finding_count=0,
+            invariant_findings_preview=tuple(),
+            local_flow_edge_count=0,
+            local_flow_edges_preview=tuple(),
+            implementation_location_count=0,
+            implementation_locations_preview=tuple(),
+            related_tests=tuple(),
+            provenance=_provenance_view("src/b.ts"),
+        ),
+        FileUnderstandingTargetView(
+            detail_level="full",
+            repository_rel_path="src/c.ts",
+            file_owner=owner.model_copy(
+                update={
+                    "file": FileView(
+                        id="file:src/c.ts",
+                        path="src/c.ts",
+                        language="typescript",
+                        owner_id="component:npm:demo",
+                        provenance=_provenance_view("src/c.ts"),
+                    )
+                }
+            ),
+            reference_site_count=1,
+            reference_sites_preview=(third_only,),
+            dependency_file_count=0,
+            dependency_files_preview=tuple(),
+            dependent_file_count=0,
+            dependent_files_preview=tuple(),
+            render_child_count=0,
+            render_children_preview=tuple(),
+            render_parent_count=0,
+            render_parents_preview=tuple(),
+            invariant_finding_count=0,
+            invariant_findings_preview=tuple(),
+            local_flow_edge_count=0,
+            local_flow_edges_preview=tuple(),
+            implementation_location_count=0,
+            implementation_locations_preview=tuple(),
+            related_tests=tuple(),
+            provenance=_provenance_view("src/c.ts"),
+        ),
+    )
+
+    view = service._compact_file_understanding_view(targets)
+
+    assert view.aggregate_reference_site_count == 4
+    assert len(view.aggregate_reference_sites_preview) == 3
+    assert view.aggregate_reference_sites_preview[0].path == "src/shared.ts"
+
+
+def test_compact_change_impact_aggregate_ranks_by_shared_reference_sites(service: SuitMcpService) -> None:
+    shared = LocationView(
+        path="src/shared.ts",
+        line_start=10,
+        line_end=10,
+        column_start=2,
+        column_end=8,
+        symbol_id="symbol:shared",
+        provenance=_provenance_view("src/a.ts", "src/shared.ts"),
+    )
+    first_only = LocationView(
+        path="src/first.ts",
+        line_start=5,
+        line_end=5,
+        column_start=1,
+        column_end=4,
+        symbol_id="symbol:first",
+        provenance=_provenance_view("src/a.ts", "src/first.ts"),
+    )
+    second_only = LocationView(
+        path="src/second.ts",
+        line_start=6,
+        line_end=6,
+        column_start=1,
+        column_end=4,
+        symbol_id="symbol:second",
+        provenance=_provenance_view("src/b.ts", "src/second.ts"),
+    )
+    truth_coverage = TruthCoverageSummaryView(
+        scope_kind="change",
+        scope_id="change_target:file:src/a.ts",
+        domains=(
+            TruthCoverageByDomainView(
+                domain="code",
+                total_entities=1,
+                authoritative_count=1,
+                derived_count=0,
+                heuristic_count=0,
+                unavailable_count=0,
+                availability="available",
+                degraded_reason=None,
+                source_kind_mix={"dependency_graph": 1},
+                source_tool_mix={"typescript": 1},
+                execution_available=None,
+                action_capabilities={},
+            ),
+        ),
+        overall_authoritative_count=1,
+        overall_derived_count=0,
+        overall_heuristic_count=0,
+        overall_unavailable_count=0,
+        overall_availability="available",
+        provenance=_provenance_view("src/a.ts"),
+    )
+    impact = ChangeImpactView(
+        target_kind="file",
+        owner=OwnerView(id="component:npm:demo", kind="component", name="demo"),
+        primary_component=None,
+        component_context=None,
+        file_context=None,
+        symbol_context=None,
+        dependency_files=tuple(),
+        dependent_files=tuple(),
+        render_children=tuple(),
+        render_parents=tuple(),
+        invariant_findings=tuple(),
+        local_flow_edges=tuple(),
+        implementation_locations=tuple(),
+        implementation_components=tuple(),
+        dependent_components=tuple(),
+        reference_locations=(shared, first_only),
+        related_tests=tuple(),
+        related_runners=tuple(),
+        quality_gates=tuple(),
+        evidence=ChangeEvidencePreviewView(total_edges=0, counts_by_kind={}, edges_preview=tuple(), truncated=False),
+        truth_coverage=truth_coverage,
+        provenance=_provenance_view("src/a.ts"),
+    )
+    second_impact = impact.model_copy(
+        update={
+            "reference_locations": (shared, second_only),
+            "provenance": _provenance_view("src/b.ts"),
+        }
+    )
+
+    view = service._compact_change_impact_view(
+        (
+            BatchChangeImpactTargetView(repository_rel_path="src/a.ts", impact=impact),
+            BatchChangeImpactTargetView(repository_rel_path="src/b.ts", impact=second_impact),
+        )
+    )
+
+    assert len(view.reference_sites) == 3
+    assert view.reference_sites[0].path == "src/shared.ts"
 
 
 def test_what_changes_if_i_edit_this_supports_provider_owned_markdown_and_openapi(

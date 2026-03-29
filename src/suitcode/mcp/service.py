@@ -36,6 +36,7 @@ from suitcode.mcp.models import (
     ComponentContextView,
     ComponentView,
     DependencyRefView,
+    ExcludedMinimumVerifiedItemView,
     ExternalPackageView,
     FileContextView,
     FileOwnerView,
@@ -50,6 +51,8 @@ from suitcode.mcp.models import (
     InefficientToolCallView,
     ListResult,
     LocationView,
+    MinimumVerifiedBuildTargetView,
+    MinimumVerifiedTestTargetView,
     OpenWorkspaceResult,
     PackageManagerView,
     ProviderDescriptorView,
@@ -235,133 +238,73 @@ class SuitMcpService:
                 return self._compact_file_understanding_view(targets)
             if validated_detail_level == "standard":
                 return self._standard_file_understanding_view(targets)
+            aggregate_reference_site_count, aggregate_reference_sites_preview = self._aggregate_ranked_views(
+                tuple(target.reference_sites_preview for target in targets),
+                key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+                rank_key=self._location_rank_key,
+            )
+            aggregate_dependency_file_count, aggregate_dependency_files_preview = self._aggregate_ranked_views(
+                tuple(target.dependency_files_preview for target in targets),
+                key=lambda item: item.path,
+                rank_key=self._file_relationship_rank_key,
+            )
+            aggregate_dependent_file_count, aggregate_dependent_files_preview = self._aggregate_ranked_views(
+                tuple(target.dependent_files_preview for target in targets),
+                key=lambda item: item.path,
+                rank_key=self._file_relationship_rank_key,
+            )
+            aggregate_render_child_count, aggregate_render_children_preview = self._aggregate_ranked_views(
+                tuple(target.render_children_preview for target in targets),
+                key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
+                rank_key=self._render_edge_rank_key,
+            )
+            aggregate_render_parent_count, aggregate_render_parents_preview = self._aggregate_ranked_views(
+                tuple(target.render_parents_preview for target in targets),
+                key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
+                rank_key=self._render_edge_rank_key,
+            )
+            aggregate_invariant_finding_count, aggregate_invariant_findings_preview = self._aggregate_ranked_views(
+                tuple(target.invariant_findings_preview for target in targets),
+                key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
+                rank_key=self._invariant_rank_key,
+            )
+            aggregate_local_flow_edge_count, aggregate_local_flow_edges_preview = self._aggregate_ranked_views(
+                tuple(target.local_flow_edges_preview for target in targets),
+                key=lambda item: (item.path, item.line_start, item.column_start, item.edge_kind, item.source_label, item.target_label),
+                rank_key=self._static_flow_rank_key,
+            )
+            aggregate_implementation_location_count, aggregate_implementation_locations_preview = self._aggregate_ranked_views(
+                tuple(target.implementation_locations_preview for target in targets),
+                key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+                rank_key=self._location_rank_key,
+            )
+            _, aggregate_related_tests = self._aggregate_ranked_views(
+                tuple(target.related_tests for target in targets),
+                key=lambda item: item.id,
+                rank_key=self._related_test_rank_key,
+            )
             return FileUnderstandingView(
                 detail_level="full",
                 target_count=len(targets),
                 targets=targets,
                 owner_ids=tuple(sorted({item.file_owner.owner.id for item in targets})),
-                aggregate_reference_site_count=len(
-                    {
-                        (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id)
-                        for target in targets
-                        for item in target.reference_sites_preview
-                    }
-                ),
-                aggregate_reference_sites_preview=self._dedupe_views(
-                    tuple(item for target in targets for item in target.reference_sites_preview),
-                    key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
-                ),
-                aggregate_dependency_file_count=len(
-                    {item.path for target in targets for item in target.dependency_files_preview}
-                ),
-                aggregate_dependency_files_preview=self._dedupe_views(
-                    tuple(item for target in targets for item in target.dependency_files_preview),
-                    key=lambda item: item.path,
-                ),
-                aggregate_dependent_file_count=len(
-                    {item.path for target in targets for item in target.dependent_files_preview}
-                ),
-                aggregate_dependent_files_preview=self._dedupe_views(
-                    tuple(item for target in targets for item in target.dependent_files_preview),
-                    key=lambda item: item.path,
-                ),
-                aggregate_render_child_count=len(
-                    {
-                        (
-                            item.path,
-                            item.line_start,
-                            item.column_start,
-                            item.prop_names,
-                            item.has_spread_props,
-                        )
-                        for target in targets
-                        for item in target.render_children_preview
-                    }
-                ),
-                aggregate_render_children_preview=self._dedupe_views(
-                    tuple(item for target in targets for item in target.render_children_preview),
-                    key=lambda item: (
-                        item.path,
-                        item.line_start,
-                        item.column_start,
-                        item.prop_names,
-                        item.has_spread_props,
-                    ),
-                ),
-                aggregate_render_parent_count=len(
-                    {
-                        (
-                            item.path,
-                            item.line_start,
-                            item.column_start,
-                            item.prop_names,
-                            item.has_spread_props,
-                        )
-                        for target in targets
-                        for item in target.render_parents_preview
-                    }
-                ),
-                aggregate_render_parents_preview=self._dedupe_views(
-                    tuple(item for target in targets for item in target.render_parents_preview),
-                    key=lambda item: (
-                        item.path,
-                        item.line_start,
-                        item.column_start,
-                        item.prop_names,
-                        item.has_spread_props,
-                    ),
-                ),
-                aggregate_invariant_finding_count=len(
-                    {
-                        (item.path, item.line_start, item.column_start, item.field_name, item.subject_label)
-                        for target in targets
-                        for item in target.invariant_findings_preview
-                    }
-                ),
-                aggregate_invariant_findings_preview=self._dedupe_views(
-                    tuple(item for target in targets for item in target.invariant_findings_preview),
-                    key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
-                ),
-                aggregate_local_flow_edge_count=len(
-                    {
-                        (
-                            item.path,
-                            item.line_start,
-                            item.column_start,
-                            item.edge_kind,
-                            item.source_label,
-                            item.target_label,
-                        )
-                        for target in targets
-                        for item in target.local_flow_edges_preview
-                    }
-                ),
-                aggregate_local_flow_edges_preview=self._dedupe_views(
-                    tuple(item for target in targets for item in target.local_flow_edges_preview),
-                    key=lambda item: (
-                        item.path,
-                        item.line_start,
-                        item.column_start,
-                        item.edge_kind,
-                        item.source_label,
-                        item.target_label,
-                    ),
-                ),
-                aggregate_implementation_location_count=len(
-                    {
-                        (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id)
-                        for target in targets
-                        for item in target.implementation_locations_preview
-                    }
-                ),
-                aggregate_implementation_locations_preview=self._dedupe_views(
-                    tuple(item for target in targets for item in target.implementation_locations_preview),
-                    key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
-                ),
-                aggregate_related_tests=self._dedupe_views(
-                    tuple(item for target in targets for item in target.related_tests),
-                    key=lambda item: item.id,
-                ),
+                aggregate_reference_site_count=aggregate_reference_site_count,
+                aggregate_reference_sites_preview=aggregate_reference_sites_preview,
+                aggregate_dependency_file_count=aggregate_dependency_file_count,
+                aggregate_dependency_files_preview=aggregate_dependency_files_preview,
+                aggregate_dependent_file_count=aggregate_dependent_file_count,
+                aggregate_dependent_files_preview=aggregate_dependent_files_preview,
+                aggregate_render_child_count=aggregate_render_child_count,
+                aggregate_render_children_preview=aggregate_render_children_preview,
+                aggregate_render_parent_count=aggregate_render_parent_count,
+                aggregate_render_parents_preview=aggregate_render_parents_preview,
+                aggregate_invariant_finding_count=aggregate_invariant_finding_count,
+                aggregate_invariant_findings_preview=aggregate_invariant_findings_preview,
+                aggregate_local_flow_edge_count=aggregate_local_flow_edge_count,
+                aggregate_local_flow_edges_preview=aggregate_local_flow_edges_preview,
+                aggregate_implementation_location_count=aggregate_implementation_location_count,
+                aggregate_implementation_locations_preview=aggregate_implementation_locations_preview,
+                aggregate_related_tests=aggregate_related_tests,
                 suggested_follow_ups=(
                     tuple()
                     if targets and all(target.structured_artifact is not None for target in targets)
@@ -457,82 +400,89 @@ class SuitMcpService:
                 return self._compact_change_impact_view(frozen_targets)
             if validated_detail_level == "standard":
                 return self._standard_change_impact_view(frozen_targets)
+            _, reference_sites = self._aggregate_ranked_views(
+                tuple(target.impact.reference_locations for target in frozen_targets),
+                key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+                rank_key=self._location_rank_key,
+            )
+            _, dependent_files = self._aggregate_ranked_views(
+                tuple(target.impact.dependent_files for target in frozen_targets),
+                key=lambda item: item.path,
+                rank_key=self._file_relationship_rank_key,
+            )
+            _, render_children = self._aggregate_ranked_views(
+                tuple(target.impact.render_children for target in frozen_targets),
+                key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
+                rank_key=self._render_edge_rank_key,
+            )
+            _, render_parents = self._aggregate_ranked_views(
+                tuple(target.impact.render_parents for target in frozen_targets),
+                key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
+                rank_key=self._render_edge_rank_key,
+            )
+            _, invariant_findings = self._aggregate_ranked_views(
+                tuple(target.impact.invariant_findings for target in frozen_targets),
+                key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
+                rank_key=self._invariant_rank_key,
+            )
+            _, local_flow_edges = self._aggregate_ranked_views(
+                tuple(target.impact.local_flow_edges for target in frozen_targets),
+                key=lambda item: (item.path, item.line_start, item.column_start, item.edge_kind, item.source_label, item.target_label),
+                rank_key=self._static_flow_rank_key,
+            )
+            _, implementation_locations = self._aggregate_ranked_views(
+                tuple(target.impact.implementation_locations for target in frozen_targets),
+                key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+                rank_key=self._location_rank_key,
+            )
+            _, implementation_components = self._aggregate_ranked_views(
+                tuple(target.impact.implementation_components for target in frozen_targets),
+                key=lambda item: item.id,
+                rank_key=self._component_rank_key,
+            )
+            _, dependent_components = self._aggregate_ranked_views(
+                tuple(target.impact.dependent_components for target in frozen_targets),
+                key=lambda item: item.id,
+                rank_key=self._component_rank_key,
+            )
+            _, reference_locations = self._aggregate_ranked_views(
+                tuple(target.impact.reference_locations for target in frozen_targets),
+                key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+                rank_key=self._location_rank_key,
+            )
+            _, related_tests = self._aggregate_ranked_views(
+                tuple(target.impact.related_tests for target in frozen_targets),
+                key=lambda item: item.test.id,
+                rank_key=self._test_impact_rank_key,
+            )
+            _, related_runners = self._aggregate_ranked_views(
+                tuple(target.impact.related_runners for target in frozen_targets),
+                key=lambda item: item.runner.id,
+                rank_key=self._runner_impact_rank_key,
+            )
+            _, quality_gates = self._aggregate_ranked_views(
+                tuple(target.impact.quality_gates for target in frozen_targets),
+                key=lambda item: (item.provider_id, item.reason, item.applies),
+                rank_key=self._quality_gate_rank_key,
+            )
             return BatchChangeImpactView(
                 detail_level="full",
                 target_count=len(frozen_targets),
                 targets=frozen_targets,
                 owner_ids=tuple(sorted({item.impact.owner.id for item in frozen_targets})),
-                reference_sites=self._dedupe_views(
-                    tuple(item for target in frozen_targets for item in target.impact.reference_locations),
-                    key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
-                ),
-                dependent_files=self._dedupe_views(
-                    tuple(item for target in frozen_targets for item in target.impact.dependent_files),
-                    key=lambda item: item.path,
-                ),
-                render_children=self._dedupe_views(
-                    tuple(item for target in frozen_targets for item in target.impact.render_children),
-                    key=lambda item: (
-                        item.path,
-                        item.line_start,
-                        item.column_start,
-                        item.prop_names,
-                        item.has_spread_props,
-                    ),
-                ),
-                render_parents=self._dedupe_views(
-                    tuple(item for target in frozen_targets for item in target.impact.render_parents),
-                    key=lambda item: (
-                        item.path,
-                        item.line_start,
-                        item.column_start,
-                        item.prop_names,
-                        item.has_spread_props,
-                    ),
-                ),
-                invariant_findings=self._dedupe_views(
-                    tuple(item for target in frozen_targets for item in target.impact.invariant_findings),
-                    key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
-                ),
-                local_flow_edges=self._dedupe_views(
-                    tuple(item for target in frozen_targets for item in target.impact.local_flow_edges),
-                    key=lambda item: (
-                        item.path,
-                        item.line_start,
-                        item.column_start,
-                        item.edge_kind,
-                        item.source_label,
-                        item.target_label,
-                    ),
-                ),
-                implementation_locations=self._dedupe_views(
-                    tuple(item for target in frozen_targets for item in target.impact.implementation_locations),
-                    key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
-                ),
-                implementation_components=self._dedupe_views(
-                    tuple(item for target in frozen_targets for item in target.impact.implementation_components),
-                    key=lambda item: item.id,
-                ),
-                dependent_components=self._dedupe_views(
-                    tuple(item for target in frozen_targets for item in target.impact.dependent_components),
-                    key=lambda item: item.id,
-                ),
-                reference_locations=self._dedupe_views(
-                    tuple(item for target in frozen_targets for item in target.impact.reference_locations),
-                    key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
-                ),
-                related_tests=self._dedupe_views(
-                    tuple(item for target in frozen_targets for item in target.impact.related_tests),
-                    key=lambda item: item.test.id,
-                ),
-                related_runners=self._dedupe_views(
-                    tuple(item for target in frozen_targets for item in target.impact.related_runners),
-                    key=lambda item: item.runner.id,
-                ),
-                quality_gates=self._dedupe_views(
-                    tuple(item for target in frozen_targets for item in target.impact.quality_gates),
-                    key=lambda item: (item.provider_id, item.reason, item.applies),
-                ),
+                reference_sites=reference_sites,
+                dependent_files=dependent_files,
+                render_children=render_children,
+                render_parents=render_parents,
+                invariant_findings=invariant_findings,
+                local_flow_edges=local_flow_edges,
+                implementation_locations=implementation_locations,
+                implementation_components=implementation_components,
+                dependent_components=dependent_components,
+                reference_locations=reference_locations,
+                related_tests=related_tests,
+                related_runners=related_runners,
+                quality_gates=quality_gates,
                 provenance=self._merge_view_provenance(*(target.impact.provenance for target in frozen_targets)),
             )
 
@@ -605,6 +555,12 @@ class SuitMcpService:
                 tuple(item for target in frozen_targets for item in target.change_set.excluded_items),
                 key=lambda item: (item.item_kind, item.item_id, item.reason_code),
             )
+            tests, excluded_items = self._narrow_batch_minimum_verified_tests(
+                tests=tests,
+                build_targets=build_targets,
+                excluded_items=excluded_items,
+            )
+            excluded_items = self._filter_batch_minimum_verified_exclusions(excluded_items)
             return BatchMinimumVerifiedChangeSetView(
                 compact_summary=self._change_impact_presenter.minimum_verified_compact_summary_view(
                     tests=tests,
@@ -1418,6 +1374,54 @@ class SuitMcpService:
         self,
         targets: tuple[FileUnderstandingTargetView, ...],
     ) -> FileUnderstandingCompactView:
+        aggregate_reference_site_count, aggregate_reference_sites_preview = self._aggregate_ranked_views(
+            tuple(target.reference_sites_preview for target in targets),
+            key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+            rank_key=self._location_rank_key,
+            limit=3,
+        )
+        aggregate_dependency_file_count, aggregate_dependency_files_preview = self._aggregate_ranked_views(
+            tuple(target.dependency_files_preview for target in targets),
+            key=lambda item: item.path,
+            rank_key=self._file_relationship_rank_key,
+            limit=3,
+        )
+        aggregate_dependent_file_count, aggregate_dependent_files_preview = self._aggregate_ranked_views(
+            tuple(target.dependent_files_preview for target in targets),
+            key=lambda item: item.path,
+            rank_key=self._file_relationship_rank_key,
+            limit=3,
+        )
+        aggregate_render_child_count, aggregate_render_children_preview = self._aggregate_ranked_views(
+            tuple(target.render_children_preview for target in targets),
+            key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
+            rank_key=self._render_edge_rank_key,
+            limit=3,
+        )
+        aggregate_render_parent_count, aggregate_render_parents_preview = self._aggregate_ranked_views(
+            tuple(target.render_parents_preview for target in targets),
+            key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
+            rank_key=self._render_edge_rank_key,
+            limit=3,
+        )
+        aggregate_invariant_finding_count, aggregate_invariant_findings_preview = self._aggregate_ranked_views(
+            tuple(self._compact_invariant_findings(target.invariant_findings_preview) for target in targets),
+            key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
+            rank_key=self._invariant_rank_key,
+            limit=3,
+        )
+        aggregate_local_flow_edge_count, aggregate_local_flow_edges_preview = self._aggregate_ranked_views(
+            tuple(target.local_flow_edges_preview for target in targets),
+            key=lambda item: (item.path, item.line_start, item.column_start, item.edge_kind, item.source_label, item.target_label),
+            rank_key=self._static_flow_rank_key,
+            limit=3,
+        )
+        _, aggregate_related_tests = self._aggregate_ranked_views(
+            tuple(target.related_tests for target in targets),
+            key=lambda item: item.id,
+            rank_key=self._related_test_rank_key,
+            limit=3,
+        )
         compact_targets = tuple(
             FileUnderstandingCompactTargetView(
                 detail_level="compact",
@@ -1448,113 +1452,21 @@ class SuitMcpService:
             target_count=len(compact_targets),
             targets=compact_targets,
             owner_ids=tuple(sorted({item.file_owner.owner.id for item in compact_targets})),
-            aggregate_reference_site_count=len(
-                {
-                    (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id)
-                    for target in compact_targets
-                    for item in target.reference_sites_preview
-                }
-            ),
-            aggregate_reference_sites_preview=self._dedupe_views(
-                tuple(item for target in compact_targets for item in target.reference_sites_preview),
-                key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
-            )[:3],
-            aggregate_dependency_file_count=len({item.path for target in compact_targets for item in target.dependency_files_preview}),
-            aggregate_dependency_files_preview=self._dedupe_views(
-                tuple(item for target in compact_targets for item in target.dependency_files_preview),
-                key=lambda item: item.path,
-            )[:3],
-            aggregate_dependent_file_count=len({item.path for target in compact_targets for item in target.dependent_files_preview}),
-            aggregate_dependent_files_preview=self._dedupe_views(
-                tuple(item for target in compact_targets for item in target.dependent_files_preview),
-                key=lambda item: item.path,
-            )[:3],
-            aggregate_render_child_count=len(
-                {
-                    (
-                        item.path,
-                        item.line_start,
-                        item.column_start,
-                        item.prop_names,
-                        item.has_spread_props,
-                    )
-                    for target in compact_targets
-                    for item in target.render_children_preview
-                }
-            ),
-            aggregate_render_children_preview=self._dedupe_views(
-                tuple(item for target in compact_targets for item in target.render_children_preview),
-                key=lambda item: (
-                    item.path,
-                    item.line_start,
-                    item.column_start,
-                    item.prop_names,
-                    item.has_spread_props,
-                ),
-            )[:3],
-            aggregate_render_parent_count=len(
-                {
-                    (
-                        item.path,
-                        item.line_start,
-                        item.column_start,
-                        item.prop_names,
-                        item.has_spread_props,
-                    )
-                    for target in compact_targets
-                    for item in target.render_parents_preview
-                }
-            ),
-            aggregate_render_parents_preview=self._dedupe_views(
-                tuple(item for target in compact_targets for item in target.render_parents_preview),
-                key=lambda item: (
-                    item.path,
-                    item.line_start,
-                    item.column_start,
-                    item.prop_names,
-                    item.has_spread_props,
-                ),
-            )[:3],
-            aggregate_invariant_finding_count=len(
-                {
-                    (item.path, item.line_start, item.column_start, item.field_name, item.subject_label)
-                    for target in compact_targets
-                    for item in target.invariant_findings_preview
-                }
-            ),
-            aggregate_invariant_findings_preview=self._dedupe_views(
-                tuple(item for target in compact_targets for item in target.invariant_findings_preview),
-                key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
-            )[:3],
-            aggregate_local_flow_edge_count=len(
-                {
-                    (
-                        item.path,
-                        item.line_start,
-                        item.column_start,
-                        item.edge_kind,
-                        item.source_label,
-                        item.target_label,
-                    )
-                    for target in compact_targets
-                    for item in target.local_flow_edges_preview
-                }
-            ),
-            aggregate_local_flow_edges_preview=self._dedupe_views(
-                tuple(item for target in compact_targets for item in target.local_flow_edges_preview),
-                key=lambda item: (
-                    item.path,
-                    item.line_start,
-                    item.column_start,
-                    item.edge_kind,
-                    item.source_label,
-                    item.target_label,
-                ),
-            )[:3],
-            aggregate_related_tests=self._dedupe_views(
-                tuple(item for target in compact_targets for item in target.related_tests),
-                key=lambda item: item.id,
-            )[:3],
+            aggregate_reference_site_count=aggregate_reference_site_count,
+            aggregate_reference_sites_preview=aggregate_reference_sites_preview,
+            aggregate_dependency_file_count=aggregate_dependency_file_count,
+            aggregate_dependency_files_preview=aggregate_dependency_files_preview,
+            aggregate_dependent_file_count=aggregate_dependent_file_count,
+            aggregate_dependent_files_preview=aggregate_dependent_files_preview,
+            aggregate_render_child_count=aggregate_render_child_count,
+            aggregate_render_children_preview=aggregate_render_children_preview,
+            aggregate_render_parent_count=aggregate_render_parent_count,
+            aggregate_render_parents_preview=aggregate_render_parents_preview,
+            aggregate_invariant_finding_count=aggregate_invariant_finding_count,
+            aggregate_invariant_findings_preview=aggregate_invariant_findings_preview,
+            aggregate_local_flow_edge_count=aggregate_local_flow_edge_count,
+            aggregate_local_flow_edges_preview=aggregate_local_flow_edges_preview,
+            aggregate_related_tests=aggregate_related_tests,
             suggested_follow_ups=(
                 tuple()
                 if compact_targets and all(target.structured_artifact is not None for target in compact_targets)
@@ -1570,6 +1482,60 @@ class SuitMcpService:
         self,
         targets: tuple[FileUnderstandingTargetView, ...],
     ) -> FileUnderstandingStandardView:
+        aggregate_reference_site_count, aggregate_reference_sites_preview = self._aggregate_ranked_views(
+            tuple(target.reference_sites_preview for target in targets),
+            key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+            rank_key=self._location_rank_key,
+            limit=10,
+        )
+        aggregate_dependency_file_count, aggregate_dependency_files_preview = self._aggregate_ranked_views(
+            tuple(target.dependency_files_preview for target in targets),
+            key=lambda item: item.path,
+            rank_key=self._file_relationship_rank_key,
+            limit=10,
+        )
+        aggregate_dependent_file_count, aggregate_dependent_files_preview = self._aggregate_ranked_views(
+            tuple(target.dependent_files_preview for target in targets),
+            key=lambda item: item.path,
+            rank_key=self._file_relationship_rank_key,
+            limit=10,
+        )
+        aggregate_render_child_count, aggregate_render_children_preview = self._aggregate_ranked_views(
+            tuple(target.render_children_preview for target in targets),
+            key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
+            rank_key=self._render_edge_rank_key,
+            limit=10,
+        )
+        aggregate_render_parent_count, aggregate_render_parents_preview = self._aggregate_ranked_views(
+            tuple(target.render_parents_preview for target in targets),
+            key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
+            rank_key=self._render_edge_rank_key,
+            limit=10,
+        )
+        aggregate_invariant_finding_count, aggregate_invariant_findings_preview = self._aggregate_ranked_views(
+            tuple(target.invariant_findings_preview for target in targets),
+            key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
+            rank_key=self._invariant_rank_key,
+            limit=10,
+        )
+        aggregate_local_flow_edge_count, aggregate_local_flow_edges_preview = self._aggregate_ranked_views(
+            tuple(target.local_flow_edges_preview for target in targets),
+            key=lambda item: (item.path, item.line_start, item.column_start, item.edge_kind, item.source_label, item.target_label),
+            rank_key=self._static_flow_rank_key,
+            limit=10,
+        )
+        aggregate_implementation_location_count, aggregate_implementation_locations_preview = self._aggregate_ranked_views(
+            tuple(target.implementation_locations_preview for target in targets),
+            key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+            rank_key=self._location_rank_key,
+            limit=10,
+        )
+        _, aggregate_related_tests = self._aggregate_ranked_views(
+            tuple(target.related_tests for target in targets),
+            key=lambda item: item.id,
+            rank_key=self._related_test_rank_key,
+            limit=10,
+        )
         standard_targets = tuple(
             FileUnderstandingStandardTargetView(
                 detail_level="standard",
@@ -1602,124 +1568,23 @@ class SuitMcpService:
             target_count=len(standard_targets),
             targets=standard_targets,
             owner_ids=tuple(sorted({item.file_owner.owner.id for item in standard_targets})),
-            aggregate_reference_site_count=len(
-                {
-                    (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id)
-                    for target in standard_targets
-                    for item in target.reference_sites_preview
-                }
-            ),
-            aggregate_reference_sites_preview=self._dedupe_views(
-                tuple(item for target in standard_targets for item in target.reference_sites_preview),
-                key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
-            )[:10],
-            aggregate_dependency_file_count=len({item.path for target in standard_targets for item in target.dependency_files_preview}),
-            aggregate_dependency_files_preview=self._dedupe_views(
-                tuple(item for target in standard_targets for item in target.dependency_files_preview),
-                key=lambda item: item.path,
-            )[:10],
-            aggregate_dependent_file_count=len({item.path for target in standard_targets for item in target.dependent_files_preview}),
-            aggregate_dependent_files_preview=self._dedupe_views(
-                tuple(item for target in standard_targets for item in target.dependent_files_preview),
-                key=lambda item: item.path,
-            )[:10],
-            aggregate_render_child_count=len(
-                {
-                    (
-                        item.path,
-                        item.line_start,
-                        item.column_start,
-                        item.prop_names,
-                        item.has_spread_props,
-                    )
-                    for target in standard_targets
-                    for item in target.render_children_preview
-                }
-            ),
-            aggregate_render_children_preview=self._dedupe_views(
-                tuple(item for target in standard_targets for item in target.render_children_preview),
-                key=lambda item: (
-                    item.path,
-                    item.line_start,
-                    item.column_start,
-                    item.prop_names,
-                    item.has_spread_props,
-                ),
-            )[:10],
-            aggregate_render_parent_count=len(
-                {
-                    (
-                        item.path,
-                        item.line_start,
-                        item.column_start,
-                        item.prop_names,
-                        item.has_spread_props,
-                    )
-                    for target in standard_targets
-                    for item in target.render_parents_preview
-                }
-            ),
-            aggregate_render_parents_preview=self._dedupe_views(
-                tuple(item for target in standard_targets for item in target.render_parents_preview),
-                key=lambda item: (
-                    item.path,
-                    item.line_start,
-                    item.column_start,
-                    item.prop_names,
-                    item.has_spread_props,
-                ),
-            )[:10],
-            aggregate_invariant_finding_count=len(
-                {
-                    (item.path, item.line_start, item.column_start, item.field_name, item.subject_label)
-                    for target in standard_targets
-                    for item in target.invariant_findings_preview
-                }
-            ),
-            aggregate_invariant_findings_preview=self._dedupe_views(
-                tuple(item for target in standard_targets for item in target.invariant_findings_preview),
-                key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
-            )[:10],
-            aggregate_local_flow_edge_count=len(
-                {
-                    (
-                        item.path,
-                        item.line_start,
-                        item.column_start,
-                        item.edge_kind,
-                        item.source_label,
-                        item.target_label,
-                    )
-                    for target in standard_targets
-                    for item in target.local_flow_edges_preview
-                }
-            ),
-            aggregate_local_flow_edges_preview=self._dedupe_views(
-                tuple(item for target in standard_targets for item in target.local_flow_edges_preview),
-                key=lambda item: (
-                    item.path,
-                    item.line_start,
-                    item.column_start,
-                    item.edge_kind,
-                    item.source_label,
-                    item.target_label,
-                ),
-            )[:10],
-            aggregate_implementation_location_count=len(
-                {
-                    (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id)
-                    for target in standard_targets
-                    for item in target.implementation_locations_preview
-                }
-            ),
-            aggregate_implementation_locations_preview=self._dedupe_views(
-                tuple(item for target in standard_targets for item in target.implementation_locations_preview),
-                key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
-            )[:10],
-            aggregate_related_tests=self._dedupe_views(
-                tuple(item for target in standard_targets for item in target.related_tests),
-                key=lambda item: item.id,
-            )[:10],
+            aggregate_reference_site_count=aggregate_reference_site_count,
+            aggregate_reference_sites_preview=aggregate_reference_sites_preview,
+            aggregate_dependency_file_count=aggregate_dependency_file_count,
+            aggregate_dependency_files_preview=aggregate_dependency_files_preview,
+            aggregate_dependent_file_count=aggregate_dependent_file_count,
+            aggregate_dependent_files_preview=aggregate_dependent_files_preview,
+            aggregate_render_child_count=aggregate_render_child_count,
+            aggregate_render_children_preview=aggregate_render_children_preview,
+            aggregate_render_parent_count=aggregate_render_parent_count,
+            aggregate_render_parents_preview=aggregate_render_parents_preview,
+            aggregate_invariant_finding_count=aggregate_invariant_finding_count,
+            aggregate_invariant_findings_preview=aggregate_invariant_findings_preview,
+            aggregate_local_flow_edge_count=aggregate_local_flow_edge_count,
+            aggregate_local_flow_edges_preview=aggregate_local_flow_edges_preview,
+            aggregate_implementation_location_count=aggregate_implementation_location_count,
+            aggregate_implementation_locations_preview=aggregate_implementation_locations_preview,
+            aggregate_related_tests=aggregate_related_tests,
             suggested_follow_ups=(
                 tuple()
                 if standard_targets and all(target.structured_artifact is not None for target in standard_targets)
@@ -1735,6 +1600,66 @@ class SuitMcpService:
         self,
         targets: tuple[BatchChangeImpactTargetView, ...],
     ) -> BatchChangeImpactCompactView:
+        _, reference_sites = self._aggregate_ranked_views(
+            tuple(target.impact.reference_locations for target in targets),
+            key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+            rank_key=self._location_rank_key,
+            limit=3,
+        )
+        _, dependent_files = self._aggregate_ranked_views(
+            tuple(target.impact.dependent_files for target in targets),
+            key=lambda item: item.path,
+            rank_key=self._file_relationship_rank_key,
+            limit=3,
+        )
+        _, render_children = self._aggregate_ranked_views(
+            tuple(target.impact.render_children for target in targets),
+            key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
+            rank_key=self._render_edge_rank_key,
+            limit=3,
+        )
+        _, render_parents = self._aggregate_ranked_views(
+            tuple(target.impact.render_parents for target in targets),
+            key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
+            rank_key=self._render_edge_rank_key,
+            limit=3,
+        )
+        _, invariant_findings = self._aggregate_ranked_views(
+            tuple(self._compact_invariant_findings(target.impact.invariant_findings) for target in targets),
+            key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
+            rank_key=self._invariant_rank_key,
+            limit=3,
+        )
+        _, local_flow_edges = self._aggregate_ranked_views(
+            tuple(target.impact.local_flow_edges for target in targets),
+            key=lambda item: (item.path, item.line_start, item.column_start, item.edge_kind, item.source_label, item.target_label),
+            rank_key=self._static_flow_rank_key,
+            limit=3,
+        )
+        _, dependent_components = self._aggregate_ranked_views(
+            tuple(target.impact.dependent_components for target in targets),
+            key=lambda item: item.id,
+            rank_key=self._component_rank_key,
+            limit=3,
+        )
+        _, related_tests = self._aggregate_ranked_views(
+            tuple(target.impact.related_tests for target in targets),
+            key=lambda item: item.test.id,
+            rank_key=self._test_impact_rank_key,
+            limit=3,
+        )
+        _, related_runners = self._aggregate_ranked_views(
+            tuple(target.impact.related_runners for target in targets),
+            key=lambda item: item.runner.id,
+            rank_key=self._runner_impact_rank_key,
+            limit=3,
+        )
+        _, quality_gates = self._aggregate_ranked_views(
+            tuple(target.impact.quality_gates for target in targets),
+            key=lambda item: (item.provider_id, item.reason, item.applies),
+            rank_key=self._quality_gate_rank_key,
+            limit=3,
+        )
         compact_targets = tuple(
             BatchChangeImpactCompactTargetView(
                 detail_level="compact",
@@ -1759,71 +1684,100 @@ class SuitMcpService:
             target_count=len(compact_targets),
             targets=compact_targets,
             owner_ids=tuple(sorted({item.owner.id for item in compact_targets})),
-            reference_sites=self._dedupe_views(
-                tuple(item for target in compact_targets for item in target.reference_sites),
-                key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
-            )[:3],
-            dependent_files=self._dedupe_views(
-                tuple(item for target in compact_targets for item in target.dependent_files),
-                key=lambda item: item.path,
-            )[:3],
-            render_children=self._dedupe_views(
-                tuple(item for target in compact_targets for item in target.render_children),
-                key=lambda item: (
-                    item.path,
-                    item.line_start,
-                    item.column_start,
-                    item.prop_names,
-                    item.has_spread_props,
-                ),
-            )[:3],
-            render_parents=self._dedupe_views(
-                tuple(item for target in compact_targets for item in target.render_parents),
-                key=lambda item: (
-                    item.path,
-                    item.line_start,
-                    item.column_start,
-                    item.prop_names,
-                    item.has_spread_props,
-                ),
-            )[:3],
-            invariant_findings=self._dedupe_views(
-                tuple(item for target in compact_targets for item in target.invariant_findings),
-                key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
-            )[:3],
-            local_flow_edges=self._dedupe_views(
-                tuple(item for target in compact_targets for item in target.local_flow_edges),
-                key=lambda item: (
-                    item.path,
-                    item.line_start,
-                    item.column_start,
-                    item.edge_kind,
-                    item.source_label,
-                    item.target_label,
-                ),
-            )[:3],
-            dependent_components=self._dedupe_views(
-                tuple(item for target in compact_targets for item in target.dependent_components),
-                key=lambda item: item.id,
-            )[:3],
-            related_tests=self._dedupe_views(
-                tuple(item for target in compact_targets for item in target.related_tests),
-                key=lambda item: item.test.id,
-            )[:3],
-            related_runners=self._dedupe_views(
-                tuple(item for target in compact_targets for item in target.related_runners),
-                key=lambda item: item.runner.id,
-            )[:3],
-            quality_gates=self._dedupe_views(
-                tuple(item for target in compact_targets for item in target.quality_gates),
-                key=lambda item: (item.provider_id, item.reason, item.applies),
-            )[:3],
+            reference_sites=reference_sites,
+            dependent_files=dependent_files,
+            render_children=render_children,
+            render_parents=render_parents,
+            invariant_findings=invariant_findings,
+            local_flow_edges=local_flow_edges,
+            dependent_components=dependent_components,
+            related_tests=related_tests,
+            related_runners=related_runners,
+            quality_gates=quality_gates,
         )
 
     def _standard_change_impact_view(
         self,
         targets: tuple[BatchChangeImpactTargetView, ...],
     ) -> BatchChangeImpactStandardView:
+        _, reference_sites = self._aggregate_ranked_views(
+            tuple(target.impact.reference_locations for target in targets),
+            key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+            rank_key=self._location_rank_key,
+            limit=10,
+        )
+        _, dependent_files = self._aggregate_ranked_views(
+            tuple(target.impact.dependent_files for target in targets),
+            key=lambda item: item.path,
+            rank_key=self._file_relationship_rank_key,
+            limit=10,
+        )
+        _, render_children = self._aggregate_ranked_views(
+            tuple(target.impact.render_children for target in targets),
+            key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
+            rank_key=self._render_edge_rank_key,
+            limit=10,
+        )
+        _, render_parents = self._aggregate_ranked_views(
+            tuple(target.impact.render_parents for target in targets),
+            key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
+            rank_key=self._render_edge_rank_key,
+            limit=10,
+        )
+        _, invariant_findings = self._aggregate_ranked_views(
+            tuple(target.impact.invariant_findings for target in targets),
+            key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
+            rank_key=self._invariant_rank_key,
+            limit=10,
+        )
+        _, local_flow_edges = self._aggregate_ranked_views(
+            tuple(target.impact.local_flow_edges for target in targets),
+            key=lambda item: (item.path, item.line_start, item.column_start, item.edge_kind, item.source_label, item.target_label),
+            rank_key=self._static_flow_rank_key,
+            limit=10,
+        )
+        _, implementation_locations = self._aggregate_ranked_views(
+            tuple(target.impact.implementation_locations for target in targets),
+            key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+            rank_key=self._location_rank_key,
+            limit=10,
+        )
+        _, implementation_components = self._aggregate_ranked_views(
+            tuple(target.impact.implementation_components for target in targets),
+            key=lambda item: item.id,
+            rank_key=self._component_rank_key,
+            limit=10,
+        )
+        _, dependent_components = self._aggregate_ranked_views(
+            tuple(target.impact.dependent_components for target in targets),
+            key=lambda item: item.id,
+            rank_key=self._component_rank_key,
+            limit=10,
+        )
+        _, reference_locations = self._aggregate_ranked_views(
+            tuple(target.impact.reference_locations for target in targets),
+            key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+            rank_key=self._location_rank_key,
+            limit=10,
+        )
+        _, related_tests = self._aggregate_ranked_views(
+            tuple(target.impact.related_tests for target in targets),
+            key=lambda item: item.test.id,
+            rank_key=self._test_impact_rank_key,
+            limit=10,
+        )
+        _, related_runners = self._aggregate_ranked_views(
+            tuple(target.impact.related_runners for target in targets),
+            key=lambda item: item.runner.id,
+            rank_key=self._runner_impact_rank_key,
+            limit=10,
+        )
+        _, quality_gates = self._aggregate_ranked_views(
+            tuple(target.impact.quality_gates for target in targets),
+            key=lambda item: (item.provider_id, item.reason, item.applies),
+            rank_key=self._quality_gate_rank_key,
+            limit=10,
+        )
         standard_targets = tuple(
             BatchChangeImpactStandardTargetView(
                 detail_level="standard",
@@ -1852,77 +1806,19 @@ class SuitMcpService:
             target_count=len(standard_targets),
             targets=standard_targets,
             owner_ids=tuple(sorted({item.owner.id for item in standard_targets})),
-            reference_sites=self._dedupe_views(
-                tuple(item for target in standard_targets for item in target.reference_sites),
-                key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
-            )[:10],
-            dependent_files=self._dedupe_views(
-                tuple(item for target in standard_targets for item in target.dependent_files),
-                key=lambda item: item.path,
-            )[:10],
-            render_children=self._dedupe_views(
-                tuple(item for target in standard_targets for item in target.render_children),
-                key=lambda item: (
-                    item.path,
-                    item.line_start,
-                    item.column_start,
-                    item.prop_names,
-                    item.has_spread_props,
-                ),
-            )[:10],
-            render_parents=self._dedupe_views(
-                tuple(item for target in standard_targets for item in target.render_parents),
-                key=lambda item: (
-                    item.path,
-                    item.line_start,
-                    item.column_start,
-                    item.prop_names,
-                    item.has_spread_props,
-                ),
-            )[:10],
-            invariant_findings=self._dedupe_views(
-                tuple(item for target in standard_targets for item in target.invariant_findings),
-                key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
-            )[:10],
-            local_flow_edges=self._dedupe_views(
-                tuple(item for target in standard_targets for item in target.local_flow_edges),
-                key=lambda item: (
-                    item.path,
-                    item.line_start,
-                    item.column_start,
-                    item.edge_kind,
-                    item.source_label,
-                    item.target_label,
-                ),
-            )[:10],
-            implementation_locations=self._dedupe_views(
-                tuple(item for target in standard_targets for item in target.implementation_locations),
-                key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
-            )[:10],
-            implementation_components=self._dedupe_views(
-                tuple(item for target in standard_targets for item in target.implementation_components),
-                key=lambda item: item.id,
-            )[:10],
-            dependent_components=self._dedupe_views(
-                tuple(item for target in standard_targets for item in target.dependent_components),
-                key=lambda item: item.id,
-            )[:10],
-            reference_locations=self._dedupe_views(
-                tuple(item for target in standard_targets for item in target.reference_locations),
-                key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
-            )[:10],
-            related_tests=self._dedupe_views(
-                tuple(item for target in standard_targets for item in target.related_tests),
-                key=lambda item: item.test.id,
-            )[:10],
-            related_runners=self._dedupe_views(
-                tuple(item for target in standard_targets for item in target.related_runners),
-                key=lambda item: item.runner.id,
-            )[:10],
-            quality_gates=self._dedupe_views(
-                tuple(item for target in standard_targets for item in target.quality_gates),
-                key=lambda item: (item.provider_id, item.reason, item.applies),
-            )[:10],
+            reference_sites=reference_sites,
+            dependent_files=dependent_files,
+            render_children=render_children,
+            render_parents=render_parents,
+            invariant_findings=invariant_findings,
+            local_flow_edges=local_flow_edges,
+            implementation_locations=implementation_locations,
+            implementation_components=implementation_components,
+            dependent_components=dependent_components,
+            reference_locations=reference_locations,
+            related_tests=related_tests,
+            related_runners=related_runners,
+            quality_gates=quality_gates,
         )
 
     @staticmethod
@@ -1953,6 +1849,157 @@ class SuitMcpService:
             seen.add(item_key)
             deduped.append(item)
         return tuple(deduped)
+
+    @staticmethod
+    def _aggregate_ranked_views(
+        groups: tuple[tuple[T, ...], ...],
+        *,
+        key: Callable[[T], object],
+        rank_key: Callable[[T], tuple[object, ...]],
+        limit: int | None = None,
+    ) -> tuple[int, tuple[T, ...]]:
+        first_items: dict[object, T] = {}
+        support_counts: dict[object, int] = {}
+        first_positions: dict[object, tuple[int, int]] = {}
+        for group_index, group in enumerate(groups):
+            seen_in_group: set[object] = set()
+            for item_index, item in enumerate(group):
+                item_key = key(item)
+                if item_key in seen_in_group:
+                    continue
+                seen_in_group.add(item_key)
+                support_counts[item_key] = support_counts.get(item_key, 0) + 1
+                if item_key in first_items:
+                    continue
+                first_items[item_key] = item
+                first_positions[item_key] = (group_index, item_index)
+
+        ordered = sorted(
+            first_items.items(),
+            key=lambda entry: (
+                -support_counts[entry[0]],
+                first_positions[entry[0]][0],
+                first_positions[entry[0]][1],
+                rank_key(entry[1]),
+            ),
+        )
+        preview = tuple(item for _, item in ordered[:limit] if limit is not None) if limit is not None else tuple(
+            item for _, item in ordered
+        )
+        return len(first_items), preview
+
+    @staticmethod
+    def _location_rank_key(item: LocationView) -> tuple[object, ...]:
+        return (
+            item.path,
+            item.line_start,
+            item.column_start,
+            item.line_end or 0,
+            item.column_end or 0,
+            item.symbol_id or "",
+        )
+
+    @staticmethod
+    def _file_relationship_rank_key(item) -> tuple[object, ...]:
+        return (item.path,)
+
+    @staticmethod
+    def _render_edge_rank_key(item) -> tuple[object, ...]:
+        return (
+            item.path,
+            item.line_start,
+            item.column_start,
+            item.has_spread_props,
+            item.prop_names,
+        )
+
+    @staticmethod
+    def _invariant_rank_key(item) -> tuple[object, ...]:
+        return (
+            -item.producer_site_count,
+            item.path,
+            item.line_start,
+            item.column_start,
+            item.field_name,
+            item.subject_label,
+        )
+
+    @staticmethod
+    def _static_flow_rank_key(item) -> tuple[object, ...]:
+        return (
+            item.path,
+            item.line_start,
+            item.column_start,
+            item.edge_kind,
+            item.source_label,
+            item.target_label,
+        )
+
+    @staticmethod
+    def _related_test_rank_key(item: RelatedTestView) -> tuple[object, ...]:
+        relation_rank = 2
+        if item.matched_path is not None:
+            relation_rank = 0
+        elif item.matched_owner_id is not None:
+            relation_rank = 1
+        return (relation_rank, item.id)
+
+    @staticmethod
+    def _test_impact_rank_key(item) -> tuple[object, ...]:
+        relation_rank = 2
+        if item.test.matched_path is not None:
+            relation_rank = 0
+        elif item.test.matched_owner_id is not None:
+            relation_rank = 1
+        return (relation_rank, item.test.id)
+
+    @staticmethod
+    def _component_rank_key(item) -> tuple[object, ...]:
+        return (item.id,)
+
+    @staticmethod
+    def _runner_impact_rank_key(item) -> tuple[object, ...]:
+        return (item.runner.id,)
+
+    @staticmethod
+    def _quality_gate_rank_key(item) -> tuple[object, ...]:
+        return (
+            not item.applies,
+            item.provider_id,
+            item.reason,
+        )
+
+    @staticmethod
+    def _narrow_batch_minimum_verified_tests(
+        *,
+        tests: tuple[MinimumVerifiedTestTargetView, ...],
+        build_targets: tuple[MinimumVerifiedBuildTargetView, ...],
+        excluded_items: tuple[ExcludedMinimumVerifiedItemView, ...],
+    ) -> tuple[tuple[MinimumVerifiedTestTargetView, ...], tuple[ExcludedMinimumVerifiedItemView, ...]]:
+        build_target_ids = {item.action_id for item in build_targets}
+        replacement_exclusions = {
+            item.item_id: item
+            for item in excluded_items
+            if item.reason_code == "dependent_test_replaced_by_narrower_build"
+            and item.replaced_by_ids
+            and set(item.replaced_by_ids).issubset(build_target_ids)
+        }
+        if not replacement_exclusions:
+            return tests, excluded_items
+        narrowed_tests = tuple(item for item in tests if item.test_id not in replacement_exclusions)
+        return narrowed_tests, excluded_items
+
+    @staticmethod
+    def _filter_batch_minimum_verified_exclusions(
+        excluded_items: tuple[ExcludedMinimumVerifiedItemView, ...],
+    ) -> tuple[ExcludedMinimumVerifiedItemView, ...]:
+        allowed_reason_codes = {
+            "dependent_test_replaced_by_narrower_build",
+            "repository_build_replaced_by_narrower_build",
+            "no_deterministic_test_targets_available",
+            "no_deterministic_validation_surfaces_for_provider_owned_artifact",
+        }
+        return tuple(item for item in excluded_items if item.reason_code in allowed_reason_codes)
 
     def _with_read_only_repository(
         self,

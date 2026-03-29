@@ -80,17 +80,17 @@ CORE_TOOL_CATALOG: tuple[ToolBinding, ...] = (
     ),
     _read_only(
         "understand_file",
-        "Start here when you need to know what owns one or more files, which exact reference sites and nearby tests are closest to them, and which local dependency or UI-wiring edges matter by repository path. Pass `repository_rel_paths` as a list so one call can cover a whole local change set. `detail_level=compact` returns the smallest curated answer, `standard` adds limited previews, and `full` returns the current rich evidence payload. Provider-owned docs/spec files return deterministic structure instead of code-style validation guidance.",
+        "Start here when you need to know what owns one or more files, which exact reference sites and nearby tests are closest to them, and which local dependency or UI-wiring edges matter by repository path. Pass `repository_rel_paths` as a list so one call can cover a whole local change set. `detail_level=compact` returns the smallest curated answer, `standard` adds limited previews, and `full` returns the current rich evidence payload. Multi-target aggregate previews are ranked and capped instead of raw unions. Provider-owned docs/spec files return deterministic structure instead of code-style validation guidance.",
         title="Core: Understand File",
     ),
     _read_only(
         "what_changes_if_i_edit_this",
-        "Use this when one or more file changes may have blast radius. Pass `repository_rel_paths` as a list to return per-target results plus one deduplicated aggregate impact view, including exact reference-site previews when available. `detail_level=compact` returns the tightest impacted-surface answer, `standard` adds limited previews, and `full` returns the current rich evidence payload. Provider-owned docs/spec files return owned-but-empty impact when no deterministic code impact evidence exists.",
+        "Use this when one or more file changes may have blast radius. Pass `repository_rel_paths` as a list to return per-target results plus one deduplicated aggregate impact view, including exact reference-site previews when available. `detail_level=compact` returns the tightest impacted-surface answer, `standard` adds limited previews, and `full` returns the current rich evidence payload. Aggregate previews are ranked and capped instead of raw unions. Provider-owned docs/spec files return owned-but-empty impact when no deterministic code impact evidence exists.",
         title="Core: What Changes If I Edit This?",
     ),
     _read_only(
         "what_should_i_run",
-        "Use this when you need the minimum deterministic validation set after changing one or more files by repository path. Pass `repository_rel_paths` as a list to get one deduplicated validation plan for the whole change set. Shared targets prefer narrower direct build/owner surfaces before broader dependent-component tests when both are deterministically available. Provider-owned docs/spec files return explicit exclusions when no deterministic validation surface exists.",
+        "Use this when you need the minimum deterministic validation set after changing one or more files by repository path. Pass `repository_rel_paths` as a list to get one deduplicated validation plan for the whole change set. Shared targets prefer narrower direct build/owner surfaces before broader dependent-component tests when both are deterministically available. Provider-owned docs/spec files return explicit exclusions when no deterministic validation surface exists and do not imply runner validation.",
         title="Core: What Should I Run?",
     ),
     _read_only(
