@@ -316,10 +316,10 @@ class TruthCoverageService:
             accumulator.degraded_reason = "repository has no quality provider"
             return accumulator.finalize()
 
-        relevant_files = tuple(self._repository.arch.get_files())
+        relevant_paths = self._repository.quality.relevant_repository_rel_paths()
         reasons: list[str] = []
         for capabilities in self._repository.quality.get_runtime_capabilities(
-            tuple(file_info.repository_rel_path for file_info in relevant_files)
+            relevant_paths
         ):
             self._apply_runtime_capability(accumulator, capabilities.lint, reasons=reasons)
             self._apply_runtime_capability(accumulator, capabilities.format, reasons=reasons)

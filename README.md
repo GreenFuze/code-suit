@@ -1,21 +1,34 @@
 # SuitCode
 
-**Your agent can search the repo. SuitCode asks the toolchain.**
+**Deterministic repository intelligence for coding agents.**
 
-**Know what breaks, what to run, and why.**
+SuitCode is an MCP server that answers repository questions through the toolchain the repository already defines: manifests, builds, tests, language servers, quality tools, and explicit structured artifacts.
 
-Stop guessing and exploring blindly. SuitCode turns repo/toolchain signals into deterministic actions.
+The goal is not to help an agent search faster. The goal is to reduce uncertainty earlier:
+- who owns this file
+- what changes if I edit it
+- what is the minimum deterministic validation set
+- where SuitCode's knowledge stops
 
-SuitCode is an MCP server for repository intelligence that reads the same surfaces your build, test, quality, and language tooling already define. Instead of giving your agent another repo map or another search index, it gives grounded answers like ownership, impact, minimum validation sets, deterministic targets, and explicit unsupported boundaries.
+## Why SuitCode Exists
 
-## Current MCP Shape
+General code-search and repo-map tools are good at finding text. They are weaker at answering operational questions such as:
+- what actually owns this file
+- which exact tests are justified
+- which build target is the narrowest safe validation
+- whether a doc/spec file has no executable validation surface at all
 
-SuitCode now has two public profiles:
+SuitCode answers those questions with explicit provenance instead of heuristics.
 
-- `core`: the small default agent-facing surface
-- `full`: the larger expert/compatibility surface
+## The Current Product Shape
 
-The `core` profile is the intended default for agents. Its primary tools are:
+SuitCode now ships with two MCP profiles:
+- `core`: the recommended agent-facing surface
+- `full`: the larger expert and research surface
+
+The current design direction is deliberate: a small set of task-shaped tools works better in practice than a large inventory of low-level tools.
+
+### Core tools
 
 - `understand_repository`
 - `understand_file`
@@ -23,44 +36,141 @@ The `core` profile is the intended default for agents. Its primary tools are:
 - `what_should_i_run`
 - `can_i_do_this`
 
-The target-bearing core tools accept file lists and return both:
+These are the default entry points for agents.
 
-- aggregate results for the whole change set
-- per-target detail and evidence
+### Heavy-tool detail levels
 
-This keeps the tool surface small while reducing repeated per-file calls.
-
-Two of the heavier core tools also accept `detail_level`:
-
+Two core tools support `detail_level`:
 - `understand_file`
 - `what_changes_if_i_edit_this`
 
-Detail levels:
-
+Levels:
 - `compact`: smallest curated deterministic answer
-- `standard`: balanced deterministic answer with limited previews
-- `full`: current rich evidence payload
+- `standard`: bounded richer answer
+- `full`: richest evidence payload
 
-Current default:
-
+Default:
 - `compact`
 
-## Why It Is Different
+### Multi-file support
 
-- Search tells the agent where text appears. SuitCode asks the actual toolchain what owns the file, what depends on it, and what should run.
-- Repo maps summarize structure. SuitCode returns deterministic actions and provenance-rich evidence.
-- RAG and index layers guess from documents. SuitCode tells the agent when something is unsupported instead of inventing a target.
-- Generic shell flows leave the agent to compose commands. SuitCode exposes exact test, build, and runner actions where the provider can prove them.
+The target-bearing core tools accept `repository_rel_paths` as a list.
 
-## Quick Proof
+That means one call can cover a local change set and return:
+- per-target detail
+- one ranked and capped aggregate view
 
-- Stable downstream A/B: SuitCode `5/5` vs baseline `2/5`
-- Median turns per stable headline task: SuitCode `3` vs baseline `16`
-- Stable execution A/B: SuitCode `2/2` vs baseline `0/2`
+## What SuitCode Can Do Today
 
-![Headline A/B outcomes](docs/evidence/codex-v7/figures/01-headline-outcomes.svg)
+### Deterministic repository understanding
 
-These numbers come from the current neutral Codex v7 benchmark: same prompt, same task schema, same repo, same timeout, only SuitCode availability differs.
+SuitCode can identify:
+- supported providers for a repository
+- owned components and package boundaries
+- deterministic file ownership
+- explicit dependency and dependent surfaces
+- repository truth coverage and provenance availability
+
+### Deterministic impact analysis
+
+SuitCode can answer:
+- what depends on this file
+- exact reference-site previews when provider-backed references exist
+- UI render parent/child edges for local React/TSX components
+- explicit prop names passed at JSX call sites
+- Go implementation candidates when `gopls` can prove them
+- owned-but-empty impact for docs/spec artifacts when no code edge is provable
+
+### Deterministic validation planning
+
+SuitCode can produce a minimum verified change set that separates:
+- required validation
+- optional hygiene
+- explicit exclusions
+
+It prefers narrower direct owner/build/test surfaces over broader dependent validation when both are provable.
+
+### Structured artifact support
+
+SuitCode now treats common non-code artifacts as first-class deterministic surfaces.
+
+Markdown:
+- deterministic ownership
+- section hierarchy and line ranges
+- fenced code blocks
+- links
+- frontmatter keys and ranges
+- checklist items
+
+OpenAPI / Swagger:
+- deterministic ownership for well-known filenames
+- spec version
+- paths and methods
+- operation IDs
+- component schema names
+- top-level tags
+
+For provider-owned docs/spec files:
+- `understand_file` returns structure
+- `what_changes_if_i_edit_this` returns ownership plus empty impact when no code impact is provable
+- `what_should_i_run` returns explicit non-validation exclusions instead of a hard failure
+
+## Supported Ecosystems
+
+Current provider support:
+- Python
+- npm / TypeScript
+- Go
+- Markdown
+- OpenAPI / Swagger
+
+Current frontend/npm support includes:
+- workspace and standalone package detection
+- deterministic ownership of package source and `public/` assets
+- TypeScript symbol/reference intelligence
+- React render/prop-flow edges
+- narrow TS/TSX invariant and local-flow findings when the checker can prove them
+
+Current Go support includes:
+- `go list`-backed architecture
+- package-level `go test` and build targets
+- `gopls`-backed symbols, definitions, references, and implementation candidates
+- multi-module repos without `go.work`
+
+## What Makes It Different
+
+SuitCode is intentionally strict.
+
+It will:
+- return explicit exclusions when a validation surface does not exist
+- keep provenance on evidence-bearing answers
+- distinguish direct deterministic surfaces from weaker derived ones
+- avoid inventing cross-layer links it cannot prove
+
+It will not:
+- expose generic shell execution as product intelligence
+- guess unsupported actions
+- pretend docs/spec files are executable when they are not
+- blur deterministic evidence with semantic summarization
+
+## Current Evidence
+
+Controlled Codex v7 A/B benchmark:
+- stable downstream A/B: SuitCode `5/5` vs baseline `2/5`
+- median turns per stable headline task: SuitCode `3` vs baseline `16`
+- stable execution A/B: SuitCode `2/2` vs baseline `0/2`
+- transcript-estimated visible tokens per stable headline task: SuitCode `2793` vs baseline `50956`
+
+![Headline outcomes](docs/evidence/codex-v7/figures/01-headline-outcomes.svg)
+
+Primary evidence links:
+- [Codex v7 evidence summary](docs/evidence/codex-v7/README.md)
+- [Canonical comparison report](.suit/evaluation/codex/comparisons/2026-03-19T10-54-59Z__codex-comparison-7e510e57620f40509ee4a01f5f86094f/comparison.md)
+
+Important interpretation:
+- the benchmark demonstrates that deterministic task-shaped repo intelligence can outperform baseline exploration on bounded tasks
+- it does not, by itself, prove natural live adoption
+- recent product work has therefore focused on smaller core tools, compact defaults, and better live agent fit
 
 ## Install
 
@@ -76,31 +186,21 @@ Secondary install path:
 uv tool install git+https://github.com/GreenFuze/suit-code.git
 ```
 
-Then connect SuitCode to your agent with the installer:
-
-```bash
-suitcode-install --agent codex
-```
-
-Replace `codex` with `claude`, `cursor`, or `all` as needed.
-
 Installed entrypoints:
-
 - `suitcode-mcp-core`
 - `suitcode-mcp --profile core`
 - `suitcode-mcp --profile full`
+- `suitcode-install`
 
 Repository launchers in a source checkout:
-
 - Windows: `run_mcp.bat`
 - macOS/Linux: `run_mcp.sh`
 
 The repository launchers default to `core`.
 
 Current installer note:
-
 - `suitcode-install` still wires `suitcode-mcp`
-- if you want the smaller recommended `core` surface today, use the manual MCP config shown below or point your agent at `run_mcp.bat` / `run_mcp.sh` from a source checkout
+- if you want the recommended smaller default surface today, point your agent at `suitcode-mcp-core` or the repository launchers
 
 ## Connect To Your Agent
 
@@ -118,11 +218,7 @@ Verify:
 codex mcp list
 ```
 
-If you used `suitcode-install`, switch the generated entry to the `core` command below if you want the smaller default surface today.
-
-Manual fallback:
-
-Windows `~/.codex/config.toml`
+Manual fallback on Windows `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.suitcode]
@@ -132,34 +228,12 @@ args = ["/c", "suitcode-mcp-core"]
 enabled = true
 ```
 
-macOS/Linux `~/.codex/config.toml`
+Manual fallback on macOS/Linux `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.suitcode]
 transport = "stdio"
 command = "suitcode-mcp-core"
-args = []
-enabled = true
-```
-
-Source checkout fallback:
-
-Windows
-
-```toml
-[mcp_servers.suitcode]
-transport = "stdio"
-command = "cmd"
-args = ["/c", "C:/src/github.com/GreenFuze/suit-code/run_mcp.bat"]
-enabled = true
-```
-
-macOS/Linux
-
-```toml
-[mcp_servers.suitcode]
-transport = "stdio"
-command = "/path/to/suit-code/run_mcp.sh"
 args = []
 enabled = true
 ```
@@ -172,25 +246,13 @@ Install:
 suitcode-install --agent claude
 ```
 
-Verify:
-
-```bash
-claude mcp list
-```
-
-Then open Claude Code and run `/mcp`.
-
-If you used `suitcode-install`, switch the generated entry to the `core` command below if you want the smaller default surface today.
-
-Manual fallback:
-
-Windows
+Manual fallback on Windows:
 
 ```bash
 claude mcp add --transport stdio --scope user suitcode -- cmd /c suitcode-mcp-core
 ```
 
-macOS/Linux
+Manual fallback on macOS/Linux:
 
 ```bash
 claude mcp add --transport stdio --scope user suitcode -- suitcode-mcp-core
@@ -204,15 +266,7 @@ Install:
 suitcode-install --agent cursor
 ```
 
-Verify:
-- restart Cursor
-- confirm `suitcode` appears in MCP tools
-
-If you used `suitcode-install`, switch the generated entry to the `core` command below if you want the smaller default surface today.
-
-Manual fallback:
-
-Windows `%USERPROFILE%\\.cursor\\mcp.json`
+Manual fallback on Windows `%USERPROFILE%\\.cursor\\mcp.json`:
 
 ```json
 {
@@ -225,7 +279,7 @@ Windows `%USERPROFILE%\\.cursor\\mcp.json`
 }
 ```
 
-macOS/Linux `~/.cursor/mcp.json`
+Manual fallback on macOS/Linux `~/.cursor/mcp.json`:
 
 ```json
 {
@@ -238,85 +292,26 @@ macOS/Linux `~/.cursor/mcp.json`
 }
 ```
 
-## One End-To-End Example
+## Example Workflow
 
 Prompt:
 
-> A bug report points at `src/suitcode/mcp/service.py`. What owns it, what should I inspect first, and what exact validation set should run before I trust a fix?
+> A bug report points at one file. What owns it, what should I inspect first, and what exact validation set should run before I trust a fix?
 
-SuitCode gives the agent deterministic surfaces for:
-- the owning component
-- the dependency frontier that defines the debugging surface
-- related tests and quality gates
-- the minimum verified change set
+A typical SuitCode flow is:
+1. `understand_repository`
+2. `understand_file`
+3. `what_changes_if_i_edit_this`
+4. `what_should_i_run`
 
-That lets the agent move from a vague bug report to a bounded validation plan instead of broad file exploration.
+That keeps the agent on direct task questions instead of broad manual exploration.
 
-Full example:
-- [bug-report-to-validation.md](docs/examples/bug-report-to-validation.md)
+Example:
+- [Bug Report To Validation](docs/examples/bug-report-to-validation.md)
 
-## Supported Today
+## Where To Read More
 
-Current repository/provider support:
-- Python
-- npm
-- Go
-- Markdown
-- OpenAPI
-
-Current agent setup paths:
-- Codex
-- Claude Code
-- Cursor
-
-Current analytics/evaluation support:
-- Codex: live evaluation and passive analytics
-- Claude Code: passive analytics
-- Cursor: passive analytics
-
-Current Go scope:
-- single-module repositories
-- multi-module repositories with no `go.work`
-- mixed repositories with Go module subtrees and no `go.work`
-- Go code intelligence through `gopls` for symbols, definitions, references, and implementation candidates
-- `go.work` support comes next
-
-Current markdown scope:
-- deterministic markdown file ownership
-- section and heading structure with line ranges
-- fenced code blocks
-- links
-- frontmatter keys and ranges
-- checklist items
-
-Current OpenAPI scope:
-- deterministic ownership for well-known OpenAPI/Swagger files:
-  - `openapi.yaml|yml|json`
-  - `swagger.yaml|yml|json`
-- spec version
-- path + method structure
-- operation IDs when present
-- component schema names
-- top-level tags
-
-Current docs/spec tool behavior:
-- `understand_file` supports provider-owned markdown and OpenAPI files
-- `what_should_i_run` returns explicit exclusions instead of hard failure when provider-owned docs/spec files have no deterministic validation surface
-- `what_changes_if_i_edit_this` returns owned-but-empty impact for provider-owned docs/spec files when no deterministic code impact evidence exists
-
-Current frontend/npm scope:
-- mixed repo attachment discovery from a larger repo root
-- deterministic file ownership for package-owned source and `public/` assets
-- concrete npm build/test/runner actions from package scripts
-- TypeScript code intelligence through `typescript-language-server`
-
-## Evidence
-
-- [Codex v7 evidence summary](docs/evidence/codex-v7/README.md)
-
-The benchmark is neutral A/B on bounded downstream tasks. Tokens are reported as transcript-estimated visible content, not billing totals.
-
-## More Details
-
-- [FEATURES.md](FEATURES.md) for the full feature and MCP tool reference
+- [FEATURES.md](FEATURES.md) for the current product feature summary
+- [docs/v1/RESEARCH.md](docs/v1/RESEARCH.md) for the research trajectory and why the product changed direction
+- [docs/v1/CONTRIBUTION.md](docs/v1/CONTRIBUTION.md) for the current research contributions of SuitCode
 - [LICENSE.md](LICENSE.md)

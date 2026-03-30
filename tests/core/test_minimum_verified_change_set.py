@@ -53,6 +53,28 @@ def _make_mixed_go_npm_repo(repo_root: Path) -> Path:
     return repo_root
 
 
+def _make_frontend_build_only_repo(repo_root: Path) -> Path:
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true,
+          "scripts": {
+            "build": "vite build"
+          }
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "App.tsx").write_text(
+        "export const App = () => null;\n",
+        encoding="utf-8",
+    )
+    return repo_root
+
+
 def test_minimum_verified_change_set_for_npm_file_target(npm_repo_root) -> None:
     repository = Workspace(npm_repo_root).repositories[0]
 
@@ -148,6 +170,12 @@ def test_minimum_verified_change_set_uses_direct_dependent_tests_when_file_has_n
         "test:go:example.com/acme/go-demo/internal/service"
     ]
     assert change_set.tests[0].inclusion_reason == "direct dependent component test"
+    assert any(
+        item.reason_code.value == "no_narrower_direct_validation_surface_for_file_target"
+        and item.item_kind.value == "validation_surface"
+        and "dependent-package surfaces required because the file is shared" in item.reason
+        for item in change_set.excluded_items
+    )
     assert change_set.build_targets == tuple()
     assert change_set.provenance
 
@@ -179,6 +207,11 @@ def test_minimum_verified_change_set_uses_direct_dependent_build_when_no_tests_e
     ]
     assert change_set.build_targets[0].inclusion_reason == (
         "directly dependent buildable component is the narrowest deterministic build surface"
+    )
+    assert any(
+        item.reason_code.value == "no_narrower_direct_validation_surface_for_file_target"
+        and item.item_kind.value == "validation_surface"
+        for item in change_set.excluded_items
     )
     assert change_set.provenance
 
@@ -240,6 +273,23 @@ def test_minimum_verified_change_set_prefers_direct_build_over_dependent_tests(n
     assert any(
         item.reason_code.value == "dependent_test_replaced_by_narrower_build"
         and item.item_id == "test:npm:@monorepo/utils"
+        for item in change_set.excluded_items
+    )
+
+
+def test_minimum_verified_change_set_reports_build_only_frontend_validation(tmp_path: Path) -> None:
+    repository = Workspace(_make_frontend_build_only_repo(tmp_path / "frontend")).repositories[0]
+
+    change_set = repository.get_minimum_verified_change_set(
+        ChangeTarget(repository_rel_path="src/App.tsx")
+    )
+
+    assert change_set.tests == tuple()
+    assert [item.target.action_id for item in change_set.build_targets] == ["action:npm:build:frontend"]
+    assert any(
+        item.reason_code.value == "no_deterministic_test_targets_available"
+        and "no finer deterministic frontend test target was discovered" in item.reason
+        and "build is the primary deterministic frontend validation surface currently available" in item.reason
         for item in change_set.excluded_items
     )
 

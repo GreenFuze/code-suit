@@ -55,6 +55,15 @@ class QualityIntelligence:
         providers = self.providers if repository_rel_paths is None else self._quality_providers_for_files(repository_rel_paths)
         return tuple(provider.get_quality_runtime_capabilities(repository_rel_paths) for provider in providers)
 
+    def relevant_repository_rel_paths(
+        self,
+        repository_rel_paths: tuple[str, ...] | None = None,
+    ) -> tuple[str, ...]:
+        if repository_rel_paths is None:
+            candidates = tuple(file_info.repository_rel_path for file_info in self._repository.arch.get_files())
+            return tuple(path for path in candidates if self._is_repository_quality_relevant_file(path))
+        return tuple(path for path in repository_rel_paths if self._is_quality_relevant_file(path))
+
     def _quality_providers_for_files(self, repository_rel_paths: tuple[str, ...]) -> tuple[QualityProviderBase, ...]:
         provider_ids: list[str] = []
         providers: list[QualityProviderBase] = []
@@ -88,19 +97,31 @@ class QualityIntelligence:
     def _is_quality_relevant_file(self, repository_rel_path: str) -> bool:
         try:
             owner = self._repository.get_file_owner(repository_rel_path).owner
-        except ValueError:
+        except (AttributeError, ValueError):
             return True
         if owner.kind != "component":
             return True
-        component = next((item for item in self._repository.arch.get_components() if item.id == owner.id), None)
+        architecture = getattr(self._repository, "arch", None)
+        if architecture is None:
+            return True
+        component = next((item for item in architecture.get_components() if item.id == owner.id), None)
         if component is None:
             return True
         normalized = repository_rel_path.replace("\\", "/").strip().removeprefix("./")
-        if any(normalized == root or normalized.startswith(f"{root}/") for root in component.source_roots):
-            return True
         if any(normalized == path or normalized.startswith(f"{path}/") for path in component.artifact_paths):
             return False
+        if component.source_roots:
+            return any(normalized == root or normalized.startswith(f"{root}/") for root in component.source_roots)
         return True
+
+    def _is_repository_quality_relevant_file(self, repository_rel_path: str) -> bool:
+        try:
+            owner = self._repository.get_file_owner(repository_rel_path).owner
+        except (AttributeError, ValueError):
+            return True
+        if owner.kind == "runner":
+            return False
+        return self._is_quality_relevant_file(repository_rel_path)
 
 
 from typing import TYPE_CHECKING

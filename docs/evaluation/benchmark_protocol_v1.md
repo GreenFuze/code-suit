@@ -29,17 +29,16 @@ Protocol v1 is currently implemented for:
 - Codex only
 - downstream stable read-only headline A/B
 - calibration A/B for orientation and truth coverage
-- stable execution A/B evidence
+- stable execution A/B
 - optional stress read-only reporting
 
 The current canonical task files are:
-- `benchmarks/codex/tasks/suitcode_v6_headline.json`
+- `benchmarks/codex/tasks/suitcode_v7_headline.json`
 - `benchmarks/codex/tasks/suitcode_calibration.json`
 - `benchmarks/codex/tasks/suitcode_execution_ab.json`
 - `benchmarks/codex/tasks/suitcode_project_readonly.json`
 
-The current v7 scaffold files are:
-- `benchmarks/codex/tasks/suitcode_v7_headline.json`
+Supporting adoption/latency scaffolds currently include:
 - `benchmarks/codex/tasks/suitcode_v7_adoption_latency.json`
 - `benchmarks/codex/comparisons/standout_codex_v7.json`
 
@@ -124,12 +123,8 @@ All non-SuitCode baseline capabilities remain available unless the report states
 ## 4. Benchmark Families
 
 Current headline families:
-- change_analysis
-- minimum_verified_change_set
-
-Planned v7 headline families:
 - bug_fix_navigation
-- ci_debugging
+- minimum_verified_change_set
 - unsupported_action_reasoning
 
 Calibration families:
@@ -154,15 +149,9 @@ Future families may include:
 
 The headline suite must contain only stable bounded tasks.
 
-Current headline:
-- stable read-only
-- bounded downstream tasks (`change_analysis` + `minimum_verified_change_set`)
-- cold runs
-
-Planned v7 headline:
 - stable read-only
 - one real-repo track plus one fixture track
-- harder downstream tasks (`bug_fix_navigation`, `ci_debugging`, `unsupported_action_reasoning`)
+- bounded downstream tasks (`bug_fix_navigation`, `minimum_verified_change_set`, `unsupported_action_reasoning`)
 - cold runs
 
 ### Stress suite
@@ -201,10 +190,11 @@ The current JSON schema is captured in:
 - `docs/evaluation/task_schema.v1.json`
 
 The current stable headline tasks are:
-- `project-python-change-impact-headline`
+- `project-python-bug-fix-navigation-headline`
 - `project-python-minimum-verified-headline`
-- `fixture-npm-change-impact-headline`
+- `fixture-npm-bug-fix-navigation-headline`
 - `fixture-npm-minimum-verified-headline`
+- `fixture-npm-unsupported-runner-headline`
 
 The current calibration tasks are:
 - `project-python-orientation-calibration`

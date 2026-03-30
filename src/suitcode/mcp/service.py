@@ -1338,6 +1338,48 @@ class SuitMcpService:
         return tuple(item for item in invariant_findings if item.producer_site_count > 0)
 
     @staticmethod
+    def _is_ui_heavy_path(repository_rel_path: str) -> bool:
+        normalized = repository_rel_path.replace("\\", "/").lower()
+        return normalized.endswith((".tsx", ".jsx"))
+
+    @classmethod
+    def _is_ui_heavy_file_target(cls, target: FileUnderstandingTargetView) -> bool:
+        return (
+            cls._is_ui_heavy_path(target.repository_rel_path)
+            or bool(target.render_children_preview)
+            or bool(target.render_parents_preview)
+        )
+
+    @classmethod
+    def _is_ui_heavy_change_target(cls, target: BatchChangeImpactTargetView) -> bool:
+        return (
+            cls._is_ui_heavy_path(target.repository_rel_path)
+            or bool(target.impact.render_children)
+            or bool(target.impact.render_parents)
+        )
+
+    @staticmethod
+    def _filter_relationship_paths(items, *, blocked_paths: set[str], limit: int) -> tuple:
+        filtered = []
+        seen: set[str] = set()
+        for item in items:
+            if item.path in blocked_paths or item.path in seen:
+                continue
+            seen.add(item.path)
+            filtered.append(item)
+            if len(filtered) >= limit:
+                break
+        return tuple(filtered)
+
+    @staticmethod
+    def _render_paths(*groups) -> set[str]:
+        return {item.path for group in groups for item in group}
+
+    @staticmethod
+    def _location_paths(*groups) -> set[str]:
+        return {item.path for group in groups for item in group}
+
+    @staticmethod
     def _shape_structured_artifact_view(artifact_view, *, detail_level: str):
         if artifact_view.markdown is not None:
             limit = 3 if detail_level == "compact" else 10 if detail_level == "standard" else None
@@ -1374,76 +1416,86 @@ class SuitMcpService:
         self,
         targets: tuple[FileUnderstandingTargetView, ...],
     ) -> FileUnderstandingCompactView:
+        multi_target = len(targets) > 1
+        ui_heavy = any(self._is_ui_heavy_file_target(target) for target in targets)
+        render_limit = 2 if ui_heavy else 3
+        dependent_limit = 2 if ui_heavy else 3
+        dependency_limit = 1 if ui_heavy else 3
+        local_flow_limit = 1 if ui_heavy else 3
+        invariant_limit = 1 if ui_heavy else 3
+        related_test_limit = 2 if ui_heavy else 3
+        if multi_target:
+            render_limit = min(render_limit, 2)
+            dependent_limit = min(dependent_limit, 2)
+            dependency_limit = min(dependency_limit, 1)
+            local_flow_limit = min(local_flow_limit, 1)
+            invariant_limit = min(invariant_limit, 1)
+            related_test_limit = min(related_test_limit, 2)
         aggregate_reference_site_count, aggregate_reference_sites_preview = self._aggregate_ranked_views(
             tuple(target.reference_sites_preview for target in targets),
             key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
             rank_key=self._location_rank_key,
             limit=3,
         )
-        aggregate_dependency_file_count, aggregate_dependency_files_preview = self._aggregate_ranked_views(
-            tuple(target.dependency_files_preview for target in targets),
-            key=lambda item: item.path,
-            rank_key=self._file_relationship_rank_key,
-            limit=3,
-        )
-        aggregate_dependent_file_count, aggregate_dependent_files_preview = self._aggregate_ranked_views(
-            tuple(target.dependent_files_preview for target in targets),
-            key=lambda item: item.path,
-            rank_key=self._file_relationship_rank_key,
-            limit=3,
-        )
         aggregate_render_child_count, aggregate_render_children_preview = self._aggregate_ranked_views(
             tuple(target.render_children_preview for target in targets),
             key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
             rank_key=self._render_edge_rank_key,
-            limit=3,
+            limit=render_limit,
         )
         aggregate_render_parent_count, aggregate_render_parents_preview = self._aggregate_ranked_views(
             tuple(target.render_parents_preview for target in targets),
             key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
             rank_key=self._render_edge_rank_key,
-            limit=3,
+            limit=render_limit,
+        )
+        aggregate_blocked_paths = self._render_paths(aggregate_render_children_preview, aggregate_render_parents_preview)
+        aggregate_blocked_paths.update(self._location_paths(aggregate_reference_sites_preview))
+        aggregate_dependency_file_count, aggregate_dependency_candidates = self._aggregate_ranked_views(
+            tuple(target.dependency_files_preview for target in targets),
+            key=lambda item: item.path,
+            rank_key=self._file_relationship_rank_key,
+            limit=10 if ui_heavy else 3,
+        )
+        aggregate_dependency_files_preview = self._filter_relationship_paths(
+            aggregate_dependency_candidates,
+            blocked_paths=aggregate_blocked_paths,
+            limit=dependency_limit,
+        )
+        aggregate_dependent_file_count, aggregate_dependent_candidates = self._aggregate_ranked_views(
+            tuple(target.dependent_files_preview for target in targets),
+            key=lambda item: item.path,
+            rank_key=self._file_relationship_rank_key,
+            limit=10 if ui_heavy else 3,
+        )
+        aggregate_dependent_files_preview = self._filter_relationship_paths(
+            aggregate_dependent_candidates,
+            blocked_paths=aggregate_blocked_paths,
+            limit=dependent_limit,
         )
         aggregate_invariant_finding_count, aggregate_invariant_findings_preview = self._aggregate_ranked_views(
             tuple(self._compact_invariant_findings(target.invariant_findings_preview) for target in targets),
             key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
             rank_key=self._invariant_rank_key,
-            limit=3,
+            limit=invariant_limit,
         )
         aggregate_local_flow_edge_count, aggregate_local_flow_edges_preview = self._aggregate_ranked_views(
             tuple(target.local_flow_edges_preview for target in targets),
             key=lambda item: (item.path, item.line_start, item.column_start, item.edge_kind, item.source_label, item.target_label),
             rank_key=self._static_flow_rank_key,
-            limit=3,
+            limit=local_flow_limit,
         )
         _, aggregate_related_tests = self._aggregate_ranked_views(
             tuple(target.related_tests for target in targets),
             key=lambda item: item.id,
             rank_key=self._related_test_rank_key,
-            limit=3,
+            limit=related_test_limit,
         )
         compact_targets = tuple(
-            FileUnderstandingCompactTargetView(
-                detail_level="compact",
-                repository_rel_path=target.repository_rel_path,
-                file_owner=target.file_owner,
-                reference_site_count=target.reference_site_count,
-                reference_sites_preview=target.reference_sites_preview[:3],
-                dependency_file_count=target.dependency_file_count,
-                dependency_files_preview=target.dependency_files_preview[:3],
-                dependent_file_count=target.dependent_file_count,
-                dependent_files_preview=target.dependent_files_preview[:3],
-                render_child_count=target.render_child_count,
-                render_children_preview=target.render_children_preview[:3],
-                render_parent_count=target.render_parent_count,
-                render_parents_preview=target.render_parents_preview[:3],
-                invariant_finding_count=len(self._compact_invariant_findings(target.invariant_findings_preview)),
-                invariant_findings_preview=self._compact_invariant_findings(target.invariant_findings_preview)[:3],
-                local_flow_edge_count=target.local_flow_edge_count,
-                local_flow_edges_preview=target.local_flow_edges_preview[:3],
-                related_test_count=len(target.related_tests),
-                related_tests=target.related_tests[:3],
-                structured_artifact=target.structured_artifact,
+            self._compact_file_target_view(
+                target,
+                related_test_limit=related_test_limit,
+                multi_target=multi_target,
             )
             for target in targets
         )
@@ -1476,6 +1528,66 @@ class SuitMcpService:
                     "can_i_do_this",
                 )
             ),
+        )
+
+    def _compact_file_target_view(
+        self,
+        target: FileUnderstandingTargetView,
+        *,
+        related_test_limit: int,
+        multi_target: bool,
+    ) -> FileUnderstandingCompactTargetView:
+        ui_heavy = self._is_ui_heavy_file_target(target)
+        render_limit = 2 if ui_heavy else 3
+        dependent_limit = 2 if ui_heavy else 3
+        dependency_limit = 1 if ui_heavy else 3
+        local_flow_limit = 1 if ui_heavy else 3
+        invariant_limit = 1 if ui_heavy else 3
+        reference_limit = 3
+        if multi_target:
+            reference_limit = 1
+            render_limit = 1
+            dependent_limit = 1
+            dependency_limit = 1
+            local_flow_limit = 1
+            invariant_limit = 1
+            related_test_limit = min(related_test_limit, 1)
+        render_children_preview = target.render_children_preview[:render_limit]
+        render_parents_preview = target.render_parents_preview[:render_limit]
+        blocked_paths = self._render_paths(render_children_preview, render_parents_preview)
+        blocked_paths.update(self._location_paths(target.reference_sites_preview[:reference_limit]))
+        dependency_files_preview = self._filter_relationship_paths(
+            target.dependency_files_preview,
+            blocked_paths=blocked_paths,
+            limit=dependency_limit,
+        )
+        dependent_files_preview = self._filter_relationship_paths(
+            target.dependent_files_preview,
+            blocked_paths=blocked_paths,
+            limit=dependent_limit,
+        )
+        invariant_findings = self._compact_invariant_findings(target.invariant_findings_preview)[:invariant_limit]
+        return FileUnderstandingCompactTargetView(
+            detail_level="compact",
+            repository_rel_path=target.repository_rel_path,
+            file_owner=target.file_owner,
+            reference_site_count=target.reference_site_count,
+            reference_sites_preview=target.reference_sites_preview[:reference_limit],
+            dependency_file_count=target.dependency_file_count,
+            dependency_files_preview=dependency_files_preview,
+            dependent_file_count=target.dependent_file_count,
+            dependent_files_preview=dependent_files_preview,
+            render_child_count=target.render_child_count,
+            render_children_preview=render_children_preview,
+            render_parent_count=target.render_parent_count,
+            render_parents_preview=render_parents_preview,
+            invariant_finding_count=len(self._compact_invariant_findings(target.invariant_findings_preview)),
+            invariant_findings_preview=invariant_findings,
+            local_flow_edge_count=target.local_flow_edge_count,
+            local_flow_edges_preview=target.local_flow_edges_preview[:local_flow_limit],
+            related_test_count=len(target.related_tests),
+            related_tests=target.related_tests[:related_test_limit],
+            structured_artifact=target.structured_artifact,
         )
 
     def _standard_file_understanding_view(
@@ -1600,83 +1712,85 @@ class SuitMcpService:
         self,
         targets: tuple[BatchChangeImpactTargetView, ...],
     ) -> BatchChangeImpactCompactView:
+        multi_target = len(targets) > 1
+        ui_heavy = any(self._is_ui_heavy_change_target(target) for target in targets)
+        render_limit = 2 if ui_heavy else 3
+        dependent_limit = 2 if ui_heavy else 3
+        local_flow_limit = 1 if ui_heavy else 3
+        invariant_limit = 1 if ui_heavy else 3
+        related_test_limit = 2 if multi_target else 3
+        component_limit = 2 if multi_target else 3
+        quality_gate_limit = 2 if multi_target else 3
+        runner_limit = 1 if multi_target else 3
         _, reference_sites = self._aggregate_ranked_views(
             tuple(target.impact.reference_locations for target in targets),
             key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
             rank_key=self._location_rank_key,
             limit=3,
         )
-        _, dependent_files = self._aggregate_ranked_views(
-            tuple(target.impact.dependent_files for target in targets),
-            key=lambda item: item.path,
-            rank_key=self._file_relationship_rank_key,
-            limit=3,
-        )
         _, render_children = self._aggregate_ranked_views(
             tuple(target.impact.render_children for target in targets),
             key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
             rank_key=self._render_edge_rank_key,
-            limit=3,
+            limit=render_limit,
         )
         _, render_parents = self._aggregate_ranked_views(
             tuple(target.impact.render_parents for target in targets),
             key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
             rank_key=self._render_edge_rank_key,
-            limit=3,
+            limit=render_limit,
+        )
+        blocked_paths = self._render_paths(render_children, render_parents)
+        blocked_paths.update(self._location_paths(reference_sites))
+        _, dependent_file_candidates = self._aggregate_ranked_views(
+            tuple(target.impact.dependent_files for target in targets),
+            key=lambda item: item.path,
+            rank_key=self._file_relationship_rank_key,
+            limit=10 if ui_heavy else 3,
+        )
+        dependent_files = self._filter_relationship_paths(
+            dependent_file_candidates,
+            blocked_paths=blocked_paths,
+            limit=dependent_limit,
         )
         _, invariant_findings = self._aggregate_ranked_views(
             tuple(self._compact_invariant_findings(target.impact.invariant_findings) for target in targets),
             key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
             rank_key=self._invariant_rank_key,
-            limit=3,
+            limit=invariant_limit,
         )
         _, local_flow_edges = self._aggregate_ranked_views(
             tuple(target.impact.local_flow_edges for target in targets),
             key=lambda item: (item.path, item.line_start, item.column_start, item.edge_kind, item.source_label, item.target_label),
             rank_key=self._static_flow_rank_key,
-            limit=3,
+            limit=local_flow_limit,
         )
         _, dependent_components = self._aggregate_ranked_views(
             tuple(target.impact.dependent_components for target in targets),
             key=lambda item: item.id,
             rank_key=self._component_rank_key,
-            limit=3,
+            limit=component_limit,
         )
         _, related_tests = self._aggregate_ranked_views(
             tuple(target.impact.related_tests for target in targets),
             key=lambda item: item.test.id,
             rank_key=self._test_impact_rank_key,
-            limit=3,
+            limit=related_test_limit,
         )
         _, related_runners = self._aggregate_ranked_views(
             tuple(target.impact.related_runners for target in targets),
             key=lambda item: item.runner.id,
             rank_key=self._runner_impact_rank_key,
-            limit=3,
+            limit=runner_limit,
         )
         _, quality_gates = self._aggregate_ranked_views(
             tuple(target.impact.quality_gates for target in targets),
             key=lambda item: (item.provider_id, item.reason, item.applies),
             rank_key=self._quality_gate_rank_key,
-            limit=3,
+            limit=quality_gate_limit,
         )
         compact_targets = tuple(
-            BatchChangeImpactCompactTargetView(
-                detail_level="compact",
-                repository_rel_path=target.repository_rel_path,
-                owner=target.impact.owner,
-                primary_component=target.impact.primary_component,
-                reference_sites=target.impact.reference_locations[:3],
-                dependent_files=target.impact.dependent_files[:3],
-                render_children=target.impact.render_children[:3],
-                render_parents=target.impact.render_parents[:3],
-                invariant_findings=self._compact_invariant_findings(target.impact.invariant_findings)[:3],
-                local_flow_edges=target.impact.local_flow_edges[:3],
-                dependent_components=target.impact.dependent_components[:3],
-                related_tests=target.impact.related_tests[:3],
-                related_runners=target.impact.related_runners[:3],
-                quality_gates=target.impact.quality_gates[:3],
-            )
+            self._compact_change_target_view(target, multi_target=multi_target)
             for target in targets
         )
         return BatchChangeImpactCompactView(
@@ -1694,6 +1808,59 @@ class SuitMcpService:
             related_tests=related_tests,
             related_runners=related_runners,
             quality_gates=quality_gates,
+        )
+
+    def _compact_change_target_view(
+        self,
+        target: BatchChangeImpactTargetView,
+        *,
+        multi_target: bool,
+    ) -> BatchChangeImpactCompactTargetView:
+        ui_heavy = self._is_ui_heavy_change_target(target)
+        render_limit = 2 if ui_heavy else 3
+        dependent_limit = 2 if ui_heavy else 3
+        local_flow_limit = 1 if ui_heavy else 3
+        invariant_limit = 1 if ui_heavy else 3
+        reference_limit = 3
+        related_test_limit = 3
+        component_limit = 3
+        quality_gate_limit = 3
+        runner_limit = 3
+        if multi_target:
+            reference_limit = 1
+            render_limit = 1
+            dependent_limit = 1
+            local_flow_limit = 1
+            invariant_limit = 1
+            related_test_limit = 1
+            component_limit = 1
+            quality_gate_limit = 1
+            runner_limit = 1
+        reference_sites = target.impact.reference_locations[:reference_limit]
+        render_children = target.impact.render_children[:render_limit]
+        render_parents = target.impact.render_parents[:render_limit]
+        blocked_paths = self._render_paths(render_children, render_parents)
+        blocked_paths.update(self._location_paths(reference_sites))
+        dependent_files = self._filter_relationship_paths(
+            target.impact.dependent_files,
+            blocked_paths=blocked_paths,
+            limit=dependent_limit,
+        )
+        return BatchChangeImpactCompactTargetView(
+            detail_level="compact",
+            repository_rel_path=target.repository_rel_path,
+            owner=target.impact.owner,
+            primary_component=target.impact.primary_component,
+            reference_sites=reference_sites,
+            dependent_files=dependent_files,
+            render_children=render_children,
+            render_parents=render_parents,
+            invariant_findings=self._compact_invariant_findings(target.impact.invariant_findings)[:invariant_limit],
+            local_flow_edges=target.impact.local_flow_edges[:local_flow_limit],
+            dependent_components=target.impact.dependent_components[:component_limit],
+            related_tests=target.impact.related_tests[:related_test_limit],
+            related_runners=target.impact.related_runners[:runner_limit],
+            quality_gates=target.impact.quality_gates[:quality_gate_limit],
         )
 
     def _standard_change_impact_view(
@@ -1998,6 +2165,7 @@ class SuitMcpService:
             "repository_build_replaced_by_narrower_build",
             "no_deterministic_test_targets_available",
             "no_deterministic_validation_surfaces_for_provider_owned_artifact",
+            "no_narrower_direct_validation_surface_for_file_target",
         }
         return tuple(item for item in excluded_items if item.reason_code in allowed_reason_codes)
 

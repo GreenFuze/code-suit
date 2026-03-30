@@ -118,7 +118,7 @@ class NpmStaticAnalysisService:
                                 evidence_summary=(
                                     f"deterministic TypeScript static analysis identifies local producer `{producer['label']}`"
                                 ),
-                                evidence_paths=(repository_rel_path, producer["path"]),
+                                evidence_paths=self._producer_evidence_paths(repository_rel_path, producer["path"]),
                             ),
                         ),
                     )
@@ -179,6 +179,15 @@ class NpmStaticAnalysisService:
         if repository_rel_path == edge_path:
             return (repository_rel_path,)
         return (repository_rel_path, edge_path)
+
+    @staticmethod
+    def _producer_evidence_paths(
+        repository_rel_path: str,
+        producer_path: str,
+    ) -> tuple[str, ...]:
+        if repository_rel_path == producer_path:
+            return (repository_rel_path,)
+        return (repository_rel_path, producer_path)
 
     @staticmethod
     def _coerce_findings(value: object) -> tuple[dict[str, object], ...]:

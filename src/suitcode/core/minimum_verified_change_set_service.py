@@ -809,6 +809,14 @@ class MinimumVerifiedChangeSetService:
             quality_validation_operations=quality_validation_operations,
             quality_hygiene_operations=quality_hygiene_operations,
         )
+        breadth_explanations = self._shared_file_surface_explanations(
+            resolved=resolved,
+            tests=tests,
+            build_targets=build_targets,
+            runner_actions=runner_actions,
+            quality_validation_operations=quality_validation_operations,
+            quality_hygiene_operations=quality_hygiene_operations,
+        )
 
         provenance = self._overall_provenance(
             tests=tests,
@@ -820,6 +828,7 @@ class MinimumVerifiedChangeSetService:
                 test_exclusions
                 or dependent_test_exclusions
                 or build_exclusions
+                or breadth_explanations
                 or availability_exclusions
             ),
         )
@@ -848,6 +857,7 @@ class MinimumVerifiedChangeSetService:
                     *test_exclusions,
                     *dependent_test_exclusions,
                     *build_exclusions,
+                    *breadth_explanations,
                     *availability_exclusions,
                 )
             ),
@@ -957,21 +967,38 @@ class MinimumVerifiedChangeSetService:
         if not remaining_surfaces:
             return tuple()
         evidence_paths = resolved.relevant_files[:10] or ((resolved.evidence_path,) if resolved.evidence_path is not None else tuple())
-        if len(remaining_surfaces) == 1:
-            surface_label = f"{remaining_surfaces[0]} surface is"
+        if self._is_frontend_build_primary_surface(
+            resolved=resolved,
+            build_targets=build_targets,
+            runner_actions=runner_actions,
+            quality_validation_operations=quality_validation_operations,
+            quality_hygiene_operations=quality_hygiene_operations,
+        ):
+            reason = (
+                "no finer deterministic frontend test target was discovered for this target; "
+                "build is the primary deterministic frontend validation surface currently available"
+            )
+        elif len(remaining_surfaces) == 1:
+            reason = (
+                "no deterministic test targets were discovered for this target; "
+                f"{remaining_surfaces[0]} surface is the only deterministic validation available"
+            )
         elif len(remaining_surfaces) == 2:
-            surface_label = f"{remaining_surfaces[0]} and {remaining_surfaces[1]} surfaces are"
+            reason = (
+                "no deterministic test targets were discovered for this target; "
+                f"{remaining_surfaces[0]} and {remaining_surfaces[1]} surfaces are the only deterministic validation available"
+            )
         else:
-            surface_label = f"{', '.join(remaining_surfaces[:-1])}, and {remaining_surfaces[-1]} surfaces are"
+            reason = (
+                "no deterministic test targets were discovered for this target; "
+                f"{', '.join(remaining_surfaces[:-1])}, and {remaining_surfaces[-1]} surfaces are the only deterministic validation available"
+            )
         return (
             self._evidence_assembler.exclusion(
                 item_kind=MinimumVerifiedItemKind.TEST_TARGET,
                 item_id=f"test_surface:{resolved.owner.id}",
                 reason_code=MinimumVerifiedExclusionReason.NO_DETERMINISTIC_TEST_TARGETS_AVAILABLE,
-                reason=(
-                    "no deterministic test targets were discovered for this target; "
-                    f"{surface_label} the only deterministic validation available"
-                ),
+                reason=reason,
                 provenance=(
                     derived_summary_provenance(
                         source_kind=SourceKind.OWNERSHIP,
@@ -979,6 +1006,87 @@ class MinimumVerifiedChangeSetService:
                         evidence_paths=evidence_paths,
                     ),
                 ),
+            ),
+        )
+
+    @staticmethod
+    def _is_frontend_source_path(repository_rel_path: str) -> bool:
+        normalized = repository_rel_path.replace("\\", "/").lower()
+        return normalized.endswith((".tsx", ".jsx", ".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"))
+
+    def _is_frontend_build_primary_surface(
+        self,
+        *,
+        resolved: _ResolvedMinimumTarget,
+        build_targets: tuple[MinimumVerifiedBuildTarget, ...],
+        runner_actions: tuple[MinimumVerifiedRunnerAction, ...],
+        quality_validation_operations: tuple[MinimumVerifiedQualityOperation, ...],
+        quality_hygiene_operations: tuple[MinimumVerifiedQualityOperation, ...],
+    ) -> bool:
+        if not build_targets or runner_actions:
+            return False
+        if any(item.target.provider_id != "npm" for item in build_targets):
+            return False
+        if any(item.provider_id != "npm" for item in quality_validation_operations):
+            return False
+        if any(item.provider_id != "npm" for item in quality_hygiene_operations):
+            return False
+        if not resolved.relevant_files:
+            return False
+        return all(self._is_frontend_source_path(path) for path in resolved.relevant_files)
+
+    def _shared_file_surface_explanations(
+        self,
+        *,
+        resolved: _ResolvedMinimumTarget,
+        tests: tuple[MinimumVerifiedTestTarget, ...],
+        build_targets: tuple[MinimumVerifiedBuildTarget, ...],
+        runner_actions: tuple[MinimumVerifiedRunnerAction, ...],
+        quality_validation_operations: tuple[MinimumVerifiedQualityOperation, ...],
+        quality_hygiene_operations: tuple[MinimumVerifiedQualityOperation, ...],
+    ) -> tuple[ExcludedMinimumVerifiedItem, ...]:
+        if resolved.target_kind != "file":
+            return tuple()
+        if runner_actions or quality_validation_operations or quality_hygiene_operations:
+            return tuple()
+        if not tests and not build_targets:
+            return tuple()
+        dependent_test_reasons = {
+            "direct dependent component test",
+        }
+        dependent_build_reasons = {
+            "directly dependent buildable component is the narrowest deterministic build surface",
+        }
+        tests_are_dependent = bool(tests) and all(item.inclusion_reason in dependent_test_reasons for item in tests)
+        builds_are_dependent = bool(build_targets) and all(item.inclusion_reason in dependent_build_reasons for item in build_targets)
+        if any(item.inclusion_reason not in dependent_test_reasons for item in tests):
+            return tuple()
+        if any(item.inclusion_reason not in dependent_build_reasons for item in build_targets):
+            return tuple()
+        if not tests_are_dependent and not builds_are_dependent:
+            return tuple()
+        evidence_paths = resolved.relevant_files[:10] or ((resolved.evidence_path,) if resolved.evidence_path is not None else tuple())
+        provenance = self._evidence_assembler._merged_provenance(  # type: ignore[attr-defined]
+            tuple(entry for item in tests for entry in item.provenance),
+            tuple(entry for item in build_targets for entry in item.provenance),
+            (
+                derived_summary_provenance(
+                    source_kind=SourceKind.OWNERSHIP,
+                    evidence_summary="file target has no narrower direct deterministic validation surface; dependent validation surfaces are required because the file is shared",
+                    evidence_paths=evidence_paths,
+                ),
+            ),
+        )
+        return (
+            self._evidence_assembler.exclusion(
+                item_kind=MinimumVerifiedItemKind.VALIDATION_SURFACE,
+                item_id=f"validation_surface:breadth:{resolved.evidence_path or resolved.owner.id}",
+                reason_code=MinimumVerifiedExclusionReason.NO_NARROWER_DIRECT_VALIDATION_SURFACE_FOR_FILE_TARGET,
+                reason=(
+                    "this file has no narrower direct deterministic validation surface; "
+                    "the listed validations are dependent-package surfaces required because the file is shared"
+                ),
+                provenance=provenance,
             ),
         )
 

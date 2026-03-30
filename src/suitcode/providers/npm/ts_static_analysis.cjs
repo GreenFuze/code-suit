@@ -304,12 +304,7 @@ function producerSitesForFunctionTarget(target, fieldName) {
       });
     }
   }
-  return [{
-    path: toRepositoryRelative(target.path),
-    line_start: target.lineStart,
-    column_start: target.columnStart,
-    label: target.label,
-  }];
+  return [];
 }
 
 function producerSitesForExpression(checker, expression, fieldName) {

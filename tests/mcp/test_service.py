@@ -27,6 +27,8 @@ from suitcode.mcp.models import (
     FileRelationshipView,
     FileUnderstandingTargetView,
     FileView,
+    InvariantFindingView,
+    RenderEdgeView,
     LocationView,
     OwnerView,
     ProvenanceView,
@@ -876,6 +878,403 @@ def test_compact_change_impact_aggregate_ranks_by_shared_reference_sites(service
     assert view.reference_sites[0].path == "src/shared.ts"
 
 
+def test_compact_file_understanding_ui_heavy_dedupes_reference_and_render_overlap(service: SuitMcpService) -> None:
+    owner = FileOwnerView(
+        file=FileView(
+            id="file:src/App.tsx",
+            path="src/App.tsx",
+            language="typescript",
+            owner_id="component:npm:demo",
+            provenance=_provenance_view("src/App.tsx"),
+        ),
+        owner=OwnerView(id="component:npm:demo", kind="component", name="demo"),
+    )
+    shared_reference = LocationView(
+        path="src/components/Button.tsx",
+        line_start=12,
+        line_end=12,
+        column_start=3,
+        column_end=12,
+        symbol_id="symbol:button",
+        provenance=_provenance_view("src/App.tsx", "src/components/Button.tsx"),
+    )
+    render_child = RenderEdgeView(
+        path="src/components/Button.tsx",
+        line_start=20,
+        column_start=5,
+        prop_names=("label",),
+        has_spread_props=False,
+        provenance=_provenance_view("src/App.tsx", "src/components/Button.tsx"),
+    )
+    unique_dependent = FileRelationshipView(
+        path="src/features/Shelf.tsx",
+        provenance=_provenance_view("src/App.tsx", "src/features/Shelf.tsx"),
+    )
+    overlapping_dependent = FileRelationshipView(
+        path="src/components/Button.tsx",
+        provenance=_provenance_view("src/App.tsx", "src/components/Button.tsx"),
+    )
+
+    target = FileUnderstandingTargetView(
+        detail_level="full",
+        repository_rel_path="src/App.tsx",
+        file_owner=owner,
+        reference_site_count=1,
+        reference_sites_preview=(shared_reference,),
+        dependency_file_count=0,
+        dependency_files_preview=tuple(),
+        dependent_file_count=2,
+        dependent_files_preview=(overlapping_dependent, unique_dependent),
+        render_child_count=1,
+        render_children_preview=(render_child,),
+        render_parent_count=0,
+        render_parents_preview=tuple(),
+        invariant_finding_count=0,
+        invariant_findings_preview=tuple(),
+        local_flow_edge_count=0,
+        local_flow_edges_preview=tuple(),
+        implementation_location_count=0,
+        implementation_locations_preview=tuple(),
+        related_tests=tuple(),
+        provenance=_provenance_view("src/App.tsx"),
+    )
+
+    view = service._compact_file_understanding_view((target,))
+
+    assert view.aggregate_reference_sites_preview[0].path == "src/components/Button.tsx"
+    assert [item.path for item in view.aggregate_render_children_preview] == ["src/components/Button.tsx"]
+    assert [item.path for item in view.aggregate_dependent_files_preview] == ["src/features/Shelf.tsx"]
+    assert view.aggregate_dependent_file_count == 2
+
+
+def test_compact_file_understanding_multi_target_ui_heavy_caps_per_target_previews(service: SuitMcpService) -> None:
+    owner = FileOwnerView(
+        file=FileView(
+            id="file:src/App.tsx",
+            path="src/App.tsx",
+            language="typescript",
+            owner_id="component:npm:demo",
+            provenance=_provenance_view("src/App.tsx"),
+        ),
+        owner=OwnerView(id="component:npm:demo", kind="component", name="demo"),
+    )
+    reference_sites = (
+        LocationView(
+            path="src/components/Button.tsx",
+            line_start=12,
+            line_end=12,
+            column_start=3,
+            column_end=12,
+            symbol_id="symbol:button",
+            provenance=_provenance_view("src/App.tsx", "src/components/Button.tsx"),
+        ),
+        LocationView(
+            path="src/components/StatusPill.tsx",
+            line_start=16,
+            line_end=16,
+            column_start=3,
+            column_end=16,
+            symbol_id="symbol:status",
+            provenance=_provenance_view("src/App.tsx", "src/components/StatusPill.tsx"),
+        ),
+    )
+    render_children = (
+        RenderEdgeView(
+            path="src/components/Button.tsx",
+            line_start=20,
+            column_start=5,
+            prop_names=("label",),
+            has_spread_props=False,
+            provenance=_provenance_view("src/App.tsx", "src/components/Button.tsx"),
+        ),
+        RenderEdgeView(
+            path="src/components/StatusPill.tsx",
+            line_start=24,
+            column_start=5,
+            prop_names=("status",),
+            has_spread_props=False,
+            provenance=_provenance_view("src/App.tsx", "src/components/StatusPill.tsx"),
+        ),
+    )
+    dependent_files = (
+        FileRelationshipView(path="src/features/Shelf.tsx", provenance=_provenance_view("src/App.tsx", "src/features/Shelf.tsx")),
+        FileRelationshipView(path="src/features/Grid.tsx", provenance=_provenance_view("src/App.tsx", "src/features/Grid.tsx")),
+    )
+    targets = tuple(
+        FileUnderstandingTargetView(
+            detail_level="full",
+            repository_rel_path=f"src/View{index}.tsx",
+            file_owner=owner.model_copy(
+                update={
+                    "file": owner.file.model_copy(
+                        update={
+                            "id": f"file:src/View{index}.tsx",
+                            "path": f"src/View{index}.tsx",
+                            "provenance": _provenance_view(f"src/View{index}.tsx"),
+                        }
+                    )
+                }
+            ),
+            reference_site_count=len(reference_sites),
+            reference_sites_preview=reference_sites,
+            dependency_file_count=2,
+            dependency_files_preview=dependent_files,
+            dependent_file_count=2,
+            dependent_files_preview=dependent_files,
+            render_child_count=len(render_children),
+            render_children_preview=render_children,
+            render_parent_count=0,
+            render_parents_preview=tuple(),
+            invariant_finding_count=0,
+            invariant_findings_preview=tuple(),
+            local_flow_edge_count=0,
+            local_flow_edges_preview=tuple(),
+            implementation_location_count=0,
+            implementation_locations_preview=tuple(),
+            related_tests=tuple(),
+            provenance=_provenance_view(f"src/View{index}.tsx"),
+        )
+        for index in range(1, 4)
+    )
+
+    view = service._compact_file_understanding_view(targets)
+
+    assert all(len(item.reference_sites_preview) <= 1 for item in view.targets)
+    assert all(len(item.render_children_preview) <= 1 for item in view.targets)
+    assert all(len(item.dependent_files_preview) <= 1 for item in view.targets)
+    assert all(len(item.related_tests) <= 1 for item in view.targets)
+
+
+def test_compact_file_understanding_filters_weak_invariant_findings(service: SuitMcpService) -> None:
+    owner = FileOwnerView(
+        file=FileView(
+            id="file:src/App.tsx",
+            path="src/App.tsx",
+            language="typescript",
+            owner_id="component:npm:demo",
+            provenance=_provenance_view("src/App.tsx"),
+        ),
+        owner=OwnerView(id="component:npm:demo", kind="component", name="demo"),
+    )
+    weak_finding = InvariantFindingView(
+        path="src/App.tsx",
+        line_start=18,
+        column_start=9,
+        access_kind="method_call",
+        field_name="status",
+        subject_label="integration",
+        declared_type="string | undefined",
+        producer_site_count=0,
+        producer_sites_preview=tuple(),
+        provenance=_provenance_view("src/App.tsx"),
+    )
+
+    target = FileUnderstandingTargetView(
+        detail_level="full",
+        repository_rel_path="src/App.tsx",
+        file_owner=owner,
+        reference_site_count=0,
+        reference_sites_preview=tuple(),
+        dependency_file_count=0,
+        dependency_files_preview=tuple(),
+        dependent_file_count=0,
+        dependent_files_preview=tuple(),
+        render_child_count=0,
+        render_children_preview=tuple(),
+        render_parent_count=0,
+        render_parents_preview=tuple(),
+        invariant_finding_count=1,
+        invariant_findings_preview=(weak_finding,),
+        local_flow_edge_count=0,
+        local_flow_edges_preview=tuple(),
+        implementation_location_count=0,
+        implementation_locations_preview=tuple(),
+        related_tests=tuple(),
+        provenance=_provenance_view("src/App.tsx"),
+    )
+
+    compact = service._compact_file_understanding_view((target,))
+    standard = service._standard_file_understanding_view((target,))
+
+    assert compact.targets[0].invariant_finding_count == 0
+    assert compact.targets[0].invariant_findings_preview == tuple()
+    assert standard.targets[0].invariant_finding_count == 1
+    assert len(standard.targets[0].invariant_findings_preview) == 1
+
+
+def test_compact_change_impact_ui_heavy_dedupes_reference_and_render_overlap(service: SuitMcpService) -> None:
+    shared_reference = LocationView(
+        path="src/components/Button.tsx",
+        line_start=12,
+        line_end=12,
+        column_start=3,
+        column_end=12,
+        symbol_id="symbol:button",
+        provenance=_provenance_view("src/App.tsx", "src/components/Button.tsx"),
+    )
+    render_child = RenderEdgeView(
+        path="src/components/Button.tsx",
+        line_start=20,
+        column_start=5,
+        prop_names=("label",),
+        has_spread_props=False,
+        provenance=_provenance_view("src/App.tsx", "src/components/Button.tsx"),
+    )
+    unique_dependent = FileRelationshipView(
+        path="src/features/Shelf.tsx",
+        provenance=_provenance_view("src/App.tsx", "src/features/Shelf.tsx"),
+    )
+    overlapping_dependent = FileRelationshipView(
+        path="src/components/Button.tsx",
+        provenance=_provenance_view("src/App.tsx", "src/components/Button.tsx"),
+    )
+    truth_coverage = TruthCoverageSummaryView(
+        scope_kind="change",
+        scope_id="change_target:file:src/App.tsx",
+        domains=(
+            TruthCoverageByDomainView(
+                domain="code",
+                total_entities=1,
+                authoritative_count=1,
+                derived_count=0,
+                heuristic_count=0,
+                unavailable_count=0,
+                availability="available",
+                degraded_reason=None,
+                source_kind_mix={"dependency_graph": 1},
+                source_tool_mix={"typescript": 1},
+                execution_available=None,
+                action_capabilities={},
+            ),
+        ),
+        overall_authoritative_count=1,
+        overall_derived_count=0,
+        overall_heuristic_count=0,
+        overall_unavailable_count=0,
+        overall_availability="available",
+        provenance=_provenance_view("src/App.tsx"),
+    )
+    impact = ChangeImpactView(
+        target_kind="file",
+        owner=OwnerView(id="component:npm:demo", kind="component", name="demo"),
+        primary_component=None,
+        component_context=None,
+        file_context=None,
+        symbol_context=None,
+        dependency_files=tuple(),
+        dependent_files=(overlapping_dependent, unique_dependent),
+        render_children=(render_child,),
+        render_parents=tuple(),
+        invariant_findings=tuple(),
+        local_flow_edges=tuple(),
+        implementation_locations=tuple(),
+        implementation_components=tuple(),
+        dependent_components=tuple(),
+        reference_locations=(shared_reference,),
+        related_tests=tuple(),
+        related_runners=tuple(),
+        quality_gates=tuple(),
+        evidence=ChangeEvidencePreviewView(total_edges=0, counts_by_kind={}, edges_preview=tuple(), truncated=False),
+        truth_coverage=truth_coverage,
+        provenance=_provenance_view("src/App.tsx"),
+    )
+
+    view = service._compact_change_impact_view(
+        (BatchChangeImpactTargetView(repository_rel_path="src/App.tsx", impact=impact),)
+    )
+
+    assert [item.path for item in view.reference_sites] == ["src/components/Button.tsx"]
+    assert [item.path for item in view.render_children] == ["src/components/Button.tsx"]
+    assert [item.path for item in view.dependent_files] == ["src/features/Shelf.tsx"]
+
+
+def test_compact_change_impact_multi_target_ui_heavy_caps_per_target_previews(service: SuitMcpService) -> None:
+    reference_site = LocationView(
+        path="src/components/Button.tsx",
+        line_start=12,
+        line_end=12,
+        column_start=3,
+        column_end=12,
+        symbol_id="symbol:button",
+        provenance=_provenance_view("src/App.tsx", "src/components/Button.tsx"),
+    )
+    render_child = RenderEdgeView(
+        path="src/components/Button.tsx",
+        line_start=20,
+        column_start=5,
+        prop_names=("label",),
+        has_spread_props=False,
+        provenance=_provenance_view("src/App.tsx", "src/components/Button.tsx"),
+    )
+    dependent_file = FileRelationshipView(
+        path="src/features/Shelf.tsx",
+        provenance=_provenance_view("src/App.tsx", "src/features/Shelf.tsx"),
+    )
+    truth_coverage = TruthCoverageSummaryView(
+        scope_kind="change",
+        scope_id="change_target:file:src/App.tsx",
+        domains=(
+            TruthCoverageByDomainView(
+                domain="code",
+                total_entities=1,
+                authoritative_count=1,
+                derived_count=0,
+                heuristic_count=0,
+                unavailable_count=0,
+                availability="available",
+                degraded_reason=None,
+                source_kind_mix={"dependency_graph": 1},
+                source_tool_mix={"typescript": 1},
+                execution_available=None,
+                action_capabilities={},
+            ),
+        ),
+        overall_authoritative_count=1,
+        overall_derived_count=0,
+        overall_heuristic_count=0,
+        overall_unavailable_count=0,
+        overall_availability="available",
+        provenance=_provenance_view("src/App.tsx"),
+    )
+    targets = tuple(
+        BatchChangeImpactTargetView(
+            repository_rel_path=f"src/View{index}.tsx",
+            impact=ChangeImpactView(
+                target_kind="file",
+                owner=OwnerView(id="component:npm:demo", kind="component", name="demo"),
+                primary_component=None,
+                component_context=None,
+                file_context=None,
+                symbol_context=None,
+                dependency_files=tuple(),
+                dependent_files=(dependent_file, dependent_file),
+                render_children=(render_child, render_child),
+                render_parents=tuple(),
+                invariant_findings=tuple(),
+                local_flow_edges=tuple(),
+                implementation_locations=tuple(),
+                implementation_components=tuple(),
+                dependent_components=tuple(),
+                reference_locations=(reference_site, reference_site),
+                related_tests=tuple(),
+                related_runners=tuple(),
+                quality_gates=tuple(),
+                evidence=ChangeEvidencePreviewView(total_edges=0, counts_by_kind={}, edges_preview=tuple(), truncated=False),
+                truth_coverage=truth_coverage,
+                provenance=_provenance_view(f"src/View{index}.tsx"),
+            ),
+        )
+        for index in range(1, 4)
+    )
+
+    view = service._compact_change_impact_view(targets)
+
+    assert all(len(item.reference_sites) <= 1 for item in view.targets)
+    assert all(len(item.render_children) <= 1 for item in view.targets)
+    assert all(len(item.dependent_files) <= 1 for item in view.targets)
+    assert all(len(item.related_tests) <= 1 for item in view.targets)
+
+
 def test_what_changes_if_i_edit_this_supports_provider_owned_markdown_and_openapi(
     service: SuitMcpService,
     tmp_path: Path,
@@ -945,6 +1344,23 @@ def test_read_only_by_path_minimum_verified_change_set_returns_clear_empty_surfa
             str(repo_root),
             repository_rel_path="pkg/orphan/orphan.go",
         )
+
+
+def test_what_should_i_run_explains_shared_file_validation_breadth(service: SuitMcpService, go_repo_root: Path) -> None:
+    minimum = service.what_should_i_run(
+        str(go_repo_root),
+        ("pkg/util/util.go",),
+    )
+
+    assert any(
+        item.reason_code == "no_narrower_direct_validation_surface_for_file_target"
+        and "dependent-package surfaces required because the file is shared" in item.reason
+        for item in minimum.excluded_items
+    )
+    assert any(
+        "dependent-package surfaces required because the file is shared" in item.summary
+        for item in minimum.compact_summary.exclusions
+    )
 
 
 def test_service_open_workspace_reuses_same_root(service: SuitMcpService, npm_repo_root: Path) -> None:

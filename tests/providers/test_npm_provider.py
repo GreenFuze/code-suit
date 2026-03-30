@@ -414,6 +414,59 @@ def test_static_analysis_service_detects_optional_field_access_and_local_flow(tm
           return {};
         }
 
+        const next = buildItem();
+        export const label = next.status.replace(/_/g, " ");
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    service = NpmStaticAnalysisService(
+        repository_root=repo_root,
+        attachment_root=repo_root,
+    )
+
+    findings, flows = service.get_file_analysis("src/analysis.ts")
+
+    assert any(item.field_name == "status" for item in findings)
+    assert any(item.source_label == "buildItem" and item.target_label == "next" for item in flows)
+    assert any(item.field_name == "status" and item.producer_site_count >= 1 for item in findings)
+
+
+def test_static_analysis_service_keeps_optional_field_finding_without_explicit_omission(tmp_path) -> None:
+    repo_root = tmp_path / "frontend"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "tsconfig.json").write_text(
+        """
+        {
+          "compilerOptions": {
+            "target": "ES2020",
+            "module": "ESNext",
+            "moduleResolution": "Node",
+            "strict": true
+          },
+          "include": ["src/**/*"]
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "analysis.ts").write_text(
+        """
+        type Item = { status?: string };
+
+        function buildItem(): Item {
+          return { status: "ready" };
+        }
+
         function formatItem(item: Item): string {
           return item.status.replace(/_/g, " ");
         }
@@ -429,10 +482,10 @@ def test_static_analysis_service_detects_optional_field_access_and_local_flow(tm
         attachment_root=repo_root,
     )
 
-    findings, flows = service.get_file_analysis("src/analysis.ts")
+    findings, _ = service.get_file_analysis("src/analysis.ts")
 
     assert any(item.field_name == "status" for item in findings)
-    assert any(item.source_label == "buildItem" and item.target_label == "next" for item in flows)
+    assert all(item.producer_site_count == 0 for item in findings if item.field_name == "status")
 
 
 def test_npm_provider_internal_symbol_analysis_stays_npm_specific(npm_provider: NPMProvider) -> None:

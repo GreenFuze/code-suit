@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from suitcode.core.quality.quality_intelligence import QualityIntelligence
+from suitcode.core.workspace import Workspace
 from suitcode.providers.provider_roles import ProviderRole
 from suitcode.providers.provider_metadata import ProviderAttachmentCandidate, ProviderAttachmentContext
 from suitcode.core.provenance_builders import lsp_delta_provenance, quality_tool_provenance
@@ -193,3 +194,34 @@ def test_quality_intelligence_rejects_provider_without_quality_role() -> None:
 
     with pytest.raises(ValueError, match="does not support quality"):
         intelligence.format_file("file.ts", provider_id="fake-quality")
+
+
+def test_quality_intelligence_excludes_runner_owned_files_from_repo_scope_only(tmp_path: Path) -> None:
+    repo_root = tmp_path / "frontend"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "scripts").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true,
+          "scripts": {
+            "codegen": "node scripts/codegen.mjs"
+          }
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "index.ts").write_text("export const value = 1;\n", encoding="utf-8")
+    (repo_root / "scripts" / "codegen.mjs").write_text("console.log('codegen');\n", encoding="utf-8")
+
+    repository = Workspace(repo_root).repositories[0]
+    quality = repository.quality
+
+    owner = repository.get_file_owner("scripts/codegen.mjs")
+
+    assert owner.owner.kind == "runner"
+    assert "scripts/codegen.mjs" not in quality.relevant_repository_rel_paths()
+    assert quality.relevant_repository_rel_paths(("scripts/codegen.mjs",)) == ("scripts/codegen.mjs",)
+    assert quality.provider_ids_for_files(("scripts/codegen.mjs",)) == ("npm",)

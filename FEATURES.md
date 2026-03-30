@@ -1,298 +1,102 @@
 # SuitCode Features
 
-This file is the technical reference for SuitCode.
+SuitCode is a deterministic repository intelligence product for coding agents.
 
-If you want the product overview, install steps, evidence summary, and example workflow, start with [README.md](README.md).
+This page is the short product summary. For installation and benchmark links, use [README.md](README.md). For research framing, use [docs/v1/RESEARCH.md](docs/v1/RESEARCH.md).
 
-SuitCode is a deterministic repository intelligence engine with an MCP server front-end. It answers repository questions through real toolchains (manifest/build/LSP/test/quality) instead of broad file exploration.
+## Product Goal
 
-## What SuitCode Can Do Today
+SuitCode reduces structural uncertainty during coding work.
 
-For supported repositories, SuitCode provides:
-- Architecture intelligence: components, aggregators, runners, package managers, external packages, owned files.
-- Code intelligence: symbols, symbols-in-file, definitions, references.
-- Test intelligence: discovered tests, related tests, exact test target execution.
-- Quality intelligence: lint/format with structured diagnostics and symbol/entity deltas.
-- Composed intelligence: repository summary, component/file/symbol context, impact analysis, change analysis, minimum verified change set.
-- Trust intelligence: repository-wide and change-local truth coverage across architecture, code, tests, quality, and actions.
-- Deterministic execution surfaces: test actions, runner actions, build actions.
-- Intelligence observability: MCP tool usage analytics, native Codex session usage analytics, transcript-estimated token accounting, estimated token-savings analytics, inefficiency detection.
-- Codex-native evaluation: harness-driven `codex exec` task runs with structured scoring, deterministic baseline comparison, and stored evaluation reports.
-- Claude/Cursor passive analytics: repository-scoped session summaries, transcript-estimated token accounting, and SuitCode adoption/correlation summaries where the native artifacts support them.
+It answers a small set of high-value questions:
+- what owns this repository or file
+- what changes if I edit it
+- what should I run before I trust the change
+- what is unsupported or unavailable
 
-## High-Value Questions SuitCode Answers
+The product is designed around deterministic evidence from the repository toolchain, not heuristics.
 
-- What are the real components/targets and their dependencies?
-  - Use `list_components`, `get_component_dependencies`, `list_component_dependency_edges`, `get_component_dependents`.
-- What tests cover this component/file and how do I run only those tests?
-  - Use `get_related_tests`, `describe_test_target`, `run_test_targets`.
-- What breaks if I change this file/symbol/owner?
-  - Use `analyze_impact` and `analyze_change`.
-- What is the minimum exact validation set for this change?
-  - Use `get_minimum_verified_change_set`.
-- How trustworthy is SuitCode's understanding of this repository or change?
-  - Use `get_truth_coverage` and inspect the `truth_coverage` attached to `repository_summary` and `analyze_change`.
+## Current Product Shape
 
-## Supported Providers and Roles
+Recommended MCP profile:
+- `core`
 
-Current provider families:
-- `python`
-- `npm`
-- `go`
+Current core tools:
+- `understand_repository`
+- `understand_file`
+- `what_changes_if_i_edit_this`
+- `what_should_i_run`
+- `can_i_do_this`
 
-Current roles:
-- `architecture`
-- `code`
-- `test`
-- `quality`
+Two heavy tools support detail levels:
+- `compact`: smallest curated answer
+- `standard`: bounded richer answer
+- `full`: richest evidence payload
 
-Provider behavior today:
-- Python:
-  - architecture from `pyproject.toml`
-  - code from `basedpyright` (LSP-backed)
-  - tests from `pytest --collect-only -q` when available, with heuristic fallback
-  - quality from Ruff
-- npm:
-  - architecture from `package.json` / workspace manifests
-  - code from `typescript-language-server`
-  - tests from `jest --listTests` when available, with heuristic fallback
-  - quality from ESLint / Prettier
-- Go:
-  - architecture from `go list -json ./...`
-  - tests from package-level `go test` targets
-  - deterministic build actions for buildable `package main` packages
-  - supports multi-module repo roots when no `go.work` is present
-  - `go.work` support is deferred
+Default:
+- `compact`
 
-## MCP Tools by Job
+## What Users Get
 
-### Support and workspace lifecycle
-- `list_supported_providers`
-  - Answers: What ecosystems/roles are supported at all?
-- `inspect_repository_support`
-  - Answers: Is this repository supported before opening a workspace?
-- `open_workspace`
-  - Answers: Open this repository and return stable workspace/repository IDs.
-- `list_open_workspaces`
-  - Answers: Which workspaces are currently open?
-- `get_workspace`
-  - Answers: What repositories are tracked in this workspace?
-- `close_workspace`
-  - Answers: Close a workspace and release repository ownership.
+### Repository understanding
+- provider detection
+- component and package boundaries
+- deterministic ownership
+- truth coverage and provenance visibility
 
-### Workspace/repository access
-- `list_workspace_repositories`
-  - Answers: Which repositories are in this workspace?
-- `get_repository`
-  - Answers: Return compact metadata for a specific repository ID.
-- `get_repository_by_path`
-  - Answers: Resolve a repository by path inside a workspace.
-- `add_repository`
-  - Answers: Add/reuse a supported repository in an existing workspace.
+### File and change understanding
+- owner and nearby tests
+- dependency and dependent surfaces
+- exact reference-site previews when provider-backed references exist
+- React/TSX render parent-child edges with explicit prop names
+- provider-owned docs/spec structure
 
-### Architecture intelligence
-- `list_components`
-  - Answers: What are the real components/targets?
-- `list_aggregators`
-  - Answers: What architecture-level aggregators exist?
-- `list_runners`
-  - Answers: What runnable targets exist?
-- `list_package_managers`
-  - Answers: Which package managers are detected?
-- `list_external_packages`
-  - Answers: What external dependencies are declared?
-- `list_files`
-  - Answers: Which files are semantically owned in the repository model?
-- `get_component_dependencies`
-  - Answers: What does this component depend on?
-- `list_component_dependency_edges`
-  - Answers: Show dependency edges in bulk (source component -> target, with scope/provenance).
-- `get_component_dependents`
-  - Answers: What depends on this component?
+### Validation planning
+- minimum deterministic validation set
+- required validation separated from optional hygiene
+- explicit exclusions when no deterministic surface exists
+- narrower direct build/test surfaces preferred over broad dependent validation when both are provable
 
-### Action discovery and execution
-- `list_actions`
-  - Answers: What deterministic test/runner/build actions exist and how are they invoked?
-- `list_build_targets`
-  - Answers: What deterministic build targets are available?
-- `describe_build_target`
-  - Answers: For this build action ID, what is the exact invocation, ownership, and provenance?
-- `build_target`
-  - Answers: Execute one exact build action and return structured result.
-- `build_project`
-  - Answers: Execute all deterministic build actions and return a summary.
+### Structured artifact support
+- Markdown: sections, code blocks, links, frontmatter keys, checklist items
+- OpenAPI / Swagger: paths, methods, operation IDs, schemas, tags
 
-### Code intelligence
-- `find_symbols`
-  - Answers: Where does this symbol name exist repository-wide?
-- `list_symbols_in_file`
-  - Answers: Which symbols exist in this specific file?
-- `find_definition`
-  - Answers: Where is this symbol/file-position defined?
-- `find_references`
-  - Answers: Where is this symbol/file-position referenced?
+## Supported Today
 
-### Ownership/context intelligence
-- `get_file_owner`
-  - Answers: Which owner (component/runner/package-manager/test) owns this file?
-- `list_files_by_owner`
-  - Answers: Which files belong to this owner?
-- `repository_summary`
-  - Answers: Give me a compact first-pass repository overview, including trust coverage for architecture/code/tests/quality/actions.
-- `describe_components`
-  - Answers: For exact components, what files/deps/dependents/tests/runners matter?
-- `describe_files`
-  - Answers: For exact files, what owner/symbol/test/quality context matters?
-- `describe_symbol_context`
-  - Answers: For this symbol, what owner/defs/refs/tests context matters?
+Ecosystems and artifact families:
+- Python
+- npm / TypeScript
+- Go
+- Markdown
+- OpenAPI / Swagger
 
-### Test intelligence and execution
-- `list_tests`
-  - Answers: What tests were discovered, and was discovery authoritative or heuristic?
-- `get_related_tests`
-  - Answers: Which tests are related to this file/owner?
-- `describe_test_target`
-  - Answers: What is the exact deterministic command for this test target?
-- `run_test_targets`
-  - Answers: Execute exact test IDs and return structured execution/failure output.
+Agent integrations:
+- Codex
+- Claude Code
+- Cursor
 
-### Runner intelligence and execution
-- `describe_runner`
-  - Answers: What is this runner, how is it invoked, what owns it, and what tests/files relate to it?
-- `run_runner`
-  - Answers: Execute one exact runner ID and return structured execution output.
+## Product Principles
 
-### Quality intelligence and operations
-- `list_quality_providers`
-  - Answers: Which quality providers are available for this repository?
-- `lint_file`
-  - Answers: Lint one file and return diagnostics, deltas, and before/after metadata.
-- `format_file`
-  - Answers: Format one file and return structured change metadata.
+- Deterministic first
+- Provenance on evidence-bearing answers
+- Compact by default
+- Small tool surface for natural agent adoption
+- Clear unsupported boundaries instead of guessed answers
 
-### Change impact intelligence
-- `analyze_impact`
-  - Answers: What likely breaks if I change this file/symbol/owner?
-- `analyze_change`
-  - Answers: For exact file/symbol/owner, what owns it, what depends on it, what refs/tests/runners/quality gates matter, why, and how strong the returned evidence is.
-- `get_minimum_verified_change_set`
-  - Answers: What is the smallest exact set of tests, build targets, runner actions, and quality operations I should validate for this change?
-- `get_truth_coverage`
-  - Answers: How much of this repository's architecture, code, tests, quality, and actions are authoritative, derived, heuristic, or unavailable?
+## Current Limits
 
-### Analytics intelligence
-- `get_analytics_summary`
-  - Answers: How much is SuitCode being used, how often does it fail, and what is the estimated token savings?
-  - Supports: optional repository scope, `session_id`, and `include_global`.
-- `get_tool_usage_analytics`
-  - Answers: Which tools are used most, with what latency/error profile and estimated savings impact?
-  - Supports: optional repository scope, `session_id`, and `include_global`.
-- `get_inefficient_tool_calls`
-  - Answers: Are there duplicate calls, workspace churn, pagination thrash, broad exploration patterns, or unused high-value tools?
-  - Supports: optional repository scope, `session_id`, and `include_global`.
-- `get_mcp_benchmark_report`
-  - Answers: What is the latest benchmark report for SuitCode MCP performance, including trust-coverage summary when available?
+- `go.work` support is deferred
+- structured docs/spec support is ownership and structure only, not semantic code linkage
+- SuitCode does not expose generic shell execution as product intelligence
+- live adoption and token-savings results are improving, but the current canonical benchmark still reflects an earlier broader tool surface
 
-## Deterministic Execution Surfaces
+## Evidence Snapshot
 
-SuitCode already executes provider-backed deterministic actions:
-- Tests: `run_test_targets`
-- Runners: `run_runner`
-- Builds: `build_target`, `build_project`
+Controlled Codex v7 benchmark:
+- stable downstream A/B: `5/5` vs baseline `2/5`
+- median turns per stable headline task: `3` vs `16`
+- transcript-estimated visible tokens per stable headline task: `2793` vs `50956`
 
-It does not expose generic shell tools.
-Execution is always tied to provider-backed actions and structured results.
-
-## Provenance and Trust Model
-
-SuitCode outputs include explicit provenance with fields like:
-- `confidence_mode`
-- `source_kind`
-- `source_tool`
-- `evidence_summary`
-- `evidence_paths`
-
-This makes authoritative tool output and heuristic fallback explicitly distinguishable.
-
-SuitCode also exposes truth coverage:
-- repository-wide via `get_truth_coverage`
-- additive on `repository_summary`
-- additive on `analyze_change`
-- additive on benchmark reports when the benchmark run is tied to a resolved repository
-
-## Fail-Fast Behavior
-
-SuitCode is intentionally fail-fast:
-- unsupported repositories fail on open
-- invalid IDs/selectors fail instead of being ignored
-- contradictory/invalid query combinations fail
-- malformed deterministic metadata fails instead of being guessed
-
-## How Agents Should Use SuitCode
-
-Recommended flow:
-1. `inspect_repository_support`
-2. `open_workspace`
-3. `repository_summary`
-4. `get_truth_coverage` when you need to judge whether SuitCode is operating at full trust or partial visibility
-5. Prefer exact context and impact tools: `describe_components`, `describe_files`, `describe_symbol_context`, `analyze_change`, `analyze_impact`, `get_minimum_verified_change_set`
-6. Use broad exploration tools (`list_*`, `find_*`) only when exact context is still missing
-7. Use deterministic execution tools (`describe_test_target`, `run_test_targets`, `describe_build_target`, `build_target`, `build_project`) instead of guessing commands
-
-## Running the MCP Server (stdio-first)
-
-Default transport is `stdio`.
-
-Project launchers (foreground process):
-- Windows: `./run_mcp.bat`
-- Unix-like: `./run_mcp.sh`
-
-Python module entrypoint:
-- `python -m suitcode.mcp.server`
-
-Optional HTTP mode:
-- `python -m suitcode.mcp.server --transport http --host 127.0.0.1 --port 8000`
-
-Evaluation, analytics, and benchmark operator details live in:
-- [scripts/EVALUATION.md](scripts/EVALUATION.md)
-- [docs/evaluation/benchmark_protocol_v1.md](docs/evaluation/benchmark_protocol_v1.md)
-
-Those documents cover:
-- benchmark task suites
-- Codex comparison and analysis scripts
-- transcript-estimated token accounting semantics
-- report generation and artifact paths
-
-## MCP Resources
-
-- `suitcode://supported-providers`
-- `suitcode://workspaces`
-- `suitcode://workspace/{workspace_id}`
-- `suitcode://workspace/{workspace_id}/repositories`
-- `suitcode://workspace/{workspace_id}/repository/{repository_id}`
-- `suitcode://workspace/{workspace_id}/repository/{repository_id}/architecture`
-- `suitcode://workspace/{workspace_id}/repository/{repository_id}/tests`
-- `suitcode://workspace/{workspace_id}/repository/{repository_id}/quality`
-
-## MCP Prompts
-
-- `understand_repository_with_suitcode`
-  - Guides the agent to start with `inspect_repository_support`, `open_workspace`, and `repository_summary`, then move to exact context and impact tools before broad exploration.
-- `refactor_using_suitcode_tools`
-  - Guides the agent to use `describe_*`, `analyze_change`, and deterministic test/build descriptions before editing or exploring broadly.
-- `apply_quality_fix_with_suitcode`
-  - Guides the agent to run quality tools first, inspect `entity_delta`, then verify impact with `analyze_change` and deterministic test/build actions.
-
-## Current Limits and Non-goals
-
-Current state:
-- primary ecosystems: Python and npm
-- in-memory workspace/runtime state
-- provider-backed deterministic intelligence surfaces
-
-Not a current goal:
-- generic indexer-first architecture
-- graph DB product direction
-- vector-search-first identity
-- generic shell execution MCP tools
-
+Evidence links:
+- [docs/evidence/codex-v7/README.md](docs/evidence/codex-v7/README.md)
+- [docs/v1/RESEARCH.md](docs/v1/RESEARCH.md)

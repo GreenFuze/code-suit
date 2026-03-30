@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from suitcode.core.change_models import ChangeTarget
@@ -108,6 +110,113 @@ def test_repository_truth_coverage_for_npm(monkeypatch, npm_repo_root) -> None:
         "builds": True,
         "runners": True,
     }
+
+
+def test_repository_truth_coverage_quality_ignores_generated_artifacts(monkeypatch, tmp_path: Path) -> None:
+    repo_root = tmp_path / "frontend"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "dist").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true,
+          "main": "dist/index.js"
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "index.ts").write_text("export const value = 1;\n", encoding="utf-8")
+    (repo_root / "dist" / "index.js").write_text("export const value = 1;\n", encoding="utf-8")
+
+    repository = Workspace(repo_root).repositories[0]
+    provider = repository.get_provider("npm")
+
+    monkeypatch.setattr(
+        provider,
+        "get_quality_runtime_capabilities",
+        lambda repository_rel_paths=None: QualityRuntimeCapabilities(
+            lint=_runtime_capability(
+                "npm.quality.lint",
+                "degraded" if repository_rel_paths and any("dist/" in path for path in repository_rel_paths) else "available",
+                "quality_tool",
+                "eslint",
+                "dist artifacts should not drive repo-level quality coverage"
+                if repository_rel_paths and any("dist/" in path for path in repository_rel_paths)
+                else None,
+            ),
+            format=_runtime_capability(
+                "npm.quality.format",
+                "degraded" if repository_rel_paths and any("dist/" in path for path in repository_rel_paths) else "available",
+                "quality_tool",
+                "prettier",
+                "dist artifacts should not drive repo-level quality coverage"
+                if repository_rel_paths and any("dist/" in path for path in repository_rel_paths)
+                else None,
+            ),
+        ),
+    )
+
+    truth = repository.get_truth_coverage()
+    quality_domain = next(item for item in truth.domains if item.domain.value == "quality")
+
+    assert "dist/index.js" not in repository.quality.relevant_repository_rel_paths()
+    assert quality_domain.availability == TruthAvailability.AVAILABLE
+    assert quality_domain.degraded_reason is None
+
+
+def test_repository_truth_coverage_quality_ignores_public_runtime_assets(monkeypatch, tmp_path: Path) -> None:
+    repo_root = tmp_path / "frontend"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "public" / "runtimes" / "demo").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "index.ts").write_text("export const value = 1;\n", encoding="utf-8")
+    (repo_root / "public" / "runtimes" / "demo" / "runtime.js").write_text("console.log('runtime');\n", encoding="utf-8")
+
+    repository = Workspace(repo_root).repositories[0]
+    provider = repository.get_provider("npm")
+
+    monkeypatch.setattr(
+        provider,
+        "get_quality_runtime_capabilities",
+        lambda repository_rel_paths=None: QualityRuntimeCapabilities(
+            lint=_runtime_capability(
+                "npm.quality.lint",
+                "degraded" if repository_rel_paths and any("public/runtimes/" in path for path in repository_rel_paths) else "available",
+                "quality_tool",
+                "eslint",
+                "public runtime assets should not drive repo-level quality coverage"
+                if repository_rel_paths and any("public/runtimes/" in path for path in repository_rel_paths)
+                else None,
+            ),
+            format=_runtime_capability(
+                "npm.quality.format",
+                "degraded" if repository_rel_paths and any("public/runtimes/" in path for path in repository_rel_paths) else "available",
+                "quality_tool",
+                "prettier",
+                "public runtime assets should not drive repo-level quality coverage"
+                if repository_rel_paths and any("public/runtimes/" in path for path in repository_rel_paths)
+                else None,
+            ),
+        ),
+    )
+
+    truth = repository.get_truth_coverage()
+    quality_domain = next(item for item in truth.domains if item.domain.value == "quality")
+
+    assert "public/runtimes/demo/runtime.js" not in repository.quality.relevant_repository_rel_paths()
+    assert quality_domain.availability == TruthAvailability.AVAILABLE
+    assert quality_domain.degraded_reason is None
 
 
 def test_repository_truth_coverage_degrades_when_code_runtime_missing(monkeypatch, python_repo_root) -> None:

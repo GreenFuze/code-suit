@@ -7,7 +7,7 @@ Use this template for the canonical script-generated comparison report. It is pr
 - agent scope: `codex_only`
 - protocol status: `initial_stable_protocol`
 - headline suite: stable read-only A/B only
-- stable execution status: SuitCode-only deterministic action evidence
+- stable execution status: A/B deterministic action evidence
 - stress status: separately reported and never merged into the headline A/B
 - claim scope: bounded deterministic workflows only
 - token accounting mode: `transcript_estimated_visible_content_only`
@@ -90,7 +90,7 @@ The report must include a capability table, not prose only.
 - headline interpretation must state what the result does and does not claim
 
 ### Stable Execution
-- SuitCode-only section
+- A/B section
 - must state why it is excluded from the headline A/B
 - must report deterministic action correctness explicitly
 
