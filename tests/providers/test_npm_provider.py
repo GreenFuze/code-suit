@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from suitcode.core.models import (
     Aggregator,
     Component,
@@ -16,6 +18,7 @@ from suitcode.core.intelligence_models import (
     DependencyRef,
     FileRelationshipKind,
     FileRelationshipRef,
+    ImplementationFlowStepKind,
     InvariantAccessKind,
     InvariantFindingKind,
     InvariantFindingRef,
@@ -432,6 +435,66 @@ def test_static_analysis_service_detects_optional_field_access_and_local_flow(tm
     assert any(item.field_name == "status" and item.producer_site_count >= 1 for item in findings)
 
 
+def test_static_analysis_service_detects_explicit_state_and_dom_event_flow(tmp_path) -> None:
+    repo_root = tmp_path / "frontend"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "tsconfig.json").write_text(
+        """
+        {
+          "compilerOptions": {
+            "target": "ES2020",
+            "module": "ESNext",
+            "moduleResolution": "Node",
+            "strict": true,
+            "jsx": "preserve"
+          },
+          "include": ["src/**/*"]
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "App.tsx").write_text(
+        """
+        import React, { useState } from "react";
+
+        export function App() {
+          const [status, setStatus] = useState("idle");
+          window.addEventListener("oauth_complete", () => setStatus("done"));
+          window.dispatchEvent(new CustomEvent("oauth_error"));
+          return <div>{status}</div>;
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    service = NpmStaticAnalysisService(
+        repository_root=repo_root,
+        attachment_root=repo_root,
+    )
+
+    steps = service.get_file_implementation_flow_steps("src/App.tsx")
+
+    assert any(item.step_kind == ImplementationFlowStepKind.STATE_SITE for item in steps)
+    assert any(
+        item.step_kind == ImplementationFlowStepKind.EVENT_SUBSCRIBE and item.source_label == "oauth_complete"
+        for item in steps
+    )
+    assert any(
+        item.step_kind == ImplementationFlowStepKind.EVENT_PUBLISH and item.source_label == "oauth_error"
+        for item in steps
+    )
+
+
 def test_static_analysis_service_keeps_optional_field_finding_without_explicit_omission(tmp_path) -> None:
     repo_root = tmp_path / "frontend"
     (repo_root / ".git").mkdir(parents=True)
@@ -684,6 +747,35 @@ def test_npm_provider_exposes_deterministic_actions(npm_provider: NPMProvider) -
     assert any(item.kind == ActionKind.RUNNER_EXECUTION for item in actions)
     assert any(item.kind == ActionKind.TEST_EXECUTION for item in actions)
     assert any(item.kind == ActionKind.BUILD_EXECUTION for item in actions)
+
+
+def test_npm_provider_build_actions_include_exact_proof_facets(tmp_path: Path) -> None:
+    repo_root = tmp_path / "frontend-proof"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend-proof",
+          "private": true,
+          "scripts": {
+            "build": "tsc --noEmit && vite build"
+          }
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "App.tsx").write_text("export const App = () => null;\n", encoding="utf-8")
+
+    repository = Workspace(repo_root).repositories[0]
+
+    build_targets = repository.list_build_targets()
+
+    assert [item.action_id for item in build_targets] == ["action:npm:build:frontend-proof"]
+    assert tuple(facet.value for facet in build_targets[0].proof_facets) == (
+        "typescript_typecheck",
+        "frontend_bundle_build",
+    )
 
 
 def test_npm_provider_code_runtime_capabilities_use_resolver(npm_provider: NPMProvider, monkeypatch) -> None:

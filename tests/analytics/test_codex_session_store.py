@@ -49,3 +49,17 @@ def test_store_returns_latest_session_for_repository(tmp_path: Path) -> None:
 
     latest = CodexSessionStore(sessions_root).latest_session(repository_root=repo_root)
     assert latest == second
+
+
+def test_store_matches_nested_repository_scope(tmp_path: Path) -> None:
+    repo_root = (tmp_path / "repo").resolve()
+    nested_root = repo_root / "server"
+    nested_root.mkdir(parents=True)
+    sessions_root = tmp_path / "sessions"
+    session = _write_session(sessions_root / "2026" / "03" / "08" / "a.jsonl", "session_with_suitcode.jsonl", repo_root)
+
+    store = CodexSessionStore(sessions_root)
+
+    nested_sessions = store.list_sessions(repository_root=nested_root)
+
+    assert nested_sessions == (session,)

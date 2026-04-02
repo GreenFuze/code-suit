@@ -39,6 +39,14 @@ class NpmModelTranslator:
                     evidence_paths=analysis.evidence_paths,
                 ),
             )
+        if analysis.discovery_method == TestDiscoveryMethod.AUTHORITATIVE_VITEST_LIST_TESTS:
+            return (
+                test_tool_provenance(
+                    source_tool="vitest",
+                    evidence_summary="discovered from vitest list --filesOnly --run",
+                    evidence_paths=analysis.evidence_paths,
+                ),
+            )
         return (
             heuristic_provenance(
                 evidence_summary="derived from package manifest test script metadata and test file globs",
@@ -47,13 +55,21 @@ class NpmModelTranslator:
         )
 
     def to_component(self, analysis: NpmPackageAnalysis) -> Component:
+        artifact_paths = tuple(
+            dict.fromkeys(
+                (
+                    *analysis.artifact_paths,
+                    *analysis.package_owned_paths,
+                )
+            )
+        )
         return Component(
             id=f"component:npm:{analysis.package_name}",
             name=analysis.package_name,
             component_kind=analysis.component_kind,
             language=analysis.language,
             source_roots=analysis.source_roots,
-            artifact_paths=analysis.artifact_paths,
+            artifact_paths=artifact_paths,
             provenance=(
                 manifest_provenance(
                     evidence_summary="derived from npm workspace package metadata",

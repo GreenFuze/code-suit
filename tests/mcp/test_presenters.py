@@ -425,6 +425,7 @@ def test_change_impact_presenter_compact_summary_deemphasizes_npm_file_lint_when
             target_id="component:npm:mga-frontend",
             target_kind="component",
             owner_ids=("component:npm:mga-frontend",),
+            proof_facets=("typescript_typecheck", "frontend_bundle_build"),
             invocation=MinimumVerifiedCommandSummaryView(
                 argv_preview=("npm", "run", "build"),
                 total_arg_count=3,
@@ -465,6 +466,8 @@ def test_change_impact_presenter_compact_summary_deemphasizes_npm_file_lint_when
     )
 
     assert [item.item_kind for item in summary.required_validation] == ["build_target"]
+    assert "TypeScript typecheck" in summary.required_validation[0].summary
+    assert "frontend bundle build" in summary.required_validation[0].summary
 
 
 def test_runner_presenter_maps_runner_context_and_execution(npm_repo_root) -> None:

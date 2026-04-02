@@ -6,6 +6,7 @@ from typing import Callable
 from suitcode.core.models import TestFramework
 from suitcode.core.tests.models import TestDiscoveryMethod
 from suitcode.providers.npm.jest_runner import JestRunner
+from suitcode.providers.npm.vitest_runner import VitestRunner
 from suitcode.providers.shared.package_json.models import PackageJsonWorkspacePackage
 from suitcode.providers.npm.models import NpmTestAnalysis
 from suitcode.providers.npm.test_tool_resolution import NpmTestToolResolver
@@ -33,9 +34,13 @@ class NpmTestDiscoverer:
         self,
         tool_resolver_factory: Callable[[Path], NpmTestToolResolver] | None = None,
         jest_runner_factory: Callable[[Path, Path], JestRunner] | None = None,
+        vitest_runner_factory: Callable[[Path, Path], VitestRunner] | None = None,
     ) -> None:
         self._tool_resolver_factory = tool_resolver_factory or (lambda repository_root: NpmTestToolResolver(repository_root))
         self._jest_runner_factory = jest_runner_factory or (lambda repository_root, executable: JestRunner(repository_root, executable))
+        self._vitest_runner_factory = (
+            vitest_runner_factory or (lambda repository_root, executable: VitestRunner(repository_root, executable))
+        )
 
     def discover(self, package: PackageJsonWorkspacePackage) -> NpmTestAnalysis | None:
         package_name = package.manifest.name
@@ -56,6 +61,17 @@ class NpmTestDiscoverer:
                 test_files = self._jest_runner_factory(package.repository_root, executable).list_test_files(package.repository_rel_path)
                 discovery_method = TestDiscoveryMethod.AUTHORITATIVE_JEST_LIST_TESTS
                 discovery_tool = "jest"
+        elif self._is_vitest_command(test_command):
+            try:
+                executable = self._tool_resolver_factory(package.repository_root).resolve_vitest()
+            except ValueError:
+                test_files = self._discover_test_files(package)
+            else:
+                test_files = self._vitest_runner_factory(package.repository_root, executable).list_test_files(
+                    package.repository_rel_path
+                )
+                discovery_method = TestDiscoveryMethod.AUTHORITATIVE_VITEST_LIST_TESTS
+                discovery_tool = "vitest"
         else:
             test_files = self._discover_test_files(package)
         return NpmTestAnalysis(
@@ -116,3 +132,6 @@ class NpmTestDiscoverer:
 
     def _is_jest_command(self, command: str) -> bool:
         return "jest" in command.lower()
+
+    def _is_vitest_command(self, command: str) -> bool:
+        return "vitest" in command.lower()

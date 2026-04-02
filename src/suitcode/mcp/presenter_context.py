@@ -9,6 +9,8 @@ from suitcode.core.intelligence_models import (
     DependencyRef,
     FileContext,
     ImpactSummary,
+    ImplementationFlowStepRef,
+    ImplementationFlowSummaryRef,
     InvariantFindingRef,
     RenderEdgeRef,
     StaticAnalysisSiteRef,
@@ -40,6 +42,8 @@ from suitcode.mcp.models import (
     FileContextView,
     FileRelationshipView,
     ImpactSummaryView,
+    ImplementationFlowStepView,
+    ImplementationFlowSummaryView,
     InvariantFindingView,
     MarkdownChecklistItemView,
     MarkdownCodeBlockView,
@@ -237,6 +241,30 @@ class IntelligencePresenter:
             related_tests_preview=tuple(self._test_presenter.related_test_view(item) for item in context.related_tests_preview),
             quality_provider_ids=context.quality_provider_ids,
             provenance=provenance_views(context.provenance),
+        )
+
+    @staticmethod
+    def implementation_flow_step_view(step: ImplementationFlowStepRef) -> ImplementationFlowStepView:
+        return ImplementationFlowStepView(
+            path=step.repository_rel_path,
+            line_start=step.line_start,
+            column_start=step.column_start,
+            step_kind=step.step_kind.value,
+            source_label=step.source_label,
+            target_label=step.target_label,
+            detail_label=step.detail_label,
+            provenance=provenance_views(step.provenance),
+        )
+
+    def implementation_flow_summary_view(
+        self,
+        summary: ImplementationFlowSummaryRef,
+    ) -> ImplementationFlowSummaryView:
+        return ImplementationFlowSummaryView(
+            step_count=summary.step_count,
+            steps_preview=tuple(self.implementation_flow_step_view(item) for item in summary.steps_preview),
+            provider_ids=summary.provider_ids,
+            provenance=provenance_views(summary.provenance),
         )
 
     def structured_artifact_view(self, artifact: StructuredArtifact) -> StructuredArtifactView:
@@ -471,6 +499,7 @@ class ChangeImpactPresenter:
             target_id=item.target.target_id,
             target_kind=item.target.target_kind.value,
             owner_ids=item.target.owner_ids,
+            proof_facets=tuple(facet.value for facet in item.target.proof_facets),
             invocation=self.minimum_verified_command_summary_view(
                 item.target.invocation.argv,
                 cwd=item.target.invocation.cwd,
@@ -628,15 +657,19 @@ class ChangeImpactPresenter:
         )
 
     def _compact_build_item_view(self, item: MinimumVerifiedBuildTargetView) -> MinimumVerifiedCompactItemView:
+        summary = self._command_line(
+            item.invocation.argv_preview,
+            item.invocation.total_arg_count,
+            item.invocation.truncated,
+            item.invocation.cwd,
+        )
+        facet_suffix = self._build_proof_facet_suffix(item.proof_facets)
+        if facet_suffix:
+            summary = f"{summary} ({facet_suffix})"
         return MinimumVerifiedCompactItemView(
             item_kind="build_target",
             item_id=item.action_id,
-            summary=self._command_line(
-                item.invocation.argv_preview,
-                item.invocation.total_arg_count,
-                item.invocation.truncated,
-                item.invocation.cwd,
-            ),
+            summary=summary,
         )
 
     def _compact_runner_item_view(self, item: MinimumVerifiedRunnerActionView) -> MinimumVerifiedCompactItemView:
@@ -675,6 +708,15 @@ class ChangeImpactPresenter:
         if cwd:
             return f"cd {shlex.quote(cwd)} && {rendered}"
         return rendered
+
+    @staticmethod
+    def _build_proof_facet_suffix(proof_facets: tuple[str, ...]) -> str:
+        labels = []
+        if "typescript_typecheck" in proof_facets:
+            labels.append("TypeScript typecheck")
+        if "frontend_bundle_build" in proof_facets:
+            labels.append("frontend bundle build")
+        return ", ".join(labels)
 
     def change_impact_view(self, impact: ChangeImpact) -> ChangeImpactView:
         return ChangeImpactView(

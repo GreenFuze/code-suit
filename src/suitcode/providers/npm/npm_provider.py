@@ -5,6 +5,7 @@ import shutil
 from dataclasses import replace
 from suitcode.core.intelligence_models import ComponentDependencyEdge
 from suitcode.core.intelligence_models import FileRelationshipRef
+from suitcode.core.intelligence_models import ImplementationFlowStepRef
 from suitcode.core.intelligence_models import InvariantFindingRef
 from suitcode.core.intelligence_models import RenderEdgeRef
 from suitcode.core.intelligence_models import StaticFlowEdgeRef
@@ -675,6 +676,12 @@ class NPMProvider(
         try:
             _, edges = self._build_static_analysis_service().get_file_analysis(repository_rel_path)
             return edges
+        except ValueError:
+            return tuple()
+
+    def get_file_implementation_flow_steps(self, repository_rel_path: str) -> tuple[ImplementationFlowStepRef, ...]:
+        try:
+            return self._build_static_analysis_service().get_file_implementation_flow_steps(repository_rel_path)
         except ValueError:
             return tuple()
 

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+import shlex
+
 from suitcode.core.tests.models import TestDiscoveryMethod
 from suitcode.providers.shared.actions import (
     ProviderActionKind,
@@ -11,6 +14,8 @@ from suitcode.providers.npm.models import NpmPackageAnalysis, NpmRunnerAnalysis,
 
 
 class NpmActionService:
+    _SEPARATOR_PATTERN = re.compile(r"\s*(?:&&|\|\||;)\s*")
+
     def discover(
         self,
         components: tuple[NpmPackageAnalysis, ...],
@@ -51,17 +56,18 @@ class NpmActionService:
             if runner.script_name == "build" and component_id is not None:
                 actions.append(
                     ProviderActionSpec(
-                        action_id=f"action:npm:build:{runner.package_name}",
-                        display_name=f"Build {runner.package_name}",
-                        kind=ProviderActionKind.BUILD,
-                        target_id=component_id,
-                        target_kind=ProviderActionTargetKind.COMPONENT,
-                        owner_ids=(component_id, runner_id),
-                        argv=runner.argv,
-                        cwd=runner.cwd,
-                        dry_run_supported=True,
-                        provenance_kind=ProviderActionProvenanceKind.MANIFEST,
-                        provenance_tool=None,
+                    action_id=f"action:npm:build:{runner.package_name}",
+                    display_name=f"Build {runner.package_name}",
+                    kind=ProviderActionKind.BUILD,
+                    target_id=component_id,
+                    target_kind=ProviderActionTargetKind.COMPONENT,
+                    owner_ids=(component_id, runner_id),
+                    proof_facets=self._build_proof_facets(runner.command),
+                    argv=runner.argv,
+                    cwd=runner.cwd,
+                    dry_run_supported=True,
+                    provenance_kind=ProviderActionProvenanceKind.MANIFEST,
+                    provenance_tool=None,
                         provenance_summary="derived from npm build script metadata",
                         provenance_paths=evidence_paths,
                     )
@@ -92,6 +98,57 @@ class NpmActionService:
                 )
             )
         return self._finalize(actions)
+
+    @classmethod
+    def _build_proof_facets(cls, command: str) -> tuple[str, ...]:
+        facets: list[str] = []
+        for tokens in cls._tokenized_segments(command):
+            if cls._is_typescript_typecheck(tokens) and "typescript_typecheck" not in facets:
+                facets.append("typescript_typecheck")
+            if cls._is_vite_build(tokens) and "frontend_bundle_build" not in facets:
+                facets.append("frontend_bundle_build")
+        return tuple(facets)
+
+    @classmethod
+    def _tokenized_segments(cls, command: str) -> tuple[list[str], ...]:
+        segments: list[list[str]] = []
+        for segment in cls._SEPARATOR_PATTERN.split(command):
+            tokens = cls._tokenize(segment)
+            if tokens:
+                segments.append(tokens)
+        return tuple(segments)
+
+    @staticmethod
+    def _tokenize(command: str) -> list[str]:
+        try:
+            return shlex.split(command, posix=True)
+        except ValueError:
+            return command.strip().split()
+
+    @staticmethod
+    def _normalize_executable(token: str) -> str:
+        lowered = token.rsplit("/", 1)[-1].rsplit("\\", 1)[-1].lower()
+        for suffix in (".cmd", ".exe", ".js", ".mjs", ".cjs"):
+            if lowered.endswith(suffix):
+                return lowered[: -len(suffix)]
+        return lowered
+
+    @classmethod
+    def _is_typescript_typecheck(cls, tokens: list[str]) -> bool:
+        if not tokens:
+            return False
+        executable = cls._normalize_executable(tokens[0])
+        if executable != "tsc":
+            return False
+        args = tokens[1:]
+        return "--noEmit" in args or "-b" in args or "--build" in args
+
+    @classmethod
+    def _is_vite_build(cls, tokens: list[str]) -> bool:
+        if len(tokens) < 2:
+            return False
+        executable = cls._normalize_executable(tokens[0])
+        return executable == "vite" and tokens[1] == "build"
 
     @staticmethod
     def _runner_evidence_paths(runner: NpmRunnerAnalysis) -> tuple[str, ...]:

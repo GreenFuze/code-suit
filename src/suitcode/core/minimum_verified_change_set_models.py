@@ -33,6 +33,7 @@ class MinimumVerifiedExclusionReason(StrEnum):
     DUPLICATE_QUALITY_OPERATION_COLLAPSED = "duplicate_quality_operation_collapsed"
     NO_DETERMINISTIC_TEST_TARGETS_AVAILABLE = "no_deterministic_test_targets_available"
     NO_NARROWER_DIRECT_VALIDATION_SURFACE_FOR_FILE_TARGET = "no_narrower_direct_validation_surface_for_file_target"
+    NO_DETERMINISTIC_VALIDATION_SURFACE_FOR_ARTIFACT_MEMBER = "no_deterministic_validation_surface_for_artifact_member"
     NO_DETERMINISTIC_VALIDATION_SURFACES_FOR_PROVIDER_OWNED_ARTIFACT = (
         "no_deterministic_validation_surfaces_for_provider_owned_artifact"
     )

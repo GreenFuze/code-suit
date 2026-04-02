@@ -166,6 +166,7 @@ class BuildTargetDescriptionView(StrictModel):
     target_id: str
     target_kind: str
     owner_ids: tuple[str, ...]
+    proof_facets: tuple[str, ...]
     invocation: ActionInvocationView
     dry_run_supported: bool
     provenance: tuple[ProvenanceView, ...]
@@ -633,6 +634,48 @@ class MinimumVerifiedCompactSummaryView(StrictModel):
     exclusions: tuple[MinimumVerifiedCompactItemView, ...]
 
 
+class FrontendProofSummaryView(StrictModel):
+    proof_item_count: int
+    proof_items: tuple[MinimumVerifiedCompactItemView, ...]
+    build_proof_facets: tuple[str, ...]
+    boundary_count: int
+    boundaries: tuple[MinimumVerifiedCompactItemView, ...]
+
+
+class ImplementationFlowStepView(StrictModel):
+    path: str
+    line_start: int
+    column_start: int
+    step_kind: str
+    source_label: str
+    target_label: str | None = None
+    detail_label: str | None = None
+    provenance: tuple[ProvenanceView, ...]
+
+
+class ImplementationFlowSummaryView(StrictModel):
+    step_count: int
+    steps_preview: tuple[ImplementationFlowStepView, ...]
+    provider_ids: tuple[str, ...]
+    provenance: tuple[ProvenanceView, ...]
+
+
+class ArtifactSurfaceSummaryView(StrictModel):
+    owner_component_id: str
+    artifact_root: str
+    repository_rel_path: str
+    quality_relevant: bool
+
+
+class HotEntrypointView(StrictModel):
+    symbol_id: str
+    name: str
+    kind: str
+    path: str
+    line_start: int | None = None
+    external_reference_count: int
+
+
 class MinimumVerifiedTestTargetView(StrictModel):
     test_id: str
     name: str
@@ -655,6 +698,7 @@ class MinimumVerifiedBuildTargetView(StrictModel):
     target_id: str
     target_kind: str
     owner_ids: tuple[str, ...]
+    proof_facets: tuple[str, ...]
     invocation: MinimumVerifiedCommandSummaryView
     dry_run_supported: bool
     inclusion_reason: str
@@ -727,6 +771,7 @@ class ActionView(StrictModel):
     target_id: str
     target_kind: str
     owner_ids: tuple[str, ...]
+    proof_facets: tuple[str, ...]
     invocation: ActionInvocationView
     dry_run_supported: bool
     provenance: tuple[ProvenanceView, ...]
@@ -887,6 +932,10 @@ class FileUnderstandingTargetView(StrictModel):
     implementation_location_count: int
     implementation_locations_preview: tuple[LocationView, ...]
     related_tests: tuple[RelatedTestView, ...]
+    hot_entrypoints_preview: tuple[HotEntrypointView, ...] = Field(default_factory=tuple)
+    implementation_flow_summary: ImplementationFlowSummaryView | None = None
+    frontend_proof_summary: FrontendProofSummaryView | None = None
+    artifact_surface_summary: ArtifactSurfaceSummaryView | None = None
     structured_artifact: StructuredArtifactView | None = None
     provenance: tuple[ProvenanceView, ...]
 
@@ -937,6 +986,10 @@ class FileUnderstandingCompactTargetView(StrictModel):
     local_flow_edges_preview: tuple[StaticFlowEdgeView, ...]
     related_test_count: int
     related_tests: tuple[RelatedTestView, ...]
+    hot_entrypoints_preview: tuple[HotEntrypointView, ...] = Field(default_factory=tuple)
+    implementation_flow_summary: ImplementationFlowSummaryView | None = None
+    frontend_proof_summary: FrontendProofSummaryView | None = None
+    artifact_surface_summary: ArtifactSurfaceSummaryView | None = None
     structured_artifact: StructuredArtifactView | None = None
 
 
@@ -985,6 +1038,10 @@ class FileUnderstandingStandardTargetView(StrictModel):
     implementation_locations_preview: tuple[LocationView, ...]
     related_test_count: int
     related_tests: tuple[RelatedTestView, ...]
+    hot_entrypoints_preview: tuple[HotEntrypointView, ...] = Field(default_factory=tuple)
+    implementation_flow_summary: ImplementationFlowSummaryView | None = None
+    frontend_proof_summary: FrontendProofSummaryView | None = None
+    artifact_surface_summary: ArtifactSurfaceSummaryView | None = None
     structured_artifact: StructuredArtifactView | None = None
 
 
@@ -1016,6 +1073,9 @@ class FileUnderstandingStandardView(StrictModel):
 class BatchChangeImpactTargetView(StrictModel):
     repository_rel_path: str
     impact: ChangeImpactView
+    implementation_flow_summary: ImplementationFlowSummaryView | None = None
+    frontend_proof_summary: FrontendProofSummaryView | None = None
+    artifact_surface_summary: ArtifactSurfaceSummaryView | None = None
 
 
 class BatchChangeImpactView(StrictModel):
@@ -1054,6 +1114,9 @@ class BatchChangeImpactCompactTargetView(StrictModel):
     related_tests: tuple[TestImpactView, ...]
     related_runners: tuple[RunnerImpactView, ...]
     quality_gates: tuple[QualityGateView, ...]
+    implementation_flow_summary: ImplementationFlowSummaryView | None = None
+    frontend_proof_summary: FrontendProofSummaryView | None = None
+    artifact_surface_summary: ArtifactSurfaceSummaryView | None = None
 
 
 class BatchChangeImpactCompactView(StrictModel):
@@ -1092,6 +1155,9 @@ class BatchChangeImpactStandardTargetView(StrictModel):
     related_tests: tuple[TestImpactView, ...]
     related_runners: tuple[RunnerImpactView, ...]
     quality_gates: tuple[QualityGateView, ...]
+    implementation_flow_summary: ImplementationFlowSummaryView | None = None
+    frontend_proof_summary: FrontendProofSummaryView | None = None
+    artifact_surface_summary: ArtifactSurfaceSummaryView | None = None
 
 
 class BatchChangeImpactStandardView(StrictModel):

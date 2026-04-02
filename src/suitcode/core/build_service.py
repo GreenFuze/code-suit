@@ -130,6 +130,7 @@ class BuildService:
             target_id=action.target_id,
             target_kind=action.target_kind,
             owner_ids=action.owner_ids,
+            proof_facets=action.proof_facets,
             invocation=action.invocation,
             dry_run_supported=action.dry_run_supported,
             provenance=action.provenance,

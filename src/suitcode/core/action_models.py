@@ -24,6 +24,12 @@ class ActionTargetKind(StrEnum):
     TEST_DEFINITION = "test_definition"
 
 
+class ActionProofFacet(StrEnum):
+    __test__ = False
+    TYPESCRIPT_TYPECHECK = "typescript_typecheck"
+    FRONTEND_BUNDLE_BUILD = "frontend_bundle_build"
+
+
 class ActionInvocation(StrictModel):
     argv: tuple[str, ...]
     cwd: str | None = None
@@ -46,6 +52,7 @@ class RepositoryAction(StrictModel):
     target_id: str
     target_kind: ActionTargetKind
     owner_ids: tuple[str, ...] = Field(default_factory=tuple)
+    proof_facets: tuple[ActionProofFacet, ...] = Field(default_factory=tuple)
     invocation: ActionInvocation
     dry_run_supported: bool = False
     provenance: tuple[ProvenanceEntry, ...]
@@ -64,6 +71,8 @@ class RepositoryAction(StrictModel):
             raise ValueError("owner_ids must not contain empty values")
         if len(set(self.owner_ids)) != len(self.owner_ids):
             raise ValueError("owner_ids must not contain duplicates")
+        if len(set(self.proof_facets)) != len(self.proof_facets):
+            raise ValueError("proof_facets must not contain duplicates")
         if not self.provenance:
             raise ValueError("provenance must not be empty")
         return self

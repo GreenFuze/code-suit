@@ -6,6 +6,8 @@ from importlib import resources
 from pathlib import Path
 
 from suitcode.core.intelligence_models import (
+    ImplementationFlowStepKind,
+    ImplementationFlowStepRef,
     InvariantAccessKind,
     InvariantFindingKind,
     InvariantFindingRef,
@@ -32,12 +34,37 @@ class NpmStaticAnalysisService:
         self._repository_root = repository_root.expanduser().resolve()
         self._attachment_root = attachment_root.expanduser().resolve()
         self._resolver = resolver or TypeScriptLanguageServerResolver()
-        self._cache: dict[str, tuple[tuple[InvariantFindingRef, ...], tuple[StaticFlowEdgeRef, ...]]] = {}
+        self._cache: dict[
+            str,
+            tuple[
+                tuple[InvariantFindingRef, ...],
+                tuple[StaticFlowEdgeRef, ...],
+                tuple[ImplementationFlowStepRef, ...],
+            ],
+        ] = {}
 
     def get_file_analysis(
         self,
         repository_rel_path: str,
     ) -> tuple[tuple[InvariantFindingRef, ...], tuple[StaticFlowEdgeRef, ...]]:
+        findings, flows, _ = self._get_cached_analysis(repository_rel_path)
+        return findings, flows
+
+    def get_file_implementation_flow_steps(
+        self,
+        repository_rel_path: str,
+    ) -> tuple[ImplementationFlowStepRef, ...]:
+        _, _, flow_steps = self._get_cached_analysis(repository_rel_path)
+        return flow_steps
+
+    def _get_cached_analysis(
+        self,
+        repository_rel_path: str,
+    ) -> tuple[
+        tuple[InvariantFindingRef, ...],
+        tuple[StaticFlowEdgeRef, ...],
+        tuple[ImplementationFlowStepRef, ...],
+    ]:
         normalized_path = normalize_repository_relative_path(repository_rel_path)
         if normalized_path in self._cache:
             return self._cache[normalized_path]
@@ -80,19 +107,24 @@ class NpmStaticAnalysisService:
         except json.JSONDecodeError as exc:
             raise ValueError("TypeScript static-analysis probe returned invalid JSON") from exc
 
-        findings, flows = self._translate_payload(normalized_path, payload)
-        self._cache[normalized_path] = (findings, flows)
-        return findings, flows
+        findings, flows, flow_steps = self._translate_payload(normalized_path, payload)
+        self._cache[normalized_path] = (findings, flows, flow_steps)
+        return findings, flows, flow_steps
 
     def _translate_payload(
         self,
         repository_rel_path: str,
         payload: object,
-    ) -> tuple[tuple[InvariantFindingRef, ...], tuple[StaticFlowEdgeRef, ...]]:
+    ) -> tuple[
+        tuple[InvariantFindingRef, ...],
+        tuple[StaticFlowEdgeRef, ...],
+        tuple[ImplementationFlowStepRef, ...],
+    ]:
         if not isinstance(payload, dict):
             raise ValueError("TypeScript static-analysis probe returned an invalid payload shape")
         findings_payload = self._coerce_findings(payload.get("invariant_findings"))
         flows_payload = self._coerce_flow_edges(payload.get("local_flow_edges"))
+        implementation_flow_payload = self._coerce_implementation_flow_steps(payload.get("implementation_flow_steps"))
 
         findings = tuple(
             InvariantFindingRef(
@@ -158,7 +190,27 @@ class NpmStaticAnalysisService:
             )
             for edge in flows_payload
         )
-        return findings, flows
+        flow_steps = tuple(
+            ImplementationFlowStepRef(
+                repository_rel_path=edge["path"],
+                line_start=edge["line_start"],
+                column_start=edge["column_start"],
+                step_kind=ImplementationFlowStepKind(edge["step_kind"]),
+                source_label=edge["source_label"],
+                target_label=edge["target_label"],
+                detail_label=edge["detail_label"],
+                provenance=(
+                    derived_summary_provenance(
+                        source_kind=SourceKind.DEPENDENCY_GRAPH,
+                        source_tool="typescript",
+                        evidence_summary=edge["evidence_summary"],
+                        evidence_paths=self._flow_evidence_paths(repository_rel_path, edge["path"]),
+                    ),
+                ),
+            )
+            for edge in implementation_flow_payload
+        )
+        return findings, flows, flow_steps
 
     @staticmethod
     def _finding_evidence_paths(
@@ -265,6 +317,43 @@ class NpmStaticAnalysisService:
             )
         return tuple(edges)
 
+    @staticmethod
+    def _coerce_implementation_flow_steps(value: object) -> tuple[dict[str, object], ...]:
+        if value is None:
+            return tuple()
+        if not isinstance(value, list):
+            raise ValueError("TypeScript static-analysis field `implementation_flow_steps` must be a list")
+        steps: list[dict[str, object]] = []
+        seen: set[tuple[object, ...]] = set()
+        for item in value:
+            if not isinstance(item, dict):
+                raise ValueError("TypeScript static-analysis field `implementation_flow_steps` must contain objects")
+            path = normalize_repository_relative_path(_required_string(item.get("path"), "path"))
+            step_kind = _required_string(item.get("step_kind"), "step_kind")
+            line_start = _required_int(item.get("line_start"), "line_start")
+            column_start = _required_int(item.get("column_start"), "column_start")
+            source_label = _required_string(item.get("source_label"), "source_label")
+            target_label = _optional_string(item.get("target_label"), "target_label")
+            detail_label = _optional_string(item.get("detail_label"), "detail_label")
+            evidence_summary = _required_string(item.get("evidence_summary"), "evidence_summary")
+            key = (path, step_kind, line_start, column_start, source_label, target_label, detail_label)
+            if key in seen:
+                continue
+            seen.add(key)
+            steps.append(
+                {
+                    "path": path,
+                    "step_kind": step_kind,
+                    "line_start": line_start,
+                    "column_start": column_start,
+                    "source_label": source_label,
+                    "target_label": target_label,
+                    "detail_label": detail_label,
+                    "evidence_summary": evidence_summary,
+                }
+            )
+        return tuple(steps)
+
 
 def _required_string(value: object, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
@@ -276,6 +365,14 @@ def _required_int(value: object, field_name: str) -> int:
     if not isinstance(value, int) or value < 1:
         raise ValueError(f"TypeScript static-analysis field `{field_name}` must be a positive integer")
     return value
+
+
+def _optional_string(value: object, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"TypeScript static-analysis field `{field_name}` must be a non-empty string or null")
+    return value.strip()
 
 
 def _coerce_sites(value: object) -> tuple[dict[str, object], ...]:

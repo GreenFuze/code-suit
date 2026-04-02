@@ -58,6 +58,20 @@ def test_claude_repository_summary_and_tokens(tmp_path: Path) -> None:
     assert session.token_breakdown is not None
 
 
+def test_claude_store_matches_nested_repository_scope(tmp_path: Path) -> None:
+    repo_root = (tmp_path / 'repo').resolve()
+    nested_root = repo_root / 'server'
+    nested_root.mkdir(parents=True)
+    projects_root = tmp_path / 'claude-projects'
+    session_path = projects_root / 'repo' / 'claude-session-1.jsonl'
+    _write_fixture(session_path, 'claude_sessions/session_with_suitcode.jsonl', repo_root)
+
+    sessions = ClaudeSessionStore(projects_root).list_sessions(repository_root=nested_root)
+
+    assert len(sessions) == 1
+    assert sessions[0].name == 'claude-session-1.jsonl'
+
+
 def test_cursor_summary_can_correlate_without_native_tool_visibility(tmp_path: Path) -> None:
     repo_root = (tmp_path / 'repo').resolve()
     repo_root.mkdir()
@@ -112,6 +126,23 @@ def test_cursor_summary_can_correlate_without_native_tool_visibility(tmp_path: P
     assert session.correlation_quality == CorrelationQuality.STRONG
     assert session.correlated_event_count == 1
     assert any('synthesized' in note.lower() for note in session.notes)
+
+
+def test_cursor_store_matches_nested_repository_scope(tmp_path: Path) -> None:
+    repo_root = (tmp_path / 'repo').resolve()
+    nested_root = repo_root / 'server'
+    nested_root.mkdir(parents=True)
+    projects_root = tmp_path / 'cursor-projects'
+    project_root = projects_root / 'repo-project'
+    transcript_path = project_root / 'agent-transcripts' / 'cursor-session-1.jsonl'
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_fixture(transcript_path, 'cursor_sessions/session_without_tools.jsonl', repo_root)
+    (project_root / 'worker.log').write_text(f'[info] workspacePath={repo_root.as_posix()}\n', encoding='utf-8')
+
+    sessions = CursorSessionStore(projects_root).list_sessions(repository_root=nested_root)
+
+    assert len(sessions) == 1
+    assert sessions[0].name == 'cursor-session-1.jsonl'
 
 
 def test_cursor_parser_extracts_best_effort_tool_use_when_present(tmp_path: Path) -> None:

@@ -27,6 +27,7 @@ from suitcode.analytics.cursor_transcript_capture import CursorTranscriptCapture
 from suitcode.analytics.inefficiency import InefficiencyDetector
 from suitcode.analytics.models import AnalyticsEvent
 from suitcode.analytics.native_agent_models import NativeRepositoryAnalyticsSummary, NativeSessionAnalytics, NativeSuitCodeToolUse, NativeTranscriptMetrics
+from suitcode.analytics.repository_scope import repository_root_matches_path
 from suitcode.analytics.settings import AnalyticsSettings
 from suitcode.analytics.storage import JsonlAnalyticsStore
 from suitcode.analytics.token_estimation import TokenEstimator
@@ -253,8 +254,16 @@ def summarize_mcp_events(
 ) -> dict[str, object]:
     settings = AnalyticsSettings.from_env()
     store = JsonlAnalyticsStore(settings)
-    events = store.load_events(repository_root=repository_root, include_global=include_global)
-    filtered = tuple(item for item in events if _parse_utc(item.timestamp_utc) >= since)
+    events = store.load_events(include_global=True)
+    filtered = tuple(
+        item
+        for item in events
+        if _parse_utc(item.timestamp_utc) >= since
+        and (
+            repository_root_matches_path(repository_root, item.repository_root)
+            or (include_global and item.repository_root is None)
+        )
+    )
     estimator = TokenEstimator()
     detector = InefficiencyDetector(
         tool_catalog=tuple(sorted(TOOL_DESCRIPTIONS)),

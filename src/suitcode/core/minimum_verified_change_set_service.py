@@ -727,25 +727,30 @@ class MinimumVerifiedChangeSetService:
 
     def get_minimum_verified_change_set(self, target: ChangeTarget) -> MinimumVerifiedChangeSet:
         resolved = self._candidate_resolver.resolve_target(target)
+        artifact_member = self._artifact_member_for_target(resolved)
         structured_artifacts = self._structured_artifacts_for_target(resolved)
         dependent_components = (
             tuple()
-            if structured_artifacts
+            if structured_artifacts or artifact_member is not None
             else self._candidate_resolver.direct_dependent_components(resolved)
         )
 
-        related_tests = self._candidate_resolver.related_tests(resolved)
+        related_tests = tuple() if artifact_member is not None else self._candidate_resolver.related_tests(resolved)
         tests, test_exclusions = self._minimizer.minimize_tests(
             target_anchor_id=resolved.target_anchor_id,
             matches=related_tests,
         )
 
-        build_targets, build_exclusions = self._minimizer.minimize_build_targets(
-            owner=resolved.owner,
-            primary_component=resolved.primary_component,
-            targets=self._candidate_resolver.build_targets(),
-            dependent_components=tuple(),
-        )
+        if artifact_member is not None:
+            build_targets = tuple()
+            build_exclusions = tuple()
+        else:
+            build_targets, build_exclusions = self._minimizer.minimize_build_targets(
+                owner=resolved.owner,
+                primary_component=resolved.primary_component,
+                targets=self._candidate_resolver.build_targets(),
+                dependent_components=tuple(),
+            )
         dependent_test_exclusions: list[ExcludedMinimumVerifiedItem] = []
         if not tests and dependent_components:
             dependent_matches = self._candidate_resolver.related_tests_for_dependent_components(dependent_components)
@@ -776,7 +781,7 @@ class MinimumVerifiedChangeSetService:
                     )
                     for match, dependency_provenance in dependent_matches
                 )
-        if not tests and not build_targets and dependent_components:
+        if artifact_member is None and not tests and not build_targets and dependent_components:
             build_targets, build_exclusions = self._minimizer.minimize_build_targets(
                 owner=resolved.owner,
                 primary_component=resolved.primary_component,
@@ -793,7 +798,7 @@ class MinimumVerifiedChangeSetService:
 
         quality_validation_operations: tuple[MinimumVerifiedQualityOperation, ...] = tuple()
         quality_hygiene_operations: tuple[MinimumVerifiedQualityOperation, ...] = tuple()
-        if resolved.relevant_files:
+        if resolved.relevant_files and artifact_member is None:
             quality_provider_ids = self._repository.quality.provider_ids_for_files(resolved.relevant_files)
             quality_validation_operations, quality_hygiene_operations = self._quality_planner.build_operations(
                 target_anchor_id=resolved.target_anchor_id,
@@ -803,6 +808,7 @@ class MinimumVerifiedChangeSetService:
 
         availability_exclusions = self._availability_exclusions(
             resolved=resolved,
+            artifact_member=artifact_member,
             tests=tests,
             build_targets=build_targets,
             runner_actions=runner_actions,
@@ -922,12 +928,34 @@ class MinimumVerifiedChangeSetService:
         self,
         *,
         resolved: _ResolvedMinimumTarget,
+        artifact_member: tuple[str, str] | None,
         tests: tuple[MinimumVerifiedTestTarget, ...],
         build_targets: tuple[MinimumVerifiedBuildTarget, ...],
         runner_actions: tuple[MinimumVerifiedRunnerAction, ...],
         quality_validation_operations: tuple[MinimumVerifiedQualityOperation, ...],
         quality_hygiene_operations: tuple[MinimumVerifiedQualityOperation, ...],
     ) -> tuple[ExcludedMinimumVerifiedItem, ...]:
+        if artifact_member is not None:
+            evidence_paths = resolved.relevant_files[:10] or ((resolved.evidence_path,) if resolved.evidence_path is not None else tuple())
+            owner_component_id, artifact_root = artifact_member
+            return (
+                self._evidence_assembler.exclusion(
+                    item_kind=MinimumVerifiedItemKind.VALIDATION_SURFACE,
+                    item_id=f"validation_surface:artifact:{resolved.evidence_path or resolved.owner.id}",
+                    reason_code=MinimumVerifiedExclusionReason.NO_DETERMINISTIC_VALIDATION_SURFACE_FOR_ARTIFACT_MEMBER,
+                    reason=(
+                        "target is an explicit owned artifact member under "
+                        f"`{artifact_root}` for component `{owner_component_id}` and no narrower deterministic validation surface is available"
+                    ),
+                    provenance=(
+                        derived_summary_provenance(
+                            source_kind=SourceKind.OWNERSHIP,
+                            evidence_summary="explicit artifact member target has no inherited deterministic source validation surface",
+                            evidence_paths=evidence_paths,
+                        ),
+                    ),
+                ),
+            )
         structured_artifacts = self._structured_artifacts_for_target(resolved)
         if structured_artifacts:
             evidence_paths = resolved.relevant_files[:10] or ((resolved.evidence_path,) if resolved.evidence_path is not None else tuple())
@@ -1103,6 +1131,32 @@ class MinimumVerifiedChangeSetService:
                 return tuple()
             artifacts.append(artifact)
         return tuple(artifacts)
+
+    def _artifact_member_for_target(
+        self,
+        resolved: _ResolvedMinimumTarget,
+    ) -> tuple[str, str] | None:
+        if resolved.target_kind != "file" or resolved.evidence_path is None:
+            return None
+        if resolved.owner.kind != "component":
+            return None
+        component = next((item for item in self._repository.arch.get_components() if item.id == resolved.owner.id), None)
+        if component is None:
+            return None
+        normalized = resolved.evidence_path.replace("\\", "/").strip().removeprefix("./")
+        if any(normalized == root or normalized.startswith(f"{root}/") for root in component.source_roots):
+            return None
+        matching_roots = tuple(
+            path
+            for path in component.artifact_paths
+            if normalized == path or normalized.startswith(f"{path}/")
+        )
+        if not matching_roots:
+            return None
+        artifact_root = max(matching_roots, key=len)
+        if artifact_root != normalized and "/" in normalized:
+            artifact_root = normalized.rsplit("/", 1)[0]
+        return component.id, artifact_root
 
 
 from typing import TYPE_CHECKING

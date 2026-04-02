@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from suitcode.analytics.repository_scope import repository_roots_overlap
+
 
 class CursorSessionStore:
     _WORKSPACE_PATTERN = re.compile(r'workspacePath=(.+)$')
@@ -44,7 +46,7 @@ class CursorSessionStore:
                 continue
             if normalized_root is not None:
                 cwd = meta['cwd']
-                if cwd is None or cwd != normalized_root:
+                if not repository_roots_overlap(normalized_root, cwd):
                     continue
             matches.append(path)
         return tuple(matches)

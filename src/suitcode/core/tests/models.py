@@ -35,6 +35,7 @@ class TestDiscoveryMethod(StrEnum):
     __test__ = False
     AUTHORITATIVE_PYTEST_COLLECT = "authoritative_pytest_collect"
     AUTHORITATIVE_JEST_LIST_TESTS = "authoritative_jest_list_tests"
+    AUTHORITATIVE_VITEST_LIST_TESTS = "authoritative_vitest_list_tests"
     HEURISTIC_MANIFEST_GLOB = "heuristic_manifest_glob"
     HEURISTIC_CONFIG_GLOB = "heuristic_config_glob"
     HEURISTIC_UNITTEST = "heuristic_unittest"

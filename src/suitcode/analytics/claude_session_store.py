@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from suitcode.analytics.repository_scope import repository_roots_overlap
+
 
 class ClaudeSessionStore:
     def __init__(self, projects_root: Path | None = None) -> None:
@@ -39,7 +41,7 @@ class ClaudeSessionStore:
                 continue
             if normalized_root is not None:
                 cwd = meta['cwd']
-                if cwd is None or cwd != normalized_root:
+                if not repository_roots_overlap(normalized_root, cwd):
                     continue
             matches.append(path)
         return tuple(matches)

@@ -476,6 +476,301 @@ def test_frontend_standalone_package_surfaces_build_script_as_action(service: Su
     assert "build" in availability.available_action_kinds
 
 
+def test_build_only_frontend_summary_includes_exact_build_proof_facets(
+    service: SuitMcpService,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "frontend"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true,
+          "scripts": {
+            "build": "tsc --noEmit && vite build"
+          }
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "App.tsx").write_text("export const App = () => null;\n", encoding="utf-8")
+
+    minimum = service.what_should_i_run(
+        str(repo_root),
+        repository_rel_paths=("src/App.tsx",),
+    )
+
+    assert minimum.compact_summary.required_validation[0].item_kind == "build_target"
+    assert "TypeScript typecheck" in minimum.compact_summary.required_validation[0].summary
+    assert "frontend bundle build" in minimum.compact_summary.required_validation[0].summary
+    assert any(
+        "no finer deterministic frontend test target was discovered" in item.summary
+        for item in minimum.compact_summary.exclusions
+    )
+
+
+def test_frontend_proof_summary_is_exposed_on_compact_file_and_change_tools(
+    service: SuitMcpService,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "frontend-proof"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true,
+          "scripts": {
+            "build": "tsc --noEmit && vite build"
+          }
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "App.tsx").write_text("export const App = () => null;\n", encoding="utf-8")
+
+    file_understanding = service.understand_file(
+        str(repo_root),
+        ("src/App.tsx",),
+        detail_level="compact",
+    )
+    impact = service.what_changes_if_i_edit_this(
+        str(repo_root),
+        ("src/App.tsx",),
+        detail_level="compact",
+    )
+
+    assert file_understanding.targets[0].frontend_proof_summary is not None
+    assert "TypeScript typecheck" in file_understanding.targets[0].frontend_proof_summary.proof_items[0].summary
+    assert any(
+        "no finer deterministic frontend test target was discovered" in item.summary
+        for item in file_understanding.targets[0].frontend_proof_summary.boundaries
+    )
+    assert impact.targets[0].frontend_proof_summary is not None
+    assert "frontend bundle build" in impact.targets[0].frontend_proof_summary.proof_items[0].summary
+
+
+def test_implementation_flow_summary_is_exposed_on_bounded_frontend_targets(
+    service: SuitMcpService,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "frontend-flow"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true,
+          "scripts": {
+            "build": "vite build"
+          }
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "tsconfig.json").write_text(
+        """
+        {
+          "compilerOptions": {
+            "target": "ES2020",
+            "module": "ESNext",
+            "moduleResolution": "Node",
+            "strict": true,
+            "jsx": "preserve"
+          },
+          "include": ["src/**/*"]
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "IntegrationCard.tsx").write_text(
+        """
+        export type IntegrationCardProps = {
+          status: string;
+          onReady: () => void;
+        };
+
+        export function IntegrationCard(props: IntegrationCardProps) {
+          return <button onClick={props.onReady}>{props.status}</button>;
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "IntegrationsTab.tsx").write_text(
+        """
+        import React, { useState } from "react";
+        import { IntegrationCard } from "./IntegrationCard";
+
+        export function IntegrationsTab() {
+          const [status, setStatus] = useState("idle");
+          window.addEventListener("oauth_complete", () => setStatus("done"));
+          window.dispatchEvent(new CustomEvent("oauth_error"));
+          return <IntegrationCard status={status} onReady={() => setStatus("ready")} />;
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    file_understanding = service.understand_file(
+        str(repo_root),
+        ("src/IntegrationsTab.tsx",),
+        detail_level="compact",
+    )
+    impact = service.what_changes_if_i_edit_this(
+        str(repo_root),
+        ("src/IntegrationsTab.tsx",),
+        detail_level="compact",
+    )
+
+    file_summary = file_understanding.targets[0].implementation_flow_summary
+    impact_summary = impact.targets[0].implementation_flow_summary
+
+    assert file_summary is not None
+    assert impact_summary is not None
+    assert any(item.step_kind == "state_site" for item in file_summary.steps_preview)
+    assert any(item.step_kind == "event_subscribe" for item in file_summary.steps_preview)
+    assert any(item.step_kind == "event_publish" for item in file_summary.steps_preview)
+    assert any(item.step_kind == "prop_edge" for item in file_summary.steps_preview)
+    assert len(file_understanding.targets[0].render_children_preview) <= 1
+    assert len(file_understanding.targets[0].local_flow_edges_preview) <= 1
+    assert len(impact.targets[0].render_children) <= 1
+    assert len(impact.targets[0].local_flow_edges) <= 1
+
+
+def test_compact_implementation_flow_summary_is_disabled_for_batches_larger_than_three_targets(
+    service: SuitMcpService,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "frontend-many"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    for name in ("A.tsx", "B.tsx", "C.tsx", "D.tsx"):
+        (repo_root / "src" / name).write_text(
+            f"export const {name.removesuffix('.tsx')} = () => null;\n",
+            encoding="utf-8",
+        )
+
+    understanding = service.understand_file(
+        str(repo_root),
+        tuple(f"src/{name}" for name in ("A.tsx", "B.tsx", "C.tsx", "D.tsx")),
+        detail_level="compact",
+    )
+
+    assert understanding.target_count == 4
+    assert all(target.implementation_flow_summary is None for target in understanding.targets)
+
+
+def test_explicit_artifact_member_uses_artifact_surface_summary_without_inherited_frontend_proof(
+    service: SuitMcpService,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "frontend-artifacts"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "public" / "runtimes").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true,
+          "main": "public/runtimes/index.js",
+          "scripts": {
+            "build": "tsc --noEmit && vite build"
+          }
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "App.tsx").write_text("export const App = () => null;\n", encoding="utf-8")
+    (repo_root / "public" / "runtimes" / "bundle.js").write_text("console.log('bundle');\n", encoding="utf-8")
+
+    minimum = service.what_should_i_run(
+        str(repo_root),
+        repository_rel_paths=("public/runtimes/bundle.js",),
+    )
+    file_understanding = service.understand_file(
+        str(repo_root),
+        ("public/runtimes/bundle.js",),
+        detail_level="compact",
+    )
+    impact = service.what_changes_if_i_edit_this(
+        str(repo_root),
+        ("public/runtimes/bundle.js",),
+        detail_level="compact",
+    )
+
+    assert minimum.compact_summary.required_validation == tuple()
+    assert any(
+        item.reason_code == "no_deterministic_validation_surface_for_artifact_member"
+        for item in minimum.excluded_items
+    )
+    assert file_understanding.targets[0].artifact_surface_summary is not None
+    assert file_understanding.targets[0].artifact_surface_summary.artifact_root == "public/runtimes"
+    assert file_understanding.targets[0].frontend_proof_summary is None
+    assert file_understanding.targets[0].implementation_flow_summary is None
+    assert impact.targets[0].artifact_surface_summary is not None
+    assert impact.targets[0].frontend_proof_summary is None
+    assert impact.targets[0].implementation_flow_summary is None
+
+
+def test_batch_minimum_verified_compact_summary_keeps_one_closest_surface_per_target(
+    service: SuitMcpService,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "mixed-surfaces"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "server").mkdir(parents=True)
+    (repo_root / "server" / "go.mod").write_text("module example.com/mixed\n\ngo 1.22\n", encoding="utf-8")
+    (repo_root / "server" / "internal" / "save_sync").mkdir(parents=True)
+    (repo_root / "server" / "internal" / "save_sync" / "service.go").write_text(
+        "package save_sync\n\nfunc Sync() string { return \"ok\" }\n",
+        encoding="utf-8",
+    )
+    (repo_root / "server" / "internal" / "save_sync" / "service_test.go").write_text(
+        "package save_sync\n\nimport \"testing\"\n\nfunc TestSync(t *testing.T) { _ = Sync() }\n",
+        encoding="utf-8",
+    )
+    (repo_root / "server" / "frontend" / "src").mkdir(parents=True)
+    (repo_root / "server" / "frontend" / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true,
+          "scripts": {
+            "build": "tsc --noEmit && vite build"
+          }
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "server" / "frontend" / "src" / "App.tsx").write_text(
+        "export const App = () => null;\n",
+        encoding="utf-8",
+    )
+
+    minimum = service.what_should_i_run(
+        str(repo_root / "server"),
+        repository_rel_paths=("internal/save_sync/service.go", "frontend/src/App.tsx"),
+    )
+
+    summaries = tuple(item.summary for item in minimum.compact_summary.required_validation[:2])
+    assert any("internal/save_sync" in item for item in summaries)
+    assert any("npm run build" in item for item in summaries)
+
+
 def test_frontend_standalone_package_uses_test_prefixed_script_for_validation(service: SuitMcpService, tmp_path: Path) -> None:
     repo_root = tmp_path / "frontend"
     (repo_root / ".git").mkdir(parents=True)
@@ -1100,6 +1395,54 @@ def test_compact_file_understanding_filters_weak_invariant_findings(service: Sui
     assert compact.targets[0].invariant_findings_preview == tuple()
     assert standard.targets[0].invariant_finding_count == 1
     assert len(standard.targets[0].invariant_findings_preview) == 1
+
+
+def test_hot_entrypoints_preview_prioritizes_externally_referenced_exported_symbols(service: SuitMcpService) -> None:
+    class _FakeSymbol:
+        def __init__(self, symbol_id: str, name: str, kind: str, line_start: int) -> None:
+            self.id = symbol_id
+            self.name = name
+            self.entity_kind = kind
+            self.repository_rel_path = "internal/core/entities.go"
+            self.line_start = line_start
+
+    class _FakeLocation:
+        def __init__(self, path: str) -> None:
+            self.repository_rel_path = path
+
+    class _FakeCode:
+        def __init__(self) -> None:
+            self._symbols = tuple(
+                [_FakeSymbol("entity:entities.go:ExportedHot", "ExportedHot", "function", 10)]
+                + [_FakeSymbol("entity:entities.go:localHot", "localHot", "function", 20)]
+                + [_FakeSymbol("entity:entities.go:ColdType", "ColdType", "struct", 30)]
+                + [_FakeSymbol(f"entity:entities.go:helper{i}", f"helper{i}", "variable", 40 + i) for i in range(17)]
+            )
+            self._references = {
+                "entity:entities.go:ExportedHot": (_FakeLocation("internal/http/routes.go"), _FakeLocation("internal/db/store.go")),
+                "entity:entities.go:localHot": (_FakeLocation("internal/core/entities.go"),),
+                "entity:entities.go:ColdType": tuple(),
+            }
+
+        def list_symbols_in_file(self, repository_rel_path: str):
+            return self._symbols
+
+        def find_references_by_symbol_id(self, symbol_id: str):
+            return self._references.get(symbol_id, tuple())
+
+    class _FakeRepo:
+        def __init__(self) -> None:
+            self.code = _FakeCode()
+
+    preview = service._hot_entrypoints_preview(  # type: ignore[attr-defined]
+        _FakeRepo(),
+        "internal/core/entities.go",
+        detail_level="compact",
+    )
+
+    assert [item.name for item in preview] == ["ExportedHot", "ColdType", "localHot"]
+    assert preview[0].external_reference_count == 2
+    assert len(preview) == 3
 
 
 def test_compact_change_impact_ui_heavy_dedupes_reference_and_render_overlap(service: SuitMcpService) -> None:

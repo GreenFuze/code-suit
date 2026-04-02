@@ -311,6 +311,97 @@ class StaticFlowEdgeRef(StrictModel):
         return self
 
 
+class ImplementationFlowStepKind(StrEnum):
+    __test__ = False
+    STATE_SITE = "state_site"
+    PROP_EDGE = "prop_edge"
+    RENDER_EDGE = "render_edge"
+    LOCAL_FLOW_EDGE = "local_flow_edge"
+    EVENT_SUBSCRIBE = "event_subscribe"
+    EVENT_PUBLISH = "event_publish"
+    API_CALL = "api_call"
+    CONTRACT_USE = "contract_use"
+    IMPLEMENTATION_ANCHOR = "implementation_anchor"
+    RELATED_TEST_ANCHOR = "related_test_anchor"
+
+
+class ImplementationFlowStepRef(StrictModel):
+    repository_rel_path: str
+    line_start: int
+    column_start: int
+    step_kind: ImplementationFlowStepKind
+    source_label: str
+    target_label: str | None = None
+    detail_label: str | None = None
+    provenance: tuple[ProvenanceEntry, ...]
+
+    @field_validator("repository_rel_path", "source_label")
+    @classmethod
+    def _validate_non_empty(cls, value: str, info) -> str:
+        if not value.strip():
+            raise ValueError(f"{info.field_name} must not be empty")
+        return value.strip()
+
+    @field_validator("target_label", "detail_label")
+    @classmethod
+    def _validate_optional_text(cls, value: str | None, info) -> str | None:
+        if value is None:
+            return None
+        if not value.strip():
+            raise ValueError(f"{info.field_name} must not be empty")
+        return value.strip()
+
+    @field_validator("line_start", "column_start")
+    @classmethod
+    def _validate_position(cls, value: int, info) -> int:
+        if value < 1:
+            raise ValueError(f"{info.field_name} must be >= 1")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_provenance(self) -> "ImplementationFlowStepRef":
+        if not self.provenance:
+            raise ValueError("provenance must not be empty")
+        if any(item.source_kind == SourceKind.HEURISTIC for item in self.provenance):
+            raise ValueError("implementation flow provenance must not be heuristic")
+        return self
+
+
+class ImplementationFlowSummaryRef(StrictModel):
+    step_count: int
+    steps_preview: tuple[ImplementationFlowStepRef, ...]
+    provider_ids: tuple[str, ...]
+    provenance: tuple[ProvenanceEntry, ...]
+
+    @field_validator("step_count")
+    @classmethod
+    def _validate_step_count(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("step_count must be >= 1")
+        return value
+
+    @field_validator("provider_ids")
+    @classmethod
+    def _validate_provider_ids(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if any(not item.strip() for item in value):
+            raise ValueError("provider_ids must not contain empty values")
+        if len(set(value)) != len(value):
+            raise ValueError("provider_ids must not contain duplicates")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_summary(self) -> "ImplementationFlowSummaryRef":
+        if not self.steps_preview:
+            raise ValueError("steps_preview must not be empty")
+        if self.step_count < len(self.steps_preview):
+            raise ValueError("step_count must be >= len(steps_preview)")
+        if not self.provenance:
+            raise ValueError("provenance must not be empty")
+        if any(item.source_kind == SourceKind.HEURISTIC for item in self.provenance):
+            raise ValueError("implementation flow summary provenance must not be heuristic")
+        return self
+
+
 class FileContext(StrictModel):
     file_info: FileInfo
     owner: OwnedNodeInfo

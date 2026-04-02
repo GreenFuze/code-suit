@@ -4,6 +4,7 @@ from suitcode.core.code.models import CodeLocation, SymbolLookupTarget
 from suitcode.core.intelligence_models import (
     FileRelationshipKind,
     FileRelationshipRef,
+    ImplementationFlowStepRef,
     InvariantFindingRef,
     RenderEdgeKind,
     RenderEdgeRef,
@@ -123,6 +124,46 @@ class CodeIntelligence:
             sorted(
                 merged.values(),
                 key=lambda item: (item.repository_rel_path, item.line_start, item.column_start, item.symbol_id or ""),
+            )
+        )
+
+    def get_file_implementation_flow_steps(self, repository_rel_path: str) -> tuple[ImplementationFlowStepRef, ...]:
+        normalized_path = normalize_repository_relative_path(repository_rel_path)
+        merged: dict[tuple[str, int, int, str, str, str | None, str | None], ImplementationFlowStepRef] = {}
+        for provider in self._providers_for_file(normalized_path):
+            try:
+                items = provider.get_file_implementation_flow_steps(normalized_path)
+            except ValueError:
+                continue
+            for item in items:
+                key = (
+                    item.repository_rel_path,
+                    item.line_start,
+                    item.column_start,
+                    item.step_kind.value,
+                    item.source_label,
+                    item.target_label,
+                    item.detail_label,
+                )
+                existing = merged.get(key)
+                if existing is None:
+                    merged[key] = item
+                    continue
+                merged[key] = item.model_copy(
+                    update={"provenance": tuple(dict.fromkeys((*existing.provenance, *item.provenance)))}
+                )
+        return tuple(
+            sorted(
+                merged.values(),
+                key=lambda item: (
+                    item.repository_rel_path,
+                    item.line_start,
+                    item.column_start,
+                    item.step_kind.value,
+                    item.source_label,
+                    item.target_label or "",
+                    item.detail_label or "",
+                ),
             )
         )
 

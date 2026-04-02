@@ -23,6 +23,18 @@ class NpmTestToolResolver:
             )
         ).resolve()
 
+    def resolve_vitest(self) -> Path:
+        return Path(
+            self._resolver.resolve_candidate(
+                explicit_path=None,
+                local_candidates=self._local_vitest_candidates(),
+                path_candidates=self._path_vitest_candidates(),
+                error_message=(
+                    f"vitest was not found for repository `{self._repository_root}`. Install `vitest` in node_modules or on PATH."
+                ),
+            )
+        ).resolve()
+
     def _local_jest_candidates(self) -> tuple[Path, ...]:
         bin_dir = self._repository_root / 'node_modules' / '.bin'
         names = ['jest']
@@ -35,4 +47,18 @@ class NpmTestToolResolver:
         candidates = ['jest']
         if os.name == 'nt':
             candidates.extend(['jest.cmd', 'jest.exe'])
+        return tuple(candidates)
+
+    def _local_vitest_candidates(self) -> tuple[Path, ...]:
+        bin_dir = self._repository_root / 'node_modules' / '.bin'
+        names = ['vitest']
+        if os.name == 'nt':
+            names.insert(0, 'vitest.cmd')
+            names.append('vitest.exe')
+        return tuple(bin_dir / name for name in names)
+
+    def _path_vitest_candidates(self) -> tuple[str, ...]:
+        candidates = ['vitest']
+        if os.name == 'nt':
+            candidates.extend(['vitest.cmd', 'vitest.exe'])
         return tuple(candidates)

@@ -62,7 +62,7 @@ def _make_frontend_build_only_repo(repo_root: Path) -> Path:
           "name": "frontend",
           "private": true,
           "scripts": {
-            "build": "vite build"
+            "build": "tsc --noEmit && vite build"
           }
         }
         """.strip(),
@@ -70,6 +70,34 @@ def _make_frontend_build_only_repo(repo_root: Path) -> Path:
     )
     (repo_root / "src" / "App.tsx").write_text(
         "export const App = () => null;\n",
+        encoding="utf-8",
+    )
+    return repo_root
+
+
+def _make_frontend_artifact_repo(repo_root: Path) -> Path:
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "public" / "runtimes").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true,
+          "main": "public/runtimes/index.js",
+          "scripts": {
+            "build": "tsc --noEmit && vite build"
+          }
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "App.tsx").write_text(
+        "export const App = () => null;\n",
+        encoding="utf-8",
+    )
+    (repo_root / "public" / "runtimes" / "bundle.js").write_text(
+        "console.log('bundle');\n",
         encoding="utf-8",
     )
     return repo_root
@@ -286,10 +314,31 @@ def test_minimum_verified_change_set_reports_build_only_frontend_validation(tmp_
 
     assert change_set.tests == tuple()
     assert [item.target.action_id for item in change_set.build_targets] == ["action:npm:build:frontend"]
+    assert tuple(facet.value for facet in change_set.build_targets[0].target.proof_facets) == (
+        "typescript_typecheck",
+        "frontend_bundle_build",
+    )
     assert any(
         item.reason_code.value == "no_deterministic_test_targets_available"
         and "no finer deterministic frontend test target was discovered" in item.reason
         and "build is the primary deterministic frontend validation surface currently available" in item.reason
+        for item in change_set.excluded_items
+    )
+
+
+def test_minimum_verified_change_set_does_not_inherit_source_validation_for_artifact_member(tmp_path: Path) -> None:
+    repository = Workspace(_make_frontend_artifact_repo(tmp_path / "frontend-artifact")).repositories[0]
+
+    change_set = repository.get_minimum_verified_change_set(
+        ChangeTarget(repository_rel_path="public/runtimes/bundle.js")
+    )
+
+    assert change_set.tests == tuple()
+    assert change_set.build_targets == tuple()
+    assert change_set.quality_validation_operations == tuple()
+    assert any(
+        item.reason_code.value == "no_deterministic_validation_surface_for_artifact_member"
+        and "public/runtimes" in item.reason
         for item in change_set.excluded_items
     )
 

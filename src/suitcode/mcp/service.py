@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict, deque
 from pathlib import Path
 from typing import Callable, TypeVar
 
@@ -38,7 +39,9 @@ from suitcode.mcp.models import (
     DependencyRefView,
     ExcludedMinimumVerifiedItemView,
     ExternalPackageView,
+    ArtifactSurfaceSummaryView,
     FileContextView,
+    FrontendProofSummaryView,
     FileOwnerView,
     FileUnderstandingTargetView,
     FileUnderstandingView,
@@ -48,10 +51,13 @@ from suitcode.mcp.models import (
     FileUnderstandingStandardView,
     FileView,
     ImpactSummaryView,
+    HotEntrypointView,
     InefficientToolCallView,
     ListResult,
     LocationView,
     MinimumVerifiedBuildTargetView,
+    MinimumVerifiedCompactItemView,
+    MinimumVerifiedCompactSummaryView,
     MinimumVerifiedTestTargetView,
     OpenWorkspaceResult,
     PackageManagerView,
@@ -393,6 +399,21 @@ class SuitMcpService:
                     BatchChangeImpactTargetView(
                         repository_rel_path=repository_rel_path,
                         impact=self._change_impact_presenter.change_impact_view(impact),
+                        implementation_flow_summary=(
+                            None
+                            if self._artifact_surface_summary_view(repository, repository_rel_path) is not None
+                            else self._implementation_flow_summary_view(
+                                repository,
+                                repository_rel_path,
+                                detail_level=validated_detail_level,
+                            )
+                        ),
+                        frontend_proof_summary=(
+                            None
+                            if self._artifact_surface_summary_view(repository, repository_rel_path) is not None
+                            else self._frontend_proof_summary_view(repository, repository_rel_path)
+                        ),
+                        artifact_surface_summary=self._artifact_surface_summary_view(repository, repository_rel_path),
                     )
                 )
             frozen_targets = tuple(targets)
@@ -561,15 +582,17 @@ class SuitMcpService:
                 excluded_items=excluded_items,
             )
             excluded_items = self._filter_batch_minimum_verified_exclusions(excluded_items)
+            compact_summary = self._batch_minimum_verified_compact_summary(
+                targets=frozen_targets,
+                tests=tests,
+                build_targets=build_targets,
+                runner_actions=runner_actions,
+                quality_validation_operations=quality_validation_operations,
+                quality_hygiene_operations=quality_hygiene_operations,
+                excluded_items=excluded_items,
+            )
             return BatchMinimumVerifiedChangeSetView(
-                compact_summary=self._change_impact_presenter.minimum_verified_compact_summary_view(
-                    tests=tests,
-                    build_targets=build_targets,
-                    runner_actions=runner_actions,
-                    quality_validation_operations=quality_validation_operations,
-                    quality_hygiene_operations=quality_hygiene_operations,
-                    excluded_items=excluded_items,
-                ),
+                compact_summary=compact_summary,
                 target_count=len(frozen_targets),
                 targets=frozen_targets,
                 owner_ids=tuple(sorted({item.change_set.owner.id for item in frozen_targets})),
@@ -583,6 +606,54 @@ class SuitMcpService:
             )
 
         return self._with_read_only_repository(repository_path, _callback)
+
+    def _batch_minimum_verified_compact_summary(
+        self,
+        *,
+        targets: tuple[BatchMinimumVerifiedChangeSetTargetView, ...],
+        tests: tuple[MinimumVerifiedTestTargetView, ...],
+        build_targets: tuple[MinimumVerifiedBuildTargetView, ...],
+        runner_actions,
+        quality_validation_operations,
+        quality_hygiene_operations,
+        excluded_items: tuple[ExcludedMinimumVerifiedItemView, ...],
+    ) -> MinimumVerifiedCompactSummaryView:
+        base = self._change_impact_presenter.minimum_verified_compact_summary_view(
+            tests=tests,
+            build_targets=build_targets,
+            runner_actions=runner_actions,
+            quality_validation_operations=quality_validation_operations,
+            quality_hygiene_operations=quality_hygiene_operations,
+            excluded_items=excluded_items,
+        )
+        reserved: list[MinimumVerifiedCompactItemView] = []
+        seen_ids: set[tuple[str, str]] = set()
+        for target in targets:
+            for item in target.change_set.compact_summary.required_validation:
+                key = (item.item_kind, item.item_id)
+                if key in seen_ids:
+                    continue
+                seen_ids.add(key)
+                reserved.append(item)
+                break
+        ordered_required = tuple(
+            [
+                *reserved,
+                *(
+                    item
+                    for item in base.required_validation
+                    if (item.item_kind, item.item_id) not in seen_ids
+                ),
+            ]
+        )
+        return MinimumVerifiedCompactSummaryView(
+            required_validation_count=base.required_validation_count,
+            required_validation=ordered_required,
+            optional_hygiene_count=base.optional_hygiene_count,
+            optional_hygiene=base.optional_hygiene,
+            exclusion_count=base.exclusion_count,
+            exclusions=base.exclusions,
+        )
 
     def can_i_do_this(
         self,
@@ -1277,6 +1348,22 @@ class SuitMcpService:
                 if structured_artifact is not None
                 else None
             )
+            artifact_surface_summary = self._artifact_surface_summary_view(repository, repository_rel_path)
+            implementation_flow_summary = (
+                None
+                if artifact_surface_summary is not None
+                else self._implementation_flow_summary_view(
+                    repository,
+                    repository_rel_path,
+                    detail_level=detail_level,
+                )
+            )
+            frontend_proof_summary = None if artifact_surface_summary is not None else self._frontend_proof_summary_view(repository, repository_rel_path)
+            hot_entrypoints_preview = self._hot_entrypoints_preview(
+                repository,
+                repository_rel_path,
+                detail_level=detail_level,
+            )
         except ValueError as exc:
             raise McpValidationError(
                 self._explain_unowned_file_error(repository, repository_rel_path, str(exc), tool_name="understand_file")
@@ -1302,6 +1389,10 @@ class SuitMcpService:
             implementation_location_count=context.implementation_location_count,
             implementation_locations_preview=implementation_locations_preview,
             related_tests=related_tests,
+            hot_entrypoints_preview=hot_entrypoints_preview,
+            implementation_flow_summary=implementation_flow_summary,
+            frontend_proof_summary=frontend_proof_summary,
+            artifact_surface_summary=artifact_surface_summary,
             structured_artifact=structured_artifact_view,
             provenance=self._merge_view_provenance(
                 owner.file.provenance,
@@ -1314,6 +1405,7 @@ class SuitMcpService:
                 *(item.provenance for item in local_flow_edges_preview),
                 *(item.provenance for item in implementation_locations_preview),
                 *(item.provenance for item in related_tests),
+                implementation_flow_summary.provenance if implementation_flow_summary is not None else tuple(),
                 structured_artifact_view.provenance if structured_artifact_view is not None else tuple(),
             ),
         )
@@ -1341,6 +1433,311 @@ class SuitMcpService:
     def _is_ui_heavy_path(repository_rel_path: str) -> bool:
         normalized = repository_rel_path.replace("\\", "/").lower()
         return normalized.endswith((".tsx", ".jsx"))
+
+    @staticmethod
+    def _is_frontend_source_path(repository_rel_path: str) -> bool:
+        normalized = repository_rel_path.replace("\\", "/").lower()
+        return normalized.endswith((".tsx", ".jsx", ".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"))
+
+    @classmethod
+    def _is_frontend_npm_file_target(cls, repository: Repository, repository_rel_path: str) -> bool:
+        if not cls._is_frontend_source_path(repository_rel_path):
+            return False
+        if cls._artifact_member_context(repository, repository_rel_path) is not None:
+            return False
+        try:
+            owner = repository.get_file_owner(repository_rel_path).owner
+        except ValueError:
+            return False
+        return owner.kind == "component" and owner.id.startswith("component:npm:")
+
+    @staticmethod
+    def _normalized_repository_rel_path(repository_rel_path: str) -> str:
+        return repository_rel_path.replace("\\", "/").strip().removeprefix("./")
+
+    @classmethod
+    def _artifact_member_context(
+        cls,
+        repository: Repository,
+        repository_rel_path: str,
+    ) -> tuple[str, str] | None:
+        normalized = cls._normalized_repository_rel_path(repository_rel_path)
+        try:
+            owner = repository.get_file_owner(normalized).owner
+        except ValueError:
+            return None
+        if owner.kind != "component":
+            return None
+        component = next((item for item in repository.arch.get_components() if item.id == owner.id), None)
+        if component is None:
+            return None
+        if any(normalized == root or normalized.startswith(f"{root}/") for root in component.source_roots):
+            return None
+        matching_roots = tuple(
+            path
+            for path in component.artifact_paths
+            if normalized == path or normalized.startswith(f"{path}/")
+        )
+        if not matching_roots:
+            return None
+        artifact_root = max(matching_roots, key=len)
+        if artifact_root != normalized and "/" in normalized:
+            artifact_root = normalized.rsplit("/", 1)[0]
+        return component.id, artifact_root
+
+    @classmethod
+    def _artifact_surface_summary_view(
+        cls,
+        repository: Repository,
+        repository_rel_path: str,
+    ) -> ArtifactSurfaceSummaryView | None:
+        artifact_context = cls._artifact_member_context(repository, repository_rel_path)
+        if artifact_context is None:
+            return None
+        owner_component_id, artifact_root = artifact_context
+        return ArtifactSurfaceSummaryView(
+            owner_component_id=owner_component_id,
+            artifact_root=artifact_root,
+            repository_rel_path=cls._normalized_repository_rel_path(repository_rel_path),
+            quality_relevant=False,
+        )
+
+    @staticmethod
+    def _is_hot_entrypoint_candidate(kind: str) -> bool:
+        normalized = kind.strip().lower()
+        return normalized in {"function", "method", "struct", "interface", "type", "class"}
+
+    @staticmethod
+    def _hot_entrypoint_rank_key(item: HotEntrypointView) -> tuple[int, int, int, int]:
+        exported = int(bool(item.name) and item.name[:1].isupper())
+        return (-int(item.external_reference_count > 0), -item.external_reference_count, -exported, item.line_start or 10**9)
+
+    def _hot_entrypoints_preview(
+        self,
+        repository: Repository,
+        repository_rel_path: str,
+        *,
+        detail_level: str,
+    ) -> tuple[HotEntrypointView, ...]:
+        symbols = repository.code.list_symbols_in_file(repository_rel_path)
+        if len(symbols) < 20:
+            return tuple()
+        candidates = [item for item in symbols if self._is_hot_entrypoint_candidate(item.entity_kind)]
+        if not candidates:
+            return tuple()
+        preview_limit = 3 if detail_level == "compact" else 5
+        hot_entrypoints: list[HotEntrypointView] = []
+        for symbol in candidates:
+            references = repository.code.find_references_by_symbol_id(symbol.id)
+            external_reference_count = sum(1 for location in references if location.repository_rel_path != repository_rel_path)
+            hot_entrypoints.append(
+                HotEntrypointView(
+                    symbol_id=symbol.id,
+                    name=symbol.name,
+                    kind=symbol.entity_kind,
+                    path=symbol.repository_rel_path,
+                    line_start=symbol.line_start,
+                    external_reference_count=external_reference_count,
+                )
+            )
+        ranked = sorted(hot_entrypoints, key=self._hot_entrypoint_rank_key)
+        return tuple(ranked[:preview_limit])
+
+    def _frontend_proof_summary_view(
+        self,
+        repository: Repository,
+        repository_rel_path: str,
+    ) -> FrontendProofSummaryView | None:
+        if not self._is_frontend_npm_file_target(repository, repository_rel_path):
+            return None
+        change_set = repository.get_minimum_verified_change_set(ChangeTarget(repository_rel_path=repository_rel_path))
+        change_set_view = self._change_impact_presenter.minimum_verified_change_set_view(change_set)
+        proof_items = tuple(
+            item
+            for item in change_set_view.compact_summary.required_validation
+            if item.item_kind in {"test_target", "build_target", "quality_operation"}
+        )[:3]
+        build_proof_facets = tuple(
+            sorted(
+                {
+                    facet
+                    for item in change_set_view.build_targets
+                    for facet in item.proof_facets
+                }
+            )
+        )
+        boundaries = tuple(
+            MinimumVerifiedCompactItemView(
+                item_kind=item.item_kind,
+                item_id=item.item_id,
+                summary=item.reason,
+            )
+            for item in change_set_view.excluded_items
+            if item.reason_code == "no_deterministic_test_targets_available"
+        )[:1]
+        if not proof_items and not boundaries:
+            return None
+        return FrontendProofSummaryView(
+            proof_item_count=len(proof_items),
+            proof_items=proof_items,
+            build_proof_facets=build_proof_facets,
+            boundary_count=len(boundaries),
+            boundaries=boundaries,
+        )
+
+    def _implementation_flow_summary_view(
+        self,
+        repository: Repository,
+        repository_rel_path: str,
+        *,
+        detail_level: str,
+    ):
+        summary = repository.get_file_implementation_flow_summary(
+            repository_rel_path,
+            detail_level=detail_level,
+        )
+        if summary is None:
+            return None
+        return self._intelligence_presenter.implementation_flow_summary_view(summary)
+
+    @staticmethod
+    def _implementation_flow_paths(summary) -> set[str]:
+        if summary is None:
+            return set()
+        return {item.path for item in summary.steps_preview}
+
+    @staticmethod
+    def _implementation_flow_render_keys(summary) -> set[tuple[str, int, int, str | None]]:
+        if summary is None:
+            return set()
+        return {
+            (item.path, item.line_start, item.column_start, item.detail_label)
+            for item in summary.steps_preview
+            if item.step_kind in {"prop_edge", "render_edge"}
+        }
+
+    @staticmethod
+    def _implementation_flow_local_flow_keys(summary) -> set[tuple[str, int, int, str, str]]:
+        if summary is None:
+            return set()
+        return {
+            (item.path, item.line_start, item.column_start, item.source_label, item.target_label or "")
+            for item in summary.steps_preview
+            if item.step_kind == "local_flow_edge"
+        }
+
+    @classmethod
+    def _filter_render_edges_for_summary(cls, items, summary, *, limit: int):
+        blocked_keys = cls._implementation_flow_render_keys(summary)
+        if not blocked_keys:
+            return items[:limit]
+        filtered = []
+        for item in items:
+            detail_label = cls._render_edge_detail_label(item)
+            key = (item.path, item.line_start, item.column_start, detail_label)
+            if key in blocked_keys:
+                continue
+            filtered.append(item)
+            if len(filtered) >= limit:
+                break
+        return tuple(filtered)
+
+    @classmethod
+    def _filter_local_flow_edges_for_summary(cls, items, summary, *, limit: int):
+        blocked_keys = cls._implementation_flow_local_flow_keys(summary)
+        if not blocked_keys:
+            return items[:limit]
+        filtered = []
+        for item in items:
+            key = (item.path, item.line_start, item.column_start, item.source_label, item.target_label)
+            if key in blocked_keys:
+                continue
+            filtered.append(item)
+            if len(filtered) >= limit:
+                break
+        return tuple(filtered)
+
+    @staticmethod
+    def _render_edge_detail_label(item) -> str | None:
+        details: list[str] = []
+        if item.prop_names:
+            details.append(", ".join(item.prop_names[:4]))
+        if item.has_spread_props:
+            details.append("spread props")
+        return "; ".join(details) or None
+
+    @staticmethod
+    def _compact_file_target_limits(
+        *,
+        ui_heavy: bool,
+        multi_target: bool,
+        has_flow_summary: bool,
+    ) -> dict[str, int]:
+        limits = {
+            "reference": 3,
+            "render": 2 if ui_heavy else 3,
+            "dependency": 1 if ui_heavy else 3,
+            "dependent": 2 if ui_heavy else 3,
+            "invariant": 1 if ui_heavy else 3,
+            "local_flow": 1 if ui_heavy else 3,
+            "related_tests": 3,
+        }
+        if multi_target:
+            limits.update(
+                {
+                    "reference": 1,
+                    "render": 1,
+                    "dependency": 1,
+                    "dependent": 1,
+                    "invariant": 1,
+                    "local_flow": 1,
+                    "related_tests": 1,
+                }
+            )
+        if has_flow_summary:
+            limits["render"] = min(limits["render"], 1)
+            limits["dependency"] = min(limits["dependency"], 1)
+            limits["dependent"] = min(limits["dependent"], 1)
+            limits["local_flow"] = min(limits["local_flow"], 1)
+        return limits
+
+    @staticmethod
+    def _compact_change_target_limits(
+        *,
+        ui_heavy: bool,
+        multi_target: bool,
+        has_flow_summary: bool,
+    ) -> dict[str, int]:
+        limits = {
+            "reference": 3,
+            "render": 2 if ui_heavy else 3,
+            "dependent": 2 if ui_heavy else 3,
+            "invariant": 1 if ui_heavy else 3,
+            "local_flow": 1 if ui_heavy else 3,
+            "related_tests": 3,
+            "components": 3,
+            "quality_gates": 3,
+            "runners": 3,
+        }
+        if multi_target:
+            limits.update(
+                {
+                    "reference": 1,
+                    "render": 1,
+                    "dependent": 1,
+                    "invariant": 1,
+                    "local_flow": 1,
+                    "related_tests": 1,
+                    "components": 1,
+                    "quality_gates": 1,
+                    "runners": 1,
+                }
+            )
+        if has_flow_summary:
+            limits["render"] = min(limits["render"], 1)
+            limits["dependent"] = min(limits["dependent"], 1)
+            limits["local_flow"] = min(limits["local_flow"], 1)
+        return limits
 
     @classmethod
     def _is_ui_heavy_file_target(cls, target: FileUnderstandingTargetView) -> bool:
@@ -1380,6 +1777,26 @@ class SuitMcpService:
         return {item.path for group in groups for item in group}
 
     @staticmethod
+    def _owner_round_robin_targets(targets, owner_getter):
+        grouped = defaultdict(deque)
+        owner_order: list[str] = []
+        for target in targets:
+            owner_id = owner_getter(target)
+            if owner_id not in grouped:
+                owner_order.append(owner_id)
+            grouped[owner_id].append(target)
+        ordered = []
+        remaining = True
+        while remaining:
+            remaining = False
+            for owner_id in owner_order:
+                if not grouped[owner_id]:
+                    continue
+                ordered.append(grouped[owner_id].popleft())
+                remaining = True
+        return tuple(ordered)
+
+    @staticmethod
     def _shape_structured_artifact_view(artifact_view, *, detail_level: str):
         if artifact_view.markdown is not None:
             limit = 3 if detail_level == "compact" else 10 if detail_level == "standard" else None
@@ -1416,7 +1833,13 @@ class SuitMcpService:
         self,
         targets: tuple[FileUnderstandingTargetView, ...],
     ) -> FileUnderstandingCompactView:
+        flow_summary_enabled = len(targets) <= 3
         multi_target = len(targets) > 1
+        ranked_targets = (
+            self._owner_round_robin_targets(targets, lambda item: item.file_owner.owner.id)
+            if multi_target
+            else targets
+        )
         ui_heavy = any(self._is_ui_heavy_file_target(target) for target in targets)
         render_limit = 2 if ui_heavy else 3
         dependent_limit = 2 if ui_heavy else 3
@@ -1430,21 +1853,21 @@ class SuitMcpService:
             dependency_limit = min(dependency_limit, 1)
             local_flow_limit = min(local_flow_limit, 1)
             invariant_limit = min(invariant_limit, 1)
-            related_test_limit = min(related_test_limit, 2)
+            related_test_limit = 1
         aggregate_reference_site_count, aggregate_reference_sites_preview = self._aggregate_ranked_views(
-            tuple(target.reference_sites_preview for target in targets),
+            tuple(target.reference_sites_preview for target in ranked_targets),
             key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
             rank_key=self._location_rank_key,
             limit=3,
         )
         aggregate_render_child_count, aggregate_render_children_preview = self._aggregate_ranked_views(
-            tuple(target.render_children_preview for target in targets),
+            tuple(target.render_children_preview for target in ranked_targets),
             key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
             rank_key=self._render_edge_rank_key,
             limit=render_limit,
         )
         aggregate_render_parent_count, aggregate_render_parents_preview = self._aggregate_ranked_views(
-            tuple(target.render_parents_preview for target in targets),
+            tuple(target.render_parents_preview for target in ranked_targets),
             key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
             rank_key=self._render_edge_rank_key,
             limit=render_limit,
@@ -1452,7 +1875,7 @@ class SuitMcpService:
         aggregate_blocked_paths = self._render_paths(aggregate_render_children_preview, aggregate_render_parents_preview)
         aggregate_blocked_paths.update(self._location_paths(aggregate_reference_sites_preview))
         aggregate_dependency_file_count, aggregate_dependency_candidates = self._aggregate_ranked_views(
-            tuple(target.dependency_files_preview for target in targets),
+            tuple(target.dependency_files_preview for target in ranked_targets),
             key=lambda item: item.path,
             rank_key=self._file_relationship_rank_key,
             limit=10 if ui_heavy else 3,
@@ -1463,7 +1886,7 @@ class SuitMcpService:
             limit=dependency_limit,
         )
         aggregate_dependent_file_count, aggregate_dependent_candidates = self._aggregate_ranked_views(
-            tuple(target.dependent_files_preview for target in targets),
+            tuple(target.dependent_files_preview for target in ranked_targets),
             key=lambda item: item.path,
             rank_key=self._file_relationship_rank_key,
             limit=10 if ui_heavy else 3,
@@ -1474,19 +1897,19 @@ class SuitMcpService:
             limit=dependent_limit,
         )
         aggregate_invariant_finding_count, aggregate_invariant_findings_preview = self._aggregate_ranked_views(
-            tuple(self._compact_invariant_findings(target.invariant_findings_preview) for target in targets),
+            tuple(self._compact_invariant_findings(target.invariant_findings_preview) for target in ranked_targets),
             key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
             rank_key=self._invariant_rank_key,
             limit=invariant_limit,
         )
         aggregate_local_flow_edge_count, aggregate_local_flow_edges_preview = self._aggregate_ranked_views(
-            tuple(target.local_flow_edges_preview for target in targets),
+            tuple(target.local_flow_edges_preview for target in ranked_targets),
             key=lambda item: (item.path, item.line_start, item.column_start, item.edge_kind, item.source_label, item.target_label),
             rank_key=self._static_flow_rank_key,
             limit=local_flow_limit,
         )
         _, aggregate_related_tests = self._aggregate_ranked_views(
-            tuple(target.related_tests for target in targets),
+            tuple(target.related_tests for target in ranked_targets),
             key=lambda item: item.id,
             rank_key=self._related_test_rank_key,
             limit=related_test_limit,
@@ -1496,8 +1919,9 @@ class SuitMcpService:
                 target,
                 related_test_limit=related_test_limit,
                 multi_target=multi_target,
+                enable_implementation_flow=flow_summary_enabled,
             )
-            for target in targets
+            for target in ranked_targets
         )
         return FileUnderstandingCompactView(
             detail_level="compact",
@@ -1536,43 +1960,46 @@ class SuitMcpService:
         *,
         related_test_limit: int,
         multi_target: bool,
+        enable_implementation_flow: bool,
     ) -> FileUnderstandingCompactTargetView:
         ui_heavy = self._is_ui_heavy_file_target(target)
-        render_limit = 2 if ui_heavy else 3
-        dependent_limit = 2 if ui_heavy else 3
-        dependency_limit = 1 if ui_heavy else 3
-        local_flow_limit = 1 if ui_heavy else 3
-        invariant_limit = 1 if ui_heavy else 3
-        reference_limit = 3
-        if multi_target:
-            reference_limit = 1
-            render_limit = 1
-            dependent_limit = 1
-            dependency_limit = 1
-            local_flow_limit = 1
-            invariant_limit = 1
-            related_test_limit = min(related_test_limit, 1)
-        render_children_preview = target.render_children_preview[:render_limit]
-        render_parents_preview = target.render_parents_preview[:render_limit]
+        implementation_flow_summary = target.implementation_flow_summary if enable_implementation_flow else None
+        limits = self._compact_file_target_limits(
+            ui_heavy=ui_heavy,
+            multi_target=multi_target,
+            has_flow_summary=implementation_flow_summary is not None,
+        )
+        related_test_limit = min(related_test_limit, limits["related_tests"])
+        render_children_preview = self._filter_render_edges_for_summary(
+            target.render_children_preview,
+            implementation_flow_summary,
+            limit=limits["render"],
+        )
+        render_parents_preview = self._filter_render_edges_for_summary(
+            target.render_parents_preview,
+            implementation_flow_summary,
+            limit=limits["render"],
+        )
         blocked_paths = self._render_paths(render_children_preview, render_parents_preview)
-        blocked_paths.update(self._location_paths(target.reference_sites_preview[:reference_limit]))
+        blocked_paths.update(self._location_paths(target.reference_sites_preview[: limits["reference"]]))
+        blocked_paths.update(self._implementation_flow_paths(implementation_flow_summary))
         dependency_files_preview = self._filter_relationship_paths(
             target.dependency_files_preview,
             blocked_paths=blocked_paths,
-            limit=dependency_limit,
+            limit=limits["dependency"],
         )
         dependent_files_preview = self._filter_relationship_paths(
             target.dependent_files_preview,
             blocked_paths=blocked_paths,
-            limit=dependent_limit,
+            limit=limits["dependent"],
         )
-        invariant_findings = self._compact_invariant_findings(target.invariant_findings_preview)[:invariant_limit]
+        invariant_findings = self._compact_invariant_findings(target.invariant_findings_preview)[: limits["invariant"]]
         return FileUnderstandingCompactTargetView(
             detail_level="compact",
             repository_rel_path=target.repository_rel_path,
             file_owner=target.file_owner,
             reference_site_count=target.reference_site_count,
-            reference_sites_preview=target.reference_sites_preview[:reference_limit],
+            reference_sites_preview=target.reference_sites_preview[: limits["reference"]],
             dependency_file_count=target.dependency_file_count,
             dependency_files_preview=dependency_files_preview,
             dependent_file_count=target.dependent_file_count,
@@ -1584,9 +2011,17 @@ class SuitMcpService:
             invariant_finding_count=len(self._compact_invariant_findings(target.invariant_findings_preview)),
             invariant_findings_preview=invariant_findings,
             local_flow_edge_count=target.local_flow_edge_count,
-            local_flow_edges_preview=target.local_flow_edges_preview[:local_flow_limit],
+            local_flow_edges_preview=self._filter_local_flow_edges_for_summary(
+                target.local_flow_edges_preview,
+                implementation_flow_summary,
+                limit=limits["local_flow"],
+            ),
             related_test_count=len(target.related_tests),
             related_tests=target.related_tests[:related_test_limit],
+            hot_entrypoints_preview=target.hot_entrypoints_preview[: (1 if multi_target else 3)],
+            implementation_flow_summary=implementation_flow_summary,
+            frontend_proof_summary=target.frontend_proof_summary,
+            artifact_surface_summary=target.artifact_surface_summary,
             structured_artifact=target.structured_artifact,
         )
 
@@ -1671,6 +2106,10 @@ class SuitMcpService:
                 implementation_locations_preview=target.implementation_locations_preview[:10],
                 related_test_count=len(target.related_tests),
                 related_tests=target.related_tests[:10],
+                hot_entrypoints_preview=target.hot_entrypoints_preview[:5],
+                implementation_flow_summary=target.implementation_flow_summary,
+                frontend_proof_summary=target.frontend_proof_summary,
+                artifact_surface_summary=target.artifact_surface_summary,
                 structured_artifact=target.structured_artifact,
             )
             for target in targets
@@ -1712,7 +2151,13 @@ class SuitMcpService:
         self,
         targets: tuple[BatchChangeImpactTargetView, ...],
     ) -> BatchChangeImpactCompactView:
+        flow_summary_enabled = len(targets) <= 3
         multi_target = len(targets) > 1
+        ranked_targets = (
+            self._owner_round_robin_targets(targets, lambda item: item.impact.owner.id)
+            if multi_target
+            else targets
+        )
         ui_heavy = any(self._is_ui_heavy_change_target(target) for target in targets)
         render_limit = 2 if ui_heavy else 3
         dependent_limit = 2 if ui_heavy else 3
@@ -1723,19 +2168,19 @@ class SuitMcpService:
         quality_gate_limit = 2 if multi_target else 3
         runner_limit = 1 if multi_target else 3
         _, reference_sites = self._aggregate_ranked_views(
-            tuple(target.impact.reference_locations for target in targets),
+            tuple(target.impact.reference_locations for target in ranked_targets),
             key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
             rank_key=self._location_rank_key,
             limit=3,
         )
         _, render_children = self._aggregate_ranked_views(
-            tuple(target.impact.render_children for target in targets),
+            tuple(target.impact.render_children for target in ranked_targets),
             key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
             rank_key=self._render_edge_rank_key,
             limit=render_limit,
         )
         _, render_parents = self._aggregate_ranked_views(
-            tuple(target.impact.render_parents for target in targets),
+            tuple(target.impact.render_parents for target in ranked_targets),
             key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
             rank_key=self._render_edge_rank_key,
             limit=render_limit,
@@ -1743,7 +2188,7 @@ class SuitMcpService:
         blocked_paths = self._render_paths(render_children, render_parents)
         blocked_paths.update(self._location_paths(reference_sites))
         _, dependent_file_candidates = self._aggregate_ranked_views(
-            tuple(target.impact.dependent_files for target in targets),
+            tuple(target.impact.dependent_files for target in ranked_targets),
             key=lambda item: item.path,
             rank_key=self._file_relationship_rank_key,
             limit=10 if ui_heavy else 3,
@@ -1754,44 +2199,48 @@ class SuitMcpService:
             limit=dependent_limit,
         )
         _, invariant_findings = self._aggregate_ranked_views(
-            tuple(self._compact_invariant_findings(target.impact.invariant_findings) for target in targets),
+            tuple(self._compact_invariant_findings(target.impact.invariant_findings) for target in ranked_targets),
             key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
             rank_key=self._invariant_rank_key,
             limit=invariant_limit,
         )
         _, local_flow_edges = self._aggregate_ranked_views(
-            tuple(target.impact.local_flow_edges for target in targets),
+            tuple(target.impact.local_flow_edges for target in ranked_targets),
             key=lambda item: (item.path, item.line_start, item.column_start, item.edge_kind, item.source_label, item.target_label),
             rank_key=self._static_flow_rank_key,
             limit=local_flow_limit,
         )
         _, dependent_components = self._aggregate_ranked_views(
-            tuple(target.impact.dependent_components for target in targets),
+            tuple(target.impact.dependent_components for target in ranked_targets),
             key=lambda item: item.id,
             rank_key=self._component_rank_key,
             limit=component_limit,
         )
         _, related_tests = self._aggregate_ranked_views(
-            tuple(target.impact.related_tests for target in targets),
+            tuple(target.impact.related_tests for target in ranked_targets),
             key=lambda item: item.test.id,
             rank_key=self._test_impact_rank_key,
             limit=related_test_limit,
         )
         _, related_runners = self._aggregate_ranked_views(
-            tuple(target.impact.related_runners for target in targets),
+            tuple(target.impact.related_runners for target in ranked_targets),
             key=lambda item: item.runner.id,
             rank_key=self._runner_impact_rank_key,
             limit=runner_limit,
         )
         _, quality_gates = self._aggregate_ranked_views(
-            tuple(target.impact.quality_gates for target in targets),
+            tuple(target.impact.quality_gates for target in ranked_targets),
             key=lambda item: (item.provider_id, item.reason, item.applies),
             rank_key=self._quality_gate_rank_key,
             limit=quality_gate_limit,
         )
         compact_targets = tuple(
-            self._compact_change_target_view(target, multi_target=multi_target)
-            for target in targets
+            self._compact_change_target_view(
+                target,
+                multi_target=multi_target,
+                enable_implementation_flow=flow_summary_enabled,
+            )
+            for target in ranked_targets
         )
         return BatchChangeImpactCompactView(
             detail_level="compact",
@@ -1815,36 +2264,33 @@ class SuitMcpService:
         target: BatchChangeImpactTargetView,
         *,
         multi_target: bool,
+        enable_implementation_flow: bool,
     ) -> BatchChangeImpactCompactTargetView:
         ui_heavy = self._is_ui_heavy_change_target(target)
-        render_limit = 2 if ui_heavy else 3
-        dependent_limit = 2 if ui_heavy else 3
-        local_flow_limit = 1 if ui_heavy else 3
-        invariant_limit = 1 if ui_heavy else 3
-        reference_limit = 3
-        related_test_limit = 3
-        component_limit = 3
-        quality_gate_limit = 3
-        runner_limit = 3
-        if multi_target:
-            reference_limit = 1
-            render_limit = 1
-            dependent_limit = 1
-            local_flow_limit = 1
-            invariant_limit = 1
-            related_test_limit = 1
-            component_limit = 1
-            quality_gate_limit = 1
-            runner_limit = 1
-        reference_sites = target.impact.reference_locations[:reference_limit]
-        render_children = target.impact.render_children[:render_limit]
-        render_parents = target.impact.render_parents[:render_limit]
+        implementation_flow_summary = target.implementation_flow_summary if enable_implementation_flow else None
+        limits = self._compact_change_target_limits(
+            ui_heavy=ui_heavy,
+            multi_target=multi_target,
+            has_flow_summary=implementation_flow_summary is not None,
+        )
+        reference_sites = target.impact.reference_locations[: limits["reference"]]
+        render_children = self._filter_render_edges_for_summary(
+            target.impact.render_children,
+            implementation_flow_summary,
+            limit=limits["render"],
+        )
+        render_parents = self._filter_render_edges_for_summary(
+            target.impact.render_parents,
+            implementation_flow_summary,
+            limit=limits["render"],
+        )
         blocked_paths = self._render_paths(render_children, render_parents)
         blocked_paths.update(self._location_paths(reference_sites))
+        blocked_paths.update(self._implementation_flow_paths(implementation_flow_summary))
         dependent_files = self._filter_relationship_paths(
             target.impact.dependent_files,
             blocked_paths=blocked_paths,
-            limit=dependent_limit,
+            limit=limits["dependent"],
         )
         return BatchChangeImpactCompactTargetView(
             detail_level="compact",
@@ -1855,12 +2301,19 @@ class SuitMcpService:
             dependent_files=dependent_files,
             render_children=render_children,
             render_parents=render_parents,
-            invariant_findings=self._compact_invariant_findings(target.impact.invariant_findings)[:invariant_limit],
-            local_flow_edges=target.impact.local_flow_edges[:local_flow_limit],
-            dependent_components=target.impact.dependent_components[:component_limit],
-            related_tests=target.impact.related_tests[:related_test_limit],
-            related_runners=target.impact.related_runners[:runner_limit],
-            quality_gates=target.impact.quality_gates[:quality_gate_limit],
+            invariant_findings=self._compact_invariant_findings(target.impact.invariant_findings)[: limits["invariant"]],
+            local_flow_edges=self._filter_local_flow_edges_for_summary(
+                target.impact.local_flow_edges,
+                implementation_flow_summary,
+                limit=limits["local_flow"],
+            ),
+            dependent_components=target.impact.dependent_components[: limits["components"]],
+            related_tests=target.impact.related_tests[: limits["related_tests"]],
+            related_runners=target.impact.related_runners[: limits["runners"]],
+            quality_gates=target.impact.quality_gates[: limits["quality_gates"]],
+            implementation_flow_summary=implementation_flow_summary,
+            frontend_proof_summary=target.frontend_proof_summary,
+            artifact_surface_summary=target.artifact_surface_summary,
         )
 
     def _standard_change_impact_view(
@@ -1965,6 +2418,9 @@ class SuitMcpService:
                 related_tests=target.impact.related_tests[:10],
                 related_runners=target.impact.related_runners[:10],
                 quality_gates=target.impact.quality_gates[:10],
+                implementation_flow_summary=target.implementation_flow_summary,
+                frontend_proof_summary=target.frontend_proof_summary,
+                artifact_surface_summary=target.artifact_surface_summary,
             )
             for target in targets
         )
@@ -2164,6 +2620,7 @@ class SuitMcpService:
             "dependent_test_replaced_by_narrower_build",
             "repository_build_replaced_by_narrower_build",
             "no_deterministic_test_targets_available",
+            "no_deterministic_validation_surface_for_artifact_member",
             "no_deterministic_validation_surfaces_for_provider_owned_artifact",
             "no_narrower_direct_validation_surface_for_file_target",
         }

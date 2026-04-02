@@ -13,6 +13,9 @@ from suitcode.analytics.native_agent_models import (
     NativeSuitCodeToolUse,
     NativeTranscriptMetrics,
 )
+from suitcode.analytics.models import AnalyticsEvent, AnalyticsStatus
+from suitcode.analytics.settings import AnalyticsSettings
+from suitcode.analytics.storage import JsonlAnalyticsStore
 from suitcode.analytics.transcript_models import TokenMetricKind, TranscriptCapture, TranscriptSegment, TranscriptSegmentKind, TranscriptTokenBreakdown
 from suitcode.providers.provider_metadata import DetectedProviderSupport, ProviderDescriptor, RepositorySupportResult
 from suitcode.providers.provider_roles import ProviderRole
@@ -102,6 +105,7 @@ def test_build_dogfooding_summary_aggregates_agents(monkeypatch, tmp_path: Path)
                     supported_roles=frozenset({ProviderRole.ARCHITECTURE, ProviderRole.TEST}),
                 ),
                 detected_roles=frozenset({ProviderRole.ARCHITECTURE, ProviderRole.TEST}),
+                attachments=(),
             ),
         ),
     )
@@ -206,3 +210,38 @@ def test_main_writes_bundle(monkeypatch, capsys, tmp_path: Path) -> None:
     assert (output_dir / "summary.md").exists()
     payload = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
     assert payload["support"]["provider_ids"] == ["go"]
+
+
+def test_summarize_mcp_events_matches_nested_repository_scope(monkeypatch, tmp_path: Path) -> None:
+    repo_root = (tmp_path / "repo").resolve()
+    nested_root = repo_root / "server"
+    nested_root.mkdir(parents=True)
+    settings = AnalyticsSettings(
+        global_root=(tmp_path / "global").resolve(),
+        repo_subdir=".suit/analytics",
+        max_file_bytes=1024 * 1024,
+    )
+    store = JsonlAnalyticsStore(settings)
+    store.append_event(
+        AnalyticsEvent(
+            event_id="event-1",
+            session_id="session-1",
+            timestamp_utc="2026-03-21T10:00:00Z",
+            tool_name="understand_repository",
+            repository_root=str(repo_root),
+            arguments_fingerprint_sha256="hash-1",
+            status=AnalyticsStatus.SUCCESS,
+            duration_ms=5,
+        ),
+        repository_root=repo_root,
+    )
+    monkeypatch.setattr(analyze_dogfooding.AnalyticsSettings, "from_env", classmethod(lambda cls: settings))
+
+    summary = analyze_dogfooding.summarize_mcp_events(
+        repository_root=nested_root,
+        since=datetime(2026, 3, 20, tzinfo=UTC),
+        include_global=False,
+    )
+
+    assert summary["total_calls"] == 1
+    assert summary["top_tools"] == ("understand_repository",)

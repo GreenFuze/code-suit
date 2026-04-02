@@ -4,7 +4,7 @@ from enum import StrEnum
 
 from pydantic import Field, field_validator, model_validator
 
-from suitcode.core.action_models import ActionInvocation, ActionTargetKind
+from suitcode.core.action_models import ActionInvocation, ActionProofFacet, ActionTargetKind
 from suitcode.core.models.ids import normalize_repository_relative_path
 from suitcode.core.models.nodes import StrictModel
 from suitcode.core.provenance import ProvenanceEntry
@@ -26,6 +26,7 @@ class BuildTargetDescription(StrictModel):
     target_id: str
     target_kind: ActionTargetKind
     owner_ids: tuple[str, ...] = Field(default_factory=tuple)
+    proof_facets: tuple[ActionProofFacet, ...] = Field(default_factory=tuple)
     invocation: ActionInvocation
     dry_run_supported: bool = False
     provenance: tuple[ProvenanceEntry, ...]
@@ -46,6 +47,8 @@ class BuildTargetDescription(StrictModel):
             raise ValueError("owner_ids must not contain empty values")
         if len(set(self.owner_ids)) != len(self.owner_ids):
             raise ValueError("owner_ids must not contain duplicates")
+        if len(set(self.proof_facets)) != len(self.proof_facets):
+            raise ValueError("proof_facets must not contain duplicates")
         if not self.provenance:
             raise ValueError("provenance must not be empty")
         return self

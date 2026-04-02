@@ -38,3 +38,4 @@ class ProviderActionSpec:
     provenance_tool: str | None
     provenance_summary: str
     provenance_paths: tuple[str, ...]
+    proof_facets: tuple[str, ...] = ()

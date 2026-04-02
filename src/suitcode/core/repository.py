@@ -10,6 +10,7 @@ from suitcode.core.build_service import BuildService
 from suitcode.core.intelligence_models import (
     ComponentContext,
     FileContext,
+    ImplementationFlowSummaryRef,
     ImpactSummary,
     ImpactTarget,
     SymbolContext,
@@ -20,6 +21,7 @@ from suitcode.core.change_impact_service import ChangeImpactService
 from suitcode.core.component_context_resolver import ComponentContextResolver
 from suitcode.core.ownership_index import OwnershipIndex
 from suitcode.core.context_service import ContextService
+from suitcode.core.implementation_flow_service import ImplementationFlowService
 from suitcode.core.impact_service import ImpactService
 from suitcode.core.minimum_verified_change_set_models import MinimumVerifiedChangeSet
 from suitcode.core.minimum_verified_change_set_service import MinimumVerifiedChangeSetService
@@ -157,6 +159,7 @@ class Repository:
         self._build_service: BuildService | None = None
         self._minimum_verified_change_set_service: MinimumVerifiedChangeSetService | None = None
         self._truth_coverage_service: TruthCoverageService | None = None
+        self._implementation_flow_service: ImplementationFlowService | None = None
         self._truth_coverage_cache: TruthCoverageSummary | None = None
         self._truth_coverage_lock = Lock()
         self._initialize_providers(support)
@@ -508,6 +511,17 @@ class Repository:
             self._truth_coverage_cache = self._build_truth_coverage_service().repository_truth_coverage()
             return self._truth_coverage_cache
 
+    def get_file_implementation_flow_summary(
+        self,
+        repository_rel_path: str,
+        *,
+        detail_level: str,
+    ) -> ImplementationFlowSummaryRef | None:
+        return self._build_implementation_flow_service().summarize_file(
+            repository_rel_path,
+            detail_level=detail_level,
+        )
+
     def get_change_truth_coverage(
         self,
         target: ChangeTarget,
@@ -630,6 +644,11 @@ class Repository:
         if self._truth_coverage_service is None:
             self._truth_coverage_service = TruthCoverageService(self)
         return self._truth_coverage_service
+
+    def _build_implementation_flow_service(self) -> ImplementationFlowService:
+        if self._implementation_flow_service is None:
+            self._implementation_flow_service = ImplementationFlowService(self)
+        return self._implementation_flow_service
 
     def _validate_unique_file_ownership(self) -> None:
         file_owners: dict[str, tuple[str, str, str]] = {}

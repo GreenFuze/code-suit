@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from suitcode.core.action_models import ActionInvocation, ActionKind, ActionTargetKind, RepositoryAction
+from suitcode.core.action_models import ActionInvocation, ActionKind, ActionProofFacet, ActionTargetKind, RepositoryAction
 from suitcode.core.provenance_builders import heuristic_provenance, manifest_provenance, test_tool_provenance
 from suitcode.providers.shared.actions.models import (
     ProviderActionKind,
@@ -24,6 +24,7 @@ class ProviderActionTranslator:
             target_id=item.target_id,
             target_kind=self._to_target_kind(item.target_kind),
             owner_ids=item.owner_ids,
+            proof_facets=tuple(ActionProofFacet(value) for value in item.proof_facets),
             invocation=ActionInvocation(argv=item.argv, cwd=item.cwd),
             dry_run_supported=item.dry_run_supported,
             provenance=(self._to_provenance(item),),

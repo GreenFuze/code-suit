@@ -504,8 +504,215 @@ function collectInvariantFindings(sourceFile, checker) {
   );
 }
 
+function importedModuleNameForSymbol(symbol) {
+  const declarations = symbol && (symbol.getDeclarations() || []);
+  for (const declaration of declarations) {
+    if (ts.isImportSpecifier(declaration)) {
+      const importDecl = declaration.parent && declaration.parent.parent && declaration.parent.parent.parent;
+      if (importDecl && ts.isImportDeclaration(importDecl) && ts.isStringLiteral(importDecl.moduleSpecifier)) {
+        return importDecl.moduleSpecifier.text;
+      }
+    }
+    if (ts.isNamespaceImport(declaration)) {
+      const importDecl =
+        declaration.parent &&
+        declaration.parent.parent &&
+        declaration.parent.parent.parent;
+      if (importDecl && ts.isImportDeclaration(importDecl) && ts.isStringLiteral(importDecl.moduleSpecifier)) {
+        return importDecl.moduleSpecifier.text;
+      }
+    }
+    if (ts.isImportClause(declaration)) {
+      const importDecl = declaration.parent;
+      if (importDecl && ts.isImportDeclaration(importDecl) && ts.isStringLiteral(importDecl.moduleSpecifier)) {
+        return importDecl.moduleSpecifier.text;
+      }
+    }
+  }
+  return null;
+}
+
+function isReactHookCall(checker, expression, hookName) {
+  if (ts.isIdentifier(expression) && expression.text === hookName) {
+    const symbol = checker.getSymbolAtLocation(expression);
+    return importedModuleNameForSymbol(symbol) === "react";
+  }
+  if (ts.isPropertyAccessExpression(expression) && expression.name.text === hookName) {
+    const leftSymbol = checker.getSymbolAtLocation(expression.expression);
+    return importedModuleNameForSymbol(leftSymbol) === "react";
+  }
+  return false;
+}
+
+function bindingElementName(element) {
+  if (ts.isIdentifier(element)) {
+    return element.text;
+  }
+  if (ts.isBindingElement(element) && ts.isIdentifier(element.name)) {
+    return element.name.text;
+  }
+  return null;
+}
+
+function collectStateSites(sourceFile, checker) {
+  const steps = new Map();
+
+  function addStep(step) {
+    const key = `${step.path}:${step.step_kind}:${step.line_start}:${step.column_start}:${step.source_label}:${step.target_label || ""}:${step.detail_label || ""}`;
+    steps.set(key, step);
+  }
+
+  function visit(node) {
+    if (ts.isVariableDeclaration(node) && node.initializer && ts.isCallExpression(node.initializer)) {
+      const call = node.initializer;
+      const isStateHook = isReactHookCall(checker, call.expression, "useState");
+      const isReducerHook = isReactHookCall(checker, call.expression, "useReducer");
+      if (isStateHook || isReducerHook) {
+        const { lineStart, columnStart } = locationOf(sourceFile, call.expression);
+        const detailLabel = isStateHook ? "useState" : "useReducer";
+        if (ts.isArrayBindingPattern(node.name)) {
+          const sourceLabel = bindingElementName(node.name.elements[0]) || detailLabel;
+          const targetLabel = bindingElementName(node.name.elements[1]);
+          addStep({
+            path: toRepositoryRelative(sourceFile.fileName),
+            step_kind: "state_site",
+            line_start: lineStart,
+            column_start: columnStart,
+            source_label: sourceLabel,
+            target_label: targetLabel,
+            detail_label: detailLabel,
+            evidence_summary: `deterministic TypeScript analysis found explicit React ${detailLabel} state ownership`,
+          });
+        } else if (ts.isIdentifier(node.name)) {
+          addStep({
+            path: toRepositoryRelative(sourceFile.fileName),
+            step_kind: "state_site",
+            line_start: lineStart,
+            column_start: columnStart,
+            source_label: node.name.text,
+            target_label: null,
+            detail_label: detailLabel,
+            evidence_summary: `deterministic TypeScript analysis found explicit React ${detailLabel} state ownership`,
+          });
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return Array.from(steps.values()).sort((a, b) =>
+    a.path.localeCompare(b.path) ||
+    a.line_start - b.line_start ||
+    a.column_start - b.column_start ||
+    a.source_label.localeCompare(b.source_label)
+  );
+}
+
+function domSignatureSourcePath(checker, callExpression) {
+  const signature = checker.getResolvedSignature(callExpression);
+  const declaration = signature && signature.getDeclaration && signature.getDeclaration();
+  if (!declaration) {
+    return null;
+  }
+  return declaration.getSourceFile().fileName.replace(/\\/g, "/");
+}
+
+function isExactDomMethodCall(checker, callExpression, methodName) {
+  if (!ts.isCallExpression(callExpression) || !ts.isPropertyAccessExpression(callExpression.expression)) {
+    return false;
+  }
+  if (callExpression.expression.name.text !== methodName) {
+    return false;
+  }
+  const sourcePath = domSignatureSourcePath(checker, callExpression);
+  return Boolean(sourcePath && sourcePath.endsWith("/lib.dom.d.ts"));
+}
+
+function literalEventName(node) {
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+    return node.text;
+  }
+  return null;
+}
+
+function receiverLabel(expression) {
+  if (ts.isIdentifier(expression)) {
+    return expression.text;
+  }
+  if (ts.isPropertyAccessExpression(expression)) {
+    return expression.name.text;
+  }
+  return expression.getText();
+}
+
+function customEventName(argument) {
+  if (!ts.isNewExpression(argument) || !argument.arguments || argument.arguments.length < 1) {
+    return null;
+  }
+  const ctorName = ts.isIdentifier(argument.expression) ? argument.expression.text : null;
+  if (ctorName !== "Event" && ctorName !== "CustomEvent") {
+    return null;
+  }
+  return literalEventName(argument.arguments[0]);
+}
+
+function collectEventFlowSteps(sourceFile, checker) {
+  const steps = new Map();
+
+  function addStep(step) {
+    const key = `${step.path}:${step.step_kind}:${step.line_start}:${step.column_start}:${step.source_label}:${step.target_label || ""}:${step.detail_label || ""}`;
+    steps.set(key, step);
+  }
+
+  function visit(node) {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+      const { lineStart, columnStart } = locationOf(sourceFile, node.expression.name);
+      if (isExactDomMethodCall(checker, node, "addEventListener") && node.arguments.length >= 1) {
+        const eventName = literalEventName(node.arguments[0]);
+        if (eventName) {
+          addStep({
+            path: toRepositoryRelative(sourceFile.fileName),
+            step_kind: "event_subscribe",
+            line_start: lineStart,
+            column_start: columnStart,
+            source_label: eventName,
+            target_label: receiverLabel(node.expression.expression),
+            detail_label: "addEventListener",
+            evidence_summary: "deterministic TypeScript analysis found exact DOM event subscription",
+          });
+        }
+      }
+      if (isExactDomMethodCall(checker, node, "dispatchEvent") && node.arguments.length >= 1) {
+        const eventName = customEventName(node.arguments[0]);
+        if (eventName) {
+          addStep({
+            path: toRepositoryRelative(sourceFile.fileName),
+            step_kind: "event_publish",
+            line_start: lineStart,
+            column_start: columnStart,
+            source_label: eventName,
+            target_label: receiverLabel(node.expression.expression),
+            detail_label: "dispatchEvent",
+            evidence_summary: "deterministic TypeScript analysis found exact DOM event publish",
+          });
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return Array.from(steps.values()).sort((a, b) =>
+    a.path.localeCompare(b.path) ||
+    a.line_start - b.line_start ||
+    a.column_start - b.column_start ||
+    a.source_label.localeCompare(b.source_label)
+  );
+}
+
 if (!targetFile.startsWith(projectRoot)) {
-  console.log(JSON.stringify({ invariant_findings: [], local_flow_edges: [] }));
+  console.log(JSON.stringify({ invariant_findings: [], local_flow_edges: [], implementation_flow_steps: [] }));
   process.exit(0);
 }
 if (!fs.existsSync(targetFile) || !fs.statSync(targetFile).isFile()) {
@@ -513,7 +720,7 @@ if (!fs.existsSync(targetFile) || !fs.statSync(targetFile).isFile()) {
   process.exit(1);
 }
 if (!isSupportedFile(targetFile) || targetFile.endsWith(".d.ts")) {
-  console.log(JSON.stringify({ invariant_findings: [], local_flow_edges: [] }));
+  console.log(JSON.stringify({ invariant_findings: [], local_flow_edges: [], implementation_flow_steps: [] }));
   process.exit(0);
 }
 
@@ -522,11 +729,15 @@ const program = createProgram(allFiles);
 const checker = program.getTypeChecker();
 const sourceFile = program.getSourceFile(targetFile);
 if (!sourceFile) {
-  console.log(JSON.stringify({ invariant_findings: [], local_flow_edges: [] }));
+  console.log(JSON.stringify({ invariant_findings: [], local_flow_edges: [], implementation_flow_steps: [] }));
   process.exit(0);
 }
 
 console.log(JSON.stringify({
   invariant_findings: collectInvariantFindings(sourceFile, checker),
   local_flow_edges: collectFlowEdges(sourceFile, checker),
+  implementation_flow_steps: [
+    ...collectStateSites(sourceFile, checker),
+    ...collectEventFlowSteps(sourceFile, checker),
+  ],
 }));
