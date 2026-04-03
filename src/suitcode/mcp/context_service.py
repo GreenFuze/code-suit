@@ -8,6 +8,7 @@ from suitcode.core.validation import (
     validate_preview_limit,
 )
 from suitcode.mcp.errors import McpNotFoundError, McpValidationError
+from suitcode.mcp.file_target_errors import explain_file_target_error
 from suitcode.mcp.models import (
     ChangeImpactView,
     ComponentContextView,
@@ -92,7 +93,15 @@ class ContextMcpService:
                 test_preview_limit=test_preview_limit,
             )
         except ValueError as exc:
-            raise McpNotFoundError(str(exc)) from exc
+            message = str(exc)
+            if len(repository_rel_paths) == 1:
+                message = explain_file_target_error(
+                    repository,
+                    repository_rel_paths[0],
+                    message,
+                    tool_name="describe_files",
+                )
+            raise McpNotFoundError(message) from exc
         return tuple(self._intelligence_presenter.file_context_view(item) for item in contexts)
 
     def describe_symbol_context(
@@ -144,7 +153,15 @@ class ContextMcpService:
                 test_preview_limit=test_preview_limit,
             )
         except ValueError as exc:
-            raise McpValidationError(str(exc)) from exc
+            message = str(exc)
+            if repository_rel_path is not None:
+                message = explain_file_target_error(
+                    repository,
+                    repository_rel_path,
+                    message,
+                    tool_name="analyze_impact",
+                )
+            raise McpValidationError(message) from exc
         return self._intelligence_presenter.impact_summary_view(summary)
 
     def analyze_change(
@@ -178,7 +195,15 @@ class ContextMcpService:
                 runner_preview_limit=runner_preview_limit,
             )
         except ValueError as exc:
-            raise McpValidationError(str(exc)) from exc
+            message = str(exc)
+            if repository_rel_path is not None:
+                message = explain_file_target_error(
+                    repository,
+                    repository_rel_path,
+                    message,
+                    tool_name="analyze_change",
+                )
+            raise McpValidationError(message) from exc
         return self._change_impact_presenter.change_impact_view(impact)
 
     def get_minimum_verified_change_set(
@@ -198,7 +223,15 @@ class ContextMcpService:
             )
             change_set = repository.get_minimum_verified_change_set(target)
         except ValueError as exc:
-            raise McpValidationError(str(exc)) from exc
+            message = str(exc)
+            if repository_rel_path is not None:
+                message = explain_file_target_error(
+                    repository,
+                    repository_rel_path,
+                    message,
+                    tool_name="get_minimum_verified_change_set",
+                )
+            raise McpValidationError(message) from exc
         return self._change_impact_presenter.minimum_verified_change_set_view(change_set)
 
     def get_truth_coverage(

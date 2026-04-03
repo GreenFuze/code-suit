@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from suitcode.core.tests.models import RelatedTestTarget
 from suitcode.mcp.errors import McpValidationError
+from suitcode.mcp.file_target_errors import explain_file_target_error
 from suitcode.mcp.models import (
     ListResult,
     RelatedTestView,
@@ -48,7 +49,15 @@ class TestMcpService:
                 )
             )
         except ValueError as exc:
-            raise McpValidationError(str(exc)) from exc
+            message = str(exc)
+            if repository_rel_path is not None:
+                message = explain_file_target_error(
+                    repository,
+                    repository_rel_path,
+                    message,
+                    tool_name="get_related_tests",
+                )
+            raise McpValidationError(message) from exc
         return self._pagination.paginate(items, limit, offset)
 
     def describe_test_target(self, workspace_id: str, repository_id: str, test_id: str) -> TestTargetDescriptionView:

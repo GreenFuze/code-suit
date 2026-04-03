@@ -12,6 +12,7 @@ from suitcode.core.validation import validate_preview_limit
 from suitcode.core.validation import validate_change_preview_limit
 from suitcode.core.workspace import Workspace
 from suitcode.mcp.errors import McpNotFoundError, McpUnsupportedRepositoryError, McpValidationError
+from suitcode.mcp.file_target_errors import explain_file_target_error
 from suitcode.mcp.models import (
     ActionAvailabilityView,
     AddRepositoryResult,
@@ -333,7 +334,7 @@ class SuitMcpService:
                 return self._ownership_presenter.file_owner_view(repository.get_file_owner(repository_rel_path))
             except ValueError as exc:
                 raise McpNotFoundError(
-                    self._explain_unowned_file_error(
+                    explain_file_target_error(
                         repository,
                         repository_rel_path,
                         str(exc),
@@ -361,7 +362,15 @@ class SuitMcpService:
                 )
                 return self._pagination.paginate(items, limit, offset)
             except ValueError as exc:
-                raise McpValidationError(str(exc)) from exc
+                message = str(exc)
+                if repository_rel_path is not None:
+                    message = explain_file_target_error(
+                        repository,
+                        repository_rel_path,
+                        message,
+                        tool_name="get_related_tests_by_path",
+                    )
+                raise McpValidationError(message) from exc
 
         return self._with_read_only_repository(repository_path, _callback)
 
@@ -394,7 +403,14 @@ class SuitMcpService:
                         runner_preview_limit=self._detail_preview_limit(validated_detail_level, runner_preview_limit),
                     )
                 except ValueError as exc:
-                    raise McpValidationError(str(exc)) from exc
+                    raise McpValidationError(
+                        explain_file_target_error(
+                            repository,
+                            repository_rel_path,
+                            str(exc),
+                            tool_name="what_changes_if_i_edit_this",
+                        )
+                    ) from exc
                 targets.append(
                     BatchChangeImpactTargetView(
                         repository_rel_path=repository_rel_path,
@@ -526,7 +542,15 @@ class SuitMcpService:
                 change_set = repository.get_minimum_verified_change_set(target)
                 return self._change_impact_presenter.minimum_verified_change_set_view(change_set)
             except ValueError as exc:
-                raise McpValidationError(str(exc)) from exc
+                message = str(exc)
+                if repository_rel_path is not None:
+                    message = explain_file_target_error(
+                        repository,
+                        repository_rel_path,
+                        message,
+                        tool_name="get_minimum_verified_change_set_by_path",
+                    )
+                raise McpValidationError(message) from exc
 
         return self._with_read_only_repository(repository_path, _callback)
 
@@ -544,7 +568,14 @@ class SuitMcpService:
                         ChangeTarget(repository_rel_path=repository_rel_path)
                     )
                 except ValueError as exc:
-                    raise McpValidationError(str(exc)) from exc
+                    raise McpValidationError(
+                        explain_file_target_error(
+                            repository,
+                            repository_rel_path,
+                            str(exc),
+                            tool_name="what_should_i_run",
+                        )
+                    ) from exc
                 targets.append(
                     BatchMinimumVerifiedChangeSetTargetView(
                         repository_rel_path=repository_rel_path,
@@ -675,15 +706,15 @@ class SuitMcpService:
             )
 
         def _callback(repository: Repository) -> ActionAvailabilityView:
-            target = ChangeTarget(repository_rel_path=repository_rel_path)
-            truth_coverage = self._intelligence_presenter.truth_coverage_summary_view(
-                repository.get_change_truth_coverage(target)
-            )
-            owner = self._ownership_presenter.owner_view(repository.get_file_owner(repository_rel_path).owner)
-            primary_component = None
-            minimum_verified = None
-            available_action_kinds: tuple[str, ...] = tuple()
             try:
+                target = ChangeTarget(repository_rel_path=repository_rel_path)
+                truth_coverage = self._intelligence_presenter.truth_coverage_summary_view(
+                    repository.get_change_truth_coverage(target)
+                )
+                owner = self._ownership_presenter.owner_view(repository.get_file_owner(repository_rel_path).owner)
+                primary_component = None
+                minimum_verified = None
+                available_action_kinds: tuple[str, ...] = tuple()
                 change_set = repository.get_minimum_verified_change_set(target)
                 minimum_verified = self._change_impact_presenter.minimum_verified_change_set_view(change_set)
                 primary_component = minimum_verified.primary_component
@@ -701,7 +732,14 @@ class SuitMcpService:
                 available_action_kinds = tuple(sorted(kinds))
             except ValueError as exc:
                 if "no deterministic validation surfaces were found" not in str(exc):
-                    raise McpValidationError(str(exc)) from exc
+                    raise McpValidationError(
+                        explain_file_target_error(
+                            repository,
+                            repository_rel_path,
+                            str(exc),
+                            tool_name="can_i_do_this",
+                        )
+                    ) from exc
 
             actions_domain = next((item for item in truth_coverage.domains if item.domain == "actions"), None)
             actions_available = actions_domain is not None and actions_domain.availability == "available"
@@ -881,7 +919,7 @@ class SuitMcpService:
             return self._ownership_presenter.file_owner_view(repository.get_file_owner(repository_rel_path))
         except ValueError as exc:
             raise McpNotFoundError(
-                self._explain_unowned_file_error(repository, repository_rel_path, str(exc), tool_name="get_file_owner")
+                explain_file_target_error(repository, repository_rel_path, str(exc), tool_name="get_file_owner")
             ) from exc
 
     def list_files_by_owner(
@@ -1366,7 +1404,7 @@ class SuitMcpService:
             )
         except ValueError as exc:
             raise McpValidationError(
-                self._explain_unowned_file_error(repository, repository_rel_path, str(exc), tool_name="understand_file")
+                explain_file_target_error(repository, repository_rel_path, str(exc), tool_name="understand_file")
             ) from exc
         return FileUnderstandingTargetView(
             detail_level="full",
@@ -2657,26 +2695,3 @@ class SuitMcpService:
                 seen.add(key)
                 merged.append(entry)
         return tuple(merged)
-
-    @staticmethod
-    def _explain_unowned_file_error(
-        repository: Repository,
-        repository_rel_path: str,
-        message: str,
-        *,
-        tool_name: str,
-    ) -> str:
-        if "unknown repository file owner" not in message:
-            return message
-        candidate = (repository.root / repository_rel_path.strip().replace("\\", "/").removeprefix("./")).resolve()
-        try:
-            candidate.relative_to(repository.root)
-        except ValueError:
-            return message
-        if not candidate.exists() or not candidate.is_file():
-            return message
-        return (
-            f"{message}. `{tool_name}` currently supports only provider-owned files. "
-            "Files that exist in the repository but are not deterministically owned by a registered provider, "
-            "including unsupported plain-text or documentation artifacts, are not supported by this tool."
-        )

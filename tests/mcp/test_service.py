@@ -254,6 +254,134 @@ def test_read_only_by_path_tools_validate_and_map_errors(service: SuitMcpService
         service.repository_summary_by_path(str(unsupported_root))
 
 
+def test_file_target_tools_report_missing_file_with_exact_siblings(service: SuitMcpService, tmp_path: Path) -> None:
+    repo_root = tmp_path / "frontend-missing"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src" / "pages").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true,
+          "scripts": {
+            "build": "vite build"
+          }
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "pages" / "GamePlayerPage.tsx").write_text(
+        "export const GamePlayerPage = () => null;\n",
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "pages" / "PlayPage.tsx").write_text(
+        "export const PlayPage = () => null;\n",
+        encoding="utf-8",
+    )
+
+    expected_fragments = (
+        "repository file not found: `src/pages/BrowserPlayPage.tsx`",
+        "Exact file siblings in `src/pages`",
+        "`GamePlayerPage.tsx`",
+        "`PlayPage.tsx`",
+    )
+
+    with pytest.raises(McpNotFoundError, match="repository file not found"):
+        service.get_file_owner_by_path(str(repo_root), "src/pages/BrowserPlayPage.tsx")
+    with pytest.raises(McpValidationError, match="repository file not found"):
+        service.understand_file(str(repo_root), ("src/pages/BrowserPlayPage.tsx",))
+    with pytest.raises(McpValidationError, match="repository file not found"):
+        service.what_changes_if_i_edit_this(str(repo_root), ("src/pages/BrowserPlayPage.tsx",))
+    with pytest.raises(McpValidationError, match="repository file not found"):
+        service.what_should_i_run(str(repo_root), ("src/pages/BrowserPlayPage.tsx",))
+    with pytest.raises(McpValidationError, match="repository file not found"):
+        service.can_i_do_this(str(repo_root), "src/pages/BrowserPlayPage.tsx", "build")
+
+    for call in (
+        lambda: service.get_file_owner_by_path(str(repo_root), "src/pages/BrowserPlayPage.tsx"),
+        lambda: service.understand_file(str(repo_root), ("src/pages/BrowserPlayPage.tsx",)),
+        lambda: service.what_changes_if_i_edit_this(str(repo_root), ("src/pages/BrowserPlayPage.tsx",)),
+        lambda: service.what_should_i_run(str(repo_root), ("src/pages/BrowserPlayPage.tsx",)),
+        lambda: service.can_i_do_this(str(repo_root), "src/pages/BrowserPlayPage.tsx", "build"),
+    ):
+        with pytest.raises((McpNotFoundError, McpValidationError)) as exc_info:
+            call()
+        text = str(exc_info.value)
+        for fragment in expected_fragments:
+            assert fragment in text
+
+
+def test_file_target_tools_report_directory_targets_cleanly(service: SuitMcpService, tmp_path: Path) -> None:
+    repo_root = tmp_path / "frontend-directory"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src" / "pages").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "pages" / "GamePlayerPage.tsx").write_text(
+        "export const GamePlayerPage = () => null;\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(McpValidationError, match="is a directory, not a file"):
+        service.understand_file(str(repo_root), ("src/pages",))
+
+
+def test_workspace_file_target_tools_report_missing_file_with_exact_siblings(service: SuitMcpService, tmp_path: Path) -> None:
+    repo_root = tmp_path / "frontend-workspace-missing"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src" / "pages").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true,
+          "scripts": {
+            "build": "vite build"
+          }
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "pages" / "GamePlayerPage.tsx").write_text(
+        "export const GamePlayerPage = () => null;\n",
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "pages" / "PlayPage.tsx").write_text(
+        "export const PlayPage = () => null;\n",
+        encoding="utf-8",
+    )
+
+    opened = service.open_workspace(str(repo_root))
+    workspace_id = opened.workspace.workspace_id
+    repository_id = opened.initial_repository.repository_id
+
+    for call in (
+        lambda: service.describe_files(workspace_id, repository_id, ("src/pages/BrowserPlayPage.tsx",)),
+        lambda: service.get_related_tests(workspace_id, repository_id, repository_rel_path="src/pages/BrowserPlayPage.tsx"),
+        lambda: service.analyze_impact(workspace_id, repository_id, repository_rel_path="src/pages/BrowserPlayPage.tsx"),
+        lambda: service.analyze_change(workspace_id, repository_id, repository_rel_path="src/pages/BrowserPlayPage.tsx"),
+        lambda: service.get_minimum_verified_change_set(
+            workspace_id,
+            repository_id,
+            repository_rel_path="src/pages/BrowserPlayPage.tsx",
+        ),
+    ):
+        with pytest.raises((McpNotFoundError, McpValidationError)) as exc_info:
+            call()
+        text = str(exc_info.value)
+        assert "repository file not found: `src/pages/BrowserPlayPage.tsx`" in text
+        assert "Exact file siblings in `src/pages`" in text
+        assert "`GamePlayerPage.tsx`" in text
+        assert "`PlayPage.tsx`" in text
+
+
 def test_understand_file_supports_standalone_npm_package_root(service: SuitMcpService, tmp_path: Path) -> None:
     repo_root = tmp_path / "frontend"
     (repo_root / ".git").mkdir(parents=True)
