@@ -313,6 +313,9 @@ class StaticFlowEdgeRef(StrictModel):
 
 class ImplementationFlowStepKind(StrEnum):
     __test__ = False
+    SYMBOL_ANCHOR = "symbol_anchor"
+    EXTERNAL_REFERENCE_ANCHOR = "external_reference_anchor"
+    TEST_SEAM = "test_seam"
     STATE_SITE = "state_site"
     PROP_EDGE = "prop_edge"
     RENDER_EDGE = "render_edge"

@@ -631,10 +631,13 @@ def test_implementation_flow_summary_is_exposed_on_bounded_frontend_targets(
 
     assert file_summary is not None
     assert impact_summary is not None
+    assert len(file_summary.steps_preview) <= 4
+    assert len(impact_summary.steps_preview) <= 4
+    assert any(item.step_kind == "symbol_anchor" for item in file_summary.steps_preview)
     assert any(item.step_kind == "state_site" for item in file_summary.steps_preview)
     assert any(item.step_kind == "event_subscribe" for item in file_summary.steps_preview)
     assert any(item.step_kind == "event_publish" for item in file_summary.steps_preview)
-    assert any(item.step_kind == "prop_edge" for item in file_summary.steps_preview)
+    assert any(item.step_kind == "symbol_anchor" for item in impact_summary.steps_preview)
     assert len(file_understanding.targets[0].render_children_preview) <= 1
     assert len(file_understanding.targets[0].local_flow_edges_preview) <= 1
     assert len(impact.targets[0].render_children) <= 1

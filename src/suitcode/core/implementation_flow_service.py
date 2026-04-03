@@ -18,11 +18,24 @@ from suitcode.providers.provider_roles import ProviderRole
 
 if TYPE_CHECKING:
     from suitcode.core.code.models import CodeLocation
+    from suitcode.core.models import EntityInfo
     from suitcode.core.intelligence_models import RenderEdgeRef, StaticFlowEdgeRef
     from suitcode.core.repository import Repository
 
 
 class ImplementationFlowService:
+    _SYMBOL_SEAM_KINDS = frozenset(
+        {
+            "function",
+            "method",
+            "class",
+            "interface",
+            "struct",
+            "enum",
+            "constructor",
+        }
+    )
+
     def __init__(self, repository: Repository) -> None:
         self._repository = repository
 
@@ -60,14 +73,119 @@ class ImplementationFlowService:
         return bool(providers)
 
     def _collect_generic_steps(self, repository_rel_path: str) -> tuple[ImplementationFlowStepRef, ...]:
+        symbol_steps = self._collect_symbol_anchor_steps(repository_rel_path)
+        external_reference_steps = self._collect_external_reference_anchor_steps(repository_rel_path)
+        test_seams = self._collect_test_seams(repository_rel_path)
         render_steps = self._render_steps(repository_rel_path)
         local_flow_steps = self._local_flow_steps(repository_rel_path)
         implementation_steps = self._implementation_anchor_steps(repository_rel_path)
-        related_test_steps = self._related_test_anchor_steps(repository_rel_path)
-        return (*render_steps, *local_flow_steps, *implementation_steps, *related_test_steps)
+        return (
+            *symbol_steps,
+            *external_reference_steps,
+            *test_seams,
+            *render_steps,
+            *local_flow_steps,
+            *implementation_steps,
+        )
 
     def _collect_provider_steps(self, repository_rel_path: str) -> tuple[ImplementationFlowStepRef, ...]:
         return self._repository.code.get_file_implementation_flow_steps(repository_rel_path)
+
+    def _collect_symbol_anchor_steps(self, repository_rel_path: str) -> tuple[ImplementationFlowStepRef, ...]:
+        steps: list[ImplementationFlowStepRef] = []
+        for symbol in self._ranked_symbols(repository_rel_path):
+            step = self._symbol_anchor_step(symbol)
+            if step is not None:
+                steps.append(step)
+        return tuple(steps)
+
+    def _collect_external_reference_anchor_steps(self, repository_rel_path: str) -> tuple[ImplementationFlowStepRef, ...]:
+        steps: list[ImplementationFlowStepRef] = []
+        for symbol in self._ranked_symbols(repository_rel_path):
+            step = self._external_reference_anchor_step(repository_rel_path, symbol)
+            if step is not None:
+                steps.append(step)
+        return tuple(steps)
+
+    def _collect_test_seams(self, repository_rel_path: str) -> tuple[ImplementationFlowStepRef, ...]:
+        related_tests = self._repository.tests.get_related_tests(RelatedTestTarget(repository_rel_path=repository_rel_path))
+        steps: list[ImplementationFlowStepRef] = []
+        for item in related_tests:
+            step = self._test_seam_step(item)
+            if step is None:
+                continue
+            steps.append(step)
+            break
+        return tuple(steps)
+
+    def _ranked_symbols(self, repository_rel_path: str) -> tuple["EntityInfo", ...]:
+        ranked_symbols: list[tuple[tuple[int, int, int, int], "EntityInfo"]] = []
+        for symbol in self._repository.code.list_symbols_in_file(repository_rel_path):
+            if not self._is_symbol_anchor_candidate(symbol):
+                continue
+            ranked_symbols.append((self._symbol_rank_key(repository_rel_path, symbol), symbol))
+        return tuple(item for _, item in sorted(ranked_symbols, key=lambda pair: pair[0]))
+
+    @staticmethod
+    def _is_symbol_anchor_candidate(symbol: "EntityInfo") -> bool:
+        if symbol.line_start is None or symbol.column_start is None:
+            return False
+        if not symbol.name.strip():
+            return False
+        return symbol.entity_kind in ImplementationFlowService._SYMBOL_SEAM_KINDS
+
+    def _symbol_rank_key(self, repository_rel_path: str, symbol: "EntityInfo") -> tuple[int, int, int, int]:
+        external_reference_count = len(self._external_references_for_symbol(repository_rel_path, symbol))
+        exported = int(bool(symbol.name) and symbol.name[:1].isupper())
+        return (-external_reference_count, -exported, symbol.line_start or 10**9, symbol.column_start or 10**9)
+
+    def _symbol_anchor_step(self, symbol: "EntityInfo") -> ImplementationFlowStepRef | None:
+        if symbol.line_start is None or symbol.column_start is None:
+            return None
+        return ImplementationFlowStepRef(
+            repository_rel_path=symbol.repository_rel_path,
+            line_start=symbol.line_start,
+            column_start=symbol.column_start,
+            step_kind=ImplementationFlowStepKind.SYMBOL_ANCHOR,
+            source_label=symbol.name,
+            detail_label=symbol.entity_kind,
+            provenance=symbol.provenance,
+        )
+
+    def _external_reference_anchor_step(
+        self,
+        repository_rel_path: str,
+        symbol: "EntityInfo",
+    ) -> ImplementationFlowStepRef | None:
+        references = self._external_references_for_symbol(repository_rel_path, symbol)
+        if not references:
+            return None
+        anchor = references[0]
+        return ImplementationFlowStepRef(
+            repository_rel_path=anchor.repository_rel_path,
+            line_start=anchor.line_start,
+            column_start=anchor.column_start,
+            step_kind=ImplementationFlowStepKind.EXTERNAL_REFERENCE_ANCHOR,
+            source_label=symbol.name,
+            target_label=self._path_label(anchor.repository_rel_path),
+            detail_label=symbol.entity_kind,
+            provenance=anchor.provenance,
+        )
+
+    def _external_references_for_symbol(
+        self,
+        repository_rel_path: str,
+        symbol: "EntityInfo",
+    ) -> tuple["CodeLocation", ...]:
+        try:
+            references = self._repository.code.find_references_by_symbol_id(symbol.id)
+        except ValueError:
+            return tuple()
+        return tuple(
+            item
+            for item in references
+            if item.repository_rel_path != repository_rel_path
+        )
 
     def _render_steps(self, repository_rel_path: str) -> tuple[ImplementationFlowStepRef, ...]:
         render_children = self._repository.code.get_file_render_edges(
@@ -142,17 +260,7 @@ class ImplementationFlowService:
             provenance=location.provenance,
         )
 
-    def _related_test_anchor_steps(self, repository_rel_path: str) -> tuple[ImplementationFlowStepRef, ...]:
-        related_tests = self._repository.tests.get_related_tests(RelatedTestTarget(repository_rel_path=repository_rel_path))
-        steps: list[ImplementationFlowStepRef] = []
-        for item in related_tests:
-            step = self._related_test_anchor_step(item)
-            if step is not None:
-                steps.append(step)
-                break
-        return tuple(steps)
-
-    def _related_test_anchor_step(self, related_test: ResolvedRelatedTest) -> ImplementationFlowStepRef | None:
+    def _test_seam_step(self, related_test: ResolvedRelatedTest) -> ImplementationFlowStepRef | None:
         if any(entry.source_kind == SourceKind.HEURISTIC for entry in related_test.provenance):
             return None
         if not related_test.test_definition.test_files:
@@ -162,7 +270,7 @@ class ImplementationFlowService:
             repository_rel_path=test_path,
             line_start=1,
             column_start=1,
-            step_kind=ImplementationFlowStepKind.RELATED_TEST_ANCHOR,
+            step_kind=ImplementationFlowStepKind.TEST_SEAM,
             source_label=related_test.test_definition.name,
             detail_label=related_test.relation_reason,
             provenance=related_test.provenance,
@@ -207,16 +315,19 @@ class ImplementationFlowService:
     @staticmethod
     def _step_kind_priority(step_kind: ImplementationFlowStepKind) -> int:
         priorities = {
-            ImplementationFlowStepKind.STATE_SITE: 0,
-            ImplementationFlowStepKind.EVENT_SUBSCRIBE: 1,
-            ImplementationFlowStepKind.EVENT_PUBLISH: 2,
-            ImplementationFlowStepKind.API_CALL: 3,
-            ImplementationFlowStepKind.CONTRACT_USE: 4,
-            ImplementationFlowStepKind.PROP_EDGE: 5,
-            ImplementationFlowStepKind.RENDER_EDGE: 6,
-            ImplementationFlowStepKind.LOCAL_FLOW_EDGE: 7,
-            ImplementationFlowStepKind.IMPLEMENTATION_ANCHOR: 8,
-            ImplementationFlowStepKind.RELATED_TEST_ANCHOR: 9,
+            ImplementationFlowStepKind.SYMBOL_ANCHOR: 0,
+            ImplementationFlowStepKind.EXTERNAL_REFERENCE_ANCHOR: 1,
+            ImplementationFlowStepKind.TEST_SEAM: 2,
+            ImplementationFlowStepKind.STATE_SITE: 3,
+            ImplementationFlowStepKind.EVENT_SUBSCRIBE: 4,
+            ImplementationFlowStepKind.EVENT_PUBLISH: 5,
+            ImplementationFlowStepKind.API_CALL: 6,
+            ImplementationFlowStepKind.CONTRACT_USE: 7,
+            ImplementationFlowStepKind.PROP_EDGE: 8,
+            ImplementationFlowStepKind.RENDER_EDGE: 9,
+            ImplementationFlowStepKind.LOCAL_FLOW_EDGE: 10,
+            ImplementationFlowStepKind.IMPLEMENTATION_ANCHOR: 11,
+            ImplementationFlowStepKind.RELATED_TEST_ANCHOR: 12,
         }
         return priorities[step_kind]
 

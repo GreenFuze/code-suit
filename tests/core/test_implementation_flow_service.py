@@ -14,11 +14,14 @@ from suitcode.core.intelligence_models import (
     StaticFlowEdgeKind,
     StaticFlowEdgeRef,
 )
+from suitcode.core.models import EntityInfo, make_entity_id
 from suitcode.core.models.graph_types import TestFramework as GraphTestFramework
 from suitcode.core.models.nodes import TestDefinition as GraphTestDefinition
 from suitcode.core.provenance_builders import (
     dependency_graph_provenance,
     heuristic_provenance,
+    lsp_location_provenance,
+    lsp_node_provenance,
     lsp_provenance,
     test_tool_provenance as build_test_tool_provenance,
 )
@@ -43,6 +46,39 @@ def test_implementation_flow_step_rejects_heuristic_provenance() -> None:
 
 
 def test_implementation_flow_service_merges_generic_and_provider_steps() -> None:
+    symbol = EntityInfo(
+        id=make_entity_id("src/App.tsx", "function", "AppBootstrap", 2, 10),
+        name="AppBootstrap",
+        repository_rel_path="src/App.tsx",
+        entity_kind="function",
+        line_start=2,
+        line_end=10,
+        column_start=1,
+        column_end=20,
+        signature="function AppBootstrap(): void",
+        provenance=(
+            lsp_node_provenance(
+                source_tool="typescript-language-server",
+                evidence_summary="document symbols",
+                evidence_paths=("src/App.tsx",),
+            ),
+        ),
+    )
+    external_reference = CodeLocation(
+        repository_rel_path="src/bootstrap.ts",
+        line_start=4,
+        line_end=4,
+        column_start=3,
+        column_end=15,
+        symbol_id=symbol.id,
+        provenance=(
+            lsp_location_provenance(
+                source_tool="typescript-language-server",
+                repository_rel_path="src/bootstrap.ts",
+                operation="references",
+            ),
+        ),
+    )
     render_edge = RenderEdgeRef(
         repository_rel_path="src/Child.tsx",
         relationship_kind=RenderEdgeKind.RENDERS,
@@ -127,6 +163,14 @@ def test_implementation_flow_service_merges_generic_and_provider_steps() -> None
     )
 
     class _StubCode:
+        def list_symbols_in_file(self, repository_rel_path: str):
+            assert repository_rel_path == "src/App.tsx"
+            return (symbol,)
+
+        def find_references_by_symbol_id(self, symbol_id: str):
+            assert symbol_id == symbol.id
+            return (external_reference,)
+
         def get_file_render_edges(self, repository_rel_path: str, relationship_kind=None):
             if relationship_kind == RenderEdgeKind.RENDERS:
                 return (render_edge,)
@@ -159,14 +203,56 @@ def test_implementation_flow_service_merges_generic_and_provider_steps() -> None
     )
 
     assert summary is not None
-    assert summary.step_count == 5
+    assert summary.step_count == 7
     assert summary.provider_ids == ("npm",)
     assert [item.step_kind for item in summary.steps_preview] == [
+        ImplementationFlowStepKind.SYMBOL_ANCHOR,
+        ImplementationFlowStepKind.EXTERNAL_REFERENCE_ANCHOR,
+        ImplementationFlowStepKind.TEST_SEAM,
         ImplementationFlowStepKind.STATE_SITE,
-        ImplementationFlowStepKind.PROP_EDGE,
-        ImplementationFlowStepKind.LOCAL_FLOW_EDGE,
-        ImplementationFlowStepKind.IMPLEMENTATION_ANCHOR,
     ]
-    assert summary.steps_preview[0].source_label == "status"
-    assert summary.steps_preview[1].target_label == "Child.tsx"
-    assert summary.steps_preview[2].target_label == "status"
+    assert summary.steps_preview[0].source_label == "AppBootstrap"
+    assert summary.steps_preview[1].target_label == "bootstrap.ts"
+    assert summary.steps_preview[2].source_label == "frontend:test"
+    assert summary.steps_preview[3].source_label == "status"
+
+
+def test_implementation_flow_service_stays_sparse_without_symbol_coverage() -> None:
+    class _StubCode:
+        def list_symbols_in_file(self, repository_rel_path: str):
+            assert repository_rel_path == "src/App.tsx"
+            return tuple()
+
+        def find_references_by_symbol_id(self, symbol_id: str):
+            raise AssertionError("no symbol references should be queried without symbol coverage")
+
+        def get_file_render_edges(self, repository_rel_path: str, relationship_kind=None):
+            return tuple()
+
+        def get_file_local_flow_edges(self, repository_rel_path: str):
+            return tuple()
+
+        def get_file_implementation_locations(self, repository_rel_path: str):
+            return tuple()
+
+        def get_file_implementation_flow_steps(self, repository_rel_path: str):
+            return tuple()
+
+    class _StubTests:
+        def get_related_tests(self, target):
+            return tuple()
+
+    class _StubRepository:
+        def __init__(self) -> None:
+            self.code = _StubCode()
+            self.tests = _StubTests()
+
+        def get_providers_for_file_role(self, repository_rel_path: str, role):
+            return (SimpleNamespace(attachment=SimpleNamespace(provider_id="go")),)
+
+    summary = ImplementationFlowService(_StubRepository()).summarize_file(
+        "src/App.tsx",
+        detail_level="compact",
+    )
+
+    assert summary is None
