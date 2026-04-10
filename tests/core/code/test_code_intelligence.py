@@ -4,9 +4,13 @@ from pathlib import Path
 
 from suitcode.core.code.models import CodeLocation, SymbolLookupTarget
 from suitcode.core.code.code_intelligence import CodeIntelligence
+from suitcode.core.models import Component
 from suitcode.core.models import EntityInfo
+from suitcode.core.models import FileInfo
+from suitcode.core.models.graph_types import ComponentKind, ProgrammingLanguage
 from suitcode.core.provenance_builders import lsp_provenance
 from suitcode.core.provenance_builders import lsp_location_provenance
+from suitcode.core.provenance_builders import ownership_provenance
 from suitcode.providers.code_provider_base import CodeProviderBase
 from suitcode.providers.provider_metadata import ProviderAttachmentContext
 from suitcode.providers.provider_roles import ProviderRole
@@ -15,8 +19,9 @@ from suitcode.core.provenance import SourceKind
 
 
 class _FakeRepository:
-    def __init__(self, providers):
+    def __init__(self, providers, files: tuple[FileInfo, ...] = tuple(), components: tuple[Component, ...] = tuple()):
         self._providers = providers
+        self.arch = type("Arch", (), {"get_files": lambda _self: files, "get_components": lambda _self: components})()
 
     def get_providers_for_role(self, role: ProviderRole):
         if role == ProviderRole.CODE:
@@ -25,6 +30,10 @@ class _FakeRepository:
 
     def get_providers_for_file_role(self, repository_rel_path: str, role: ProviderRole):
         return self.get_providers_for_role(role)
+
+    @staticmethod
+    def provider_id_for_owner(owner_id: str) -> str:
+        return owner_id.split(":")[1]
 
 
 class _CodeProvider(CodeProviderBase):
@@ -183,6 +192,25 @@ def test_code_intelligence_resolves_symbol_id_for_definitions() -> None:
     assert result[0].provenance[0].source_kind.value == "lsp"
 
 
+def test_code_intelligence_resolves_symbol_id_when_provider_symbol_ranges_differ() -> None:
+    class _DifferentRangeProvider(_CodeProvider):
+        def get_symbol(self, query: str, is_case_sensitive: bool = False):
+            symbol = super().get_symbol(query, is_case_sensitive=is_case_sensitive)[0]
+            return (symbol.model_copy(update={"line_end": 3, "id": "entity:file.ts:function:Alpha:3-3"}),)
+
+        def list_symbols_in_file(self, repository_rel_path: str, query: str | None = None, is_case_sensitive: bool = False):
+            symbol = super().get_symbol(query or self._name, is_case_sensitive=is_case_sensitive)[0]
+            return (symbol.model_copy(update={"line_end": 10, "id": "entity:file.ts:function:Alpha:3-10"}),)
+
+    repo = _FakeRepository((_DifferentRangeProvider(repository=None, name="Alpha", line=3),))  # type: ignore[arg-type]
+    intelligence = CodeIntelligence(repo)  # type: ignore[arg-type]
+
+    result = intelligence.find_references_by_symbol_id("entity:file.ts:function:Alpha:3-3")
+
+    assert result[0].repository_rel_path == "file.ts"
+    assert result[0].line_start == 3
+
+
 def test_code_intelligence_collects_file_implementation_locations() -> None:
     repo = _FakeRepository((_CodeProvider(repository=None, name="Alpha", line=3),))  # type: ignore[arg-type]
     intelligence = CodeIntelligence(repo)  # type: ignore[arg-type]
@@ -192,3 +220,78 @@ def test_code_intelligence_collects_file_implementation_locations() -> None:
     assert result[0].repository_rel_path == "file.ts"
     assert result[0].line_start == 4
     assert result[0].provenance[0].source_kind.value == "lsp"
+
+
+def test_code_intelligence_degrades_runtime_capabilities_when_symbols_are_nonfunctional() -> None:
+    file_info = FileInfo(
+        id="file:fake-code:file.ts",
+        name="file.ts",
+        repository_rel_path="file.ts",
+        owner_id="component:fake-code:demo",
+        language=None,
+        provenance=(
+            ownership_provenance(
+                evidence_summary="file ownership derived from fake repository fixtures",
+                evidence_paths=("file.ts",),
+            ),
+        ),
+    )
+
+    class _NoSymbolProvider(_CodeProvider):
+        def list_symbols_in_file(self, repository_rel_path: str, query: str | None = None, is_case_sensitive: bool = False):
+            return tuple()
+
+    repo = _FakeRepository((_NoSymbolProvider(repository=None, name="Alpha", line=3),), files=(file_info,))  # type: ignore[arg-type]
+    intelligence = CodeIntelligence(repo)  # type: ignore[arg-type]
+
+    capabilities = intelligence.get_runtime_capabilities()[0]
+
+    assert capabilities.symbol_search.availability == RuntimeCapabilityAvailability.DEGRADED
+    assert capabilities.symbols_in_file.availability == RuntimeCapabilityAvailability.DEGRADED
+    assert capabilities.definitions.availability == RuntimeCapabilityAvailability.DEGRADED
+    assert capabilities.references.availability == RuntimeCapabilityAvailability.DEGRADED
+    assert "produced no symbols" in (capabilities.symbol_search.reason or "")
+
+
+def test_code_intelligence_runtime_symbol_candidates_use_component_source_roots() -> None:
+    source_file = FileInfo(
+        id="file:fake-code:src/file.ts",
+        name="src/file.ts",
+        repository_rel_path="src/file.ts",
+        owner_id="component:fake-code:demo",
+        language=None,
+        provenance=(
+            ownership_provenance(
+                evidence_summary="file ownership derived from fake repository fixtures",
+                evidence_paths=("src/file.ts",),
+            ),
+        ),
+    )
+    artifact_file = source_file.model_copy(
+        update={
+            "id": "file:fake-code:dist/file.js",
+            "name": "dist/file.js",
+            "repository_rel_path": "dist/file.js",
+        }
+    )
+    component = Component(
+        id="component:fake-code:demo",
+        name="demo",
+        component_kind=ComponentKind.PACKAGE,
+        language=ProgrammingLanguage.TYPESCRIPT,
+        source_roots=("src",),
+        artifact_paths=("dist",),
+        provenance=(
+            ownership_provenance(
+                evidence_summary="component ownership derived from fake repository fixtures",
+                evidence_paths=("src/file.ts",),
+            ),
+        ),
+    )
+    provider = _CodeProvider(repository=None, name="Alpha", line=3)  # type: ignore[arg-type]
+    repo = _FakeRepository((provider,), files=(artifact_file, source_file), components=(component,))
+    intelligence = CodeIntelligence(repo)  # type: ignore[arg-type]
+
+    candidates = intelligence._candidate_files_for_provider(provider)
+
+    assert tuple(item.repository_rel_path for item in candidates) == ("src/file.ts",)

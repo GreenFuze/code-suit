@@ -361,6 +361,12 @@ class SymbolView(StrictModel):
     column_start: int | None = None
     column_end: int | None = None
     signature: str | None = None
+    owner: OwnerView | None = None
+    reference_count: int | None = None
+    reference_preview: tuple[LocationView, ...] = Field(default_factory=tuple)
+    related_tests_preview: tuple[RelatedTestView, ...] = Field(default_factory=tuple)
+    definition_anchor: LocationView | None = None
+    context_source: str | None = None
     provenance: tuple[ProvenanceView, ...]
 
 

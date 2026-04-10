@@ -38,6 +38,7 @@ class ImplementationFlowService:
 
     def __init__(self, repository: Repository) -> None:
         self._repository = repository
+        self._external_reference_cache: dict[tuple[str, str], tuple["CodeLocation", ...]] = {}
 
     def summarize_file(
         self,
@@ -177,15 +178,22 @@ class ImplementationFlowService:
         repository_rel_path: str,
         symbol: "EntityInfo",
     ) -> tuple["CodeLocation", ...]:
+        cache_key = (repository_rel_path, symbol.id)
+        cached = self._external_reference_cache.get(cache_key)
+        if cached is not None:
+            return cached
         try:
             references = self._repository.code.find_references_by_symbol_id(symbol.id)
         except ValueError:
+            self._external_reference_cache[cache_key] = tuple()
             return tuple()
-        return tuple(
+        external_references = tuple(
             item
             for item in references
             if item.repository_rel_path != repository_rel_path
         )
+        self._external_reference_cache[cache_key] = external_references
+        return external_references
 
     def _render_steps(self, repository_rel_path: str) -> tuple[ImplementationFlowStepRef, ...]:
         render_children = self._repository.code.get_file_render_edges(

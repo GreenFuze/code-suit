@@ -2055,6 +2055,170 @@ def test_service_find_symbols_passes_case_sensitive_flag(service: SuitMcpService
     assert sensitive.total == 0
 
 
+def test_service_find_symbols_returns_enriched_symbol_context(service: SuitMcpService, opened_workspace) -> None:
+    workspace_id = opened_workspace.workspace.workspace_id
+    repository_id = opened_workspace.initial_repository.repository_id
+    repository = service._registry.get_repository(workspace_id, repository_id)
+    provider = repository.get_provider("npm")
+
+    from suitcode.core.models.nodes import TestDefinition, TestFramework
+    from suitcode.core.provenance_builders import test_tool_provenance
+    from suitcode.core.tests.models import DiscoveredTestDefinition, RelatedTestMatch, ResolvedRelatedTest
+    from suitcode.providers.npm.symbol_models import NpmWorkspaceSymbol
+
+    class _FakeSymbolService:
+        def get_symbols(self, query: str, is_case_sensitive: bool = False):
+            return (
+                NpmWorkspaceSymbol(
+                    name="Core",
+                    kind="class",
+                    repository_rel_path="packages/core/src/index.ts",
+                    line_start=1,
+                    line_end=13,
+                    column_start=1,
+                    column_end=2,
+                    container_name=None,
+                    signature="class Core",
+                ),
+            )
+
+    class _FakeFileSymbolService:
+        def list_file_symbols(self, repository_rel_path: str, query: str | None = None, is_case_sensitive: bool = False):
+            assert repository_rel_path == "packages/core/src/index.ts"
+            return (
+                NpmWorkspaceSymbol(
+                    name="Core",
+                    kind="class",
+                    repository_rel_path="packages/core/src/index.ts",
+                    line_start=1,
+                    line_end=13,
+                    column_start=1,
+                    column_end=2,
+                    container_name=None,
+                    signature="class Core",
+                ),
+            )
+
+        def find_definition(self, repository_rel_path: str, line: int, column: int):
+            return (("packages/core/src/index.ts", 1, 13, 1, 2),)
+
+        def find_references(self, repository_rel_path: str, line: int, column: int, include_definition: bool = False):
+            return (
+                ("packages/core/src/index.ts", 1, 13, 1, 2),
+                ("packages/utils/src/index.ts", 7, 9, 1, 2),
+            )
+
+    provider._symbol_service = _FakeSymbolService()  # type: ignore[attr-defined]
+    provider._file_symbol_service = _FakeFileSymbolService()  # type: ignore[attr-defined]
+    test_definition = TestDefinition(
+        id="test:npm:@monorepo/core",
+        name="@monorepo/core tests",
+        framework=TestFramework.OTHER,
+        test_files=("packages/core/src/index.test.ts",),
+        provenance=(
+            test_tool_provenance(
+                source_tool="jest",
+                evidence_summary="authoritative jest discovery for core tests",
+                evidence_paths=("packages/core/src/index.test.ts",),
+            ),
+        ),
+    )
+    test_provenance = (
+        test_tool_provenance(
+            source_tool="jest",
+            evidence_summary="authoritative jest discovery for core tests",
+            evidence_paths=("packages/core/src/index.test.ts",),
+        ),
+    )
+    repository.tests.get_related_tests = lambda target: (  # type: ignore[method-assign]
+        ResolvedRelatedTest(
+            match=RelatedTestMatch(
+                test_definition=test_definition,
+                relation_reason="same_component",
+                matched_owner_id="component:npm:@monorepo/core",
+                matched_repository_rel_path="packages/core/src/index.ts",
+            ),
+            discovered_test=DiscoveredTestDefinition(
+                test_definition=test_definition,
+                provenance=test_provenance,
+            ),
+        ),
+    )
+
+    result = service.find_symbols(workspace_id, repository_id, query="Core")
+
+    assert result.total == 1
+    hit = result.items[0]
+    assert hit.owner is not None
+    assert hit.owner.id == "component:npm:@monorepo/core"
+    assert hit.reference_count == 1
+    assert len(hit.reference_preview) == 1
+    assert hit.reference_preview[0].path == "packages/utils/src/index.ts"
+    assert hit.definition_anchor is not None
+    assert hit.definition_anchor.path == "packages/core/src/index.ts"
+    assert hit.related_tests_preview
+    assert hit.context_source == "symbol + owner + references + related_tests"
+
+
+def test_service_find_symbols_defaults_to_compact_top_level_budget(service: SuitMcpService, opened_workspace) -> None:
+    workspace_id = opened_workspace.workspace.workspace_id
+    repository_id = opened_workspace.initial_repository.repository_id
+    repository = service._registry.get_repository(workspace_id, repository_id)
+    provider = repository.get_provider("npm")
+
+    from suitcode.providers.npm.symbol_models import NpmWorkspaceSymbol
+
+    class _ManySymbolsService:
+        def get_symbols(self, query: str, is_case_sensitive: bool = False):
+            return tuple(
+                NpmWorkspaceSymbol(
+                    name=f"Core{i}",
+                    kind="class",
+                    repository_rel_path="packages/core/src/index.ts",
+                    line_start=i + 1,
+                    line_end=i + 1,
+                    column_start=1,
+                    column_end=2,
+                    container_name=None,
+                    signature=None,
+                )
+                for i in range(6)
+            )
+
+    class _SparseFileSymbolService:
+        def list_file_symbols(self, repository_rel_path: str, query: str | None = None, is_case_sensitive: bool = False):
+            return tuple(
+                NpmWorkspaceSymbol(
+                    name=f"Core{i}",
+                    kind="class",
+                    repository_rel_path="packages/core/src/index.ts",
+                    line_start=i + 1,
+                    line_end=i + 1,
+                    column_start=1,
+                    column_end=2,
+                    container_name=None,
+                    signature=None,
+                )
+                for i in range(6)
+            )
+
+        def find_definition(self, repository_rel_path: str, line: int, column: int):
+            return (("packages/core/src/index.ts", line, line, column, column + 1),)
+
+        def find_references(self, repository_rel_path: str, line: int, column: int, include_definition: bool = False):
+            return (("packages/core/src/index.ts", line, line, column, column + 1),)
+
+    provider._symbol_service = _ManySymbolsService()  # type: ignore[attr-defined]
+    provider._file_symbol_service = _SparseFileSymbolService()  # type: ignore[attr-defined]
+
+    result = service.find_symbols(workspace_id, repository_id, query="Core*")
+
+    assert result.limit == 5
+    assert result.total == 6
+    assert len(result.items) == 5
+    assert result.truncated is True
+
+
 def test_service_quality_requires_provider_id(service: SuitMcpService, opened_workspace) -> None:
     workspace_id = opened_workspace.workspace.workspace_id
     repository_id = opened_workspace.initial_repository.repository_id

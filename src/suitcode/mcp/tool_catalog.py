@@ -156,7 +156,7 @@ FULL_TOOL_CATALOG: tuple[ToolBinding, ...] = (
     ),
     _read_only(
         "find_symbols",
-        "Use this to query repository symbols before manual code exploration. Exact full match by default, use `*` or `?` for glob matching, and `is_case_sensitive` defaults to false.",
+        "Use this to query repository symbols before manual code exploration. Exact full match by default, use `*` or `?` for glob matching, and `is_case_sensitive` defaults to false. Results include compact owner, definition anchor, exact reference preview, and related-test context when provider evidence exists.",
     ),
     _read_only(
         "list_symbols_in_file",

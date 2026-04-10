@@ -94,3 +94,25 @@ def test_entity_column_range_validation() -> None:
                 ),
             ),
         )
+
+
+def test_entity_column_range_allows_multiline_lsp_ranges() -> None:
+    entity = EntityInfo(
+        id="entity:src/app.py:function:main:1-3",
+        name="main",
+        repository_rel_path="src/app.py",
+        entity_kind="function",
+        line_start=1,
+        line_end=3,
+        column_start=20,
+        column_end=4,
+        provenance=(
+            lsp_provenance(
+                source_tool="basedpyright",
+                evidence_summary="discovered from test lsp fixture",
+                evidence_paths=("src/app.py",),
+            ),
+        ),
+    )
+
+    assert entity.column_end == 4

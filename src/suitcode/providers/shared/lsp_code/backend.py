@@ -41,6 +41,8 @@ class LspCodeBackend:
         supported_extensions: frozenset[str],
         symbol_kind_by_code: Mapping[int, str],
         ignored_directories: frozenset[str],
+        included_roots: frozenset[str] | None = None,
+        enable_workspace_symbol_fallback: bool = True,
         client_factory: LspClientFactory | None = None,
         session_manager: LspSessionManager | None = None,
     ) -> None:
@@ -50,6 +52,8 @@ class LspCodeBackend:
         self._supported_extensions = supported_extensions
         self._symbol_kind_by_code = dict(symbol_kind_by_code)
         self._ignored_directories = ignored_directories
+        self._included_roots = included_roots
+        self._enable_workspace_symbol_fallback = enable_workspace_symbol_fallback
         self._client_factory = client_factory or (
             lambda command, cwd, initialization_options=None: LspClient(
                 command,
@@ -69,7 +73,10 @@ class LspCodeBackend:
     def get_symbols(self, query: str, is_case_sensitive: bool = False) -> tuple[LspRepositorySymbol, ...]:
         normalized_query = self._validate_query(query)
         with self.open_session() as client:
-            raw = client.workspace_symbol(self._workspace_query(normalized_query))
+            try:
+                raw = client.workspace_symbol(self._workspace_query(normalized_query))
+            except LspProtocolError:
+                raw = tuple()
             translated = tuple(
                 item
                 for item in (self._translate_workspace_symbol(symbol) for symbol in raw)
@@ -88,6 +95,8 @@ class LspCodeBackend:
                         ),
                     )
                 )
+            if not self._enable_workspace_symbol_fallback:
+                return tuple()
             fallback = self._fallback_symbols(client, normalized_query, is_case_sensitive)
         return tuple(
             sorted(
@@ -334,11 +343,23 @@ class LspCodeBackend:
         files: list[Path] = []
         for extension in self._supported_extensions:
             for file_path in self._repository_root.rglob(f"*{extension}"):
+                relative_path = file_path.relative_to(self._repository_root).as_posix()
+                if self._included_roots is not None and not self._is_included_path(relative_path):
+                    continue
                 relative_parts = file_path.relative_to(self._repository_root).parts[:-1]
                 if any(part in self._ignored_directories or part.startswith(".") for part in relative_parts):
                     continue
                 files.append(file_path)
         return tuple(sorted(set(files)))
+
+    def _is_included_path(self, repository_rel_path: str) -> bool:
+        if self._included_roots is None:
+            return True
+        normalized_path = repository_rel_path.strip().strip("/").replace("\\", "/")
+        return any(
+            not root or normalized_path == root or normalized_path.startswith(f"{root}/")
+            for root in self._included_roots
+        )
 
     def _flatten_symbols(
         self,
@@ -349,14 +370,15 @@ class LspCodeBackend:
         flattened: list[LspRepositorySymbol] = []
         for symbol in symbols:
             current_container_name = container_name or symbol.container_name
+            symbol_range = symbol.range
             selection_range = symbol.selection_range
             flattened.append(
                 LspRepositorySymbol(
                     name=symbol.name,
                     kind=self._symbol_kind(symbol.kind),
                     repository_rel_path=repository_rel_path,
-                    line_start=selection_range.start.line + 1,
-                    line_end=selection_range.end.line + 1,
+                    line_start=symbol_range.start.line + 1,
+                    line_end=symbol_range.end.line + 1,
                     column_start=selection_range.start.character + 1,
                     column_end=selection_range.end.character + 1,
                     container_name=current_container_name,

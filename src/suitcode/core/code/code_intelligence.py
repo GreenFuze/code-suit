@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from suitcode.core.code.models import CodeLocation, SymbolLookupTarget
 from suitcode.core.intelligence_models import (
     FileRelationshipKind,
@@ -10,19 +12,33 @@ from suitcode.core.intelligence_models import (
     RenderEdgeRef,
     StaticFlowEdgeRef,
 )
-from suitcode.core.models import EntityInfo
+from suitcode.core.models import EntityInfo, FileInfo
 from suitcode.core.models.ids import normalize_repository_relative_path
 from suitcode.core.provenance import ProvenanceEntry, SourceKind
 from suitcode.core.provenance_builders import derived_summary_provenance
 from suitcode.core.provenance_summary import merge_provenance_paths, preferred_source_tool
 from suitcode.providers.code_provider_base import CodeProviderBase
 from suitcode.providers.provider_roles import ProviderRole
-from suitcode.providers.runtime_capability_models import CodeRuntimeCapabilities
+from suitcode.providers.runtime_capability_models import (
+    CodeRuntimeCapabilities,
+    RuntimeCapability,
+    RuntimeCapabilityAvailability,
+)
+
+
+@dataclass(frozen=True)
+class _ProviderSymbolCoverage:
+    representative_file: str
+    representative_symbol: EntityInfo
+    has_workspace_match: bool
+    has_definition: bool
+    has_references: bool
 
 
 class CodeIntelligence:
     def __init__(self, repository: "Repository") -> None:
         self._repository = repository
+        self._runtime_capabilities_cache: tuple[CodeRuntimeCapabilities, ...] | None = None
 
     @property
     def repository(self) -> "Repository":
@@ -94,7 +110,11 @@ class CodeIntelligence:
         )
 
     def get_runtime_capabilities(self) -> tuple[CodeRuntimeCapabilities, ...]:
-        return tuple(provider.get_code_runtime_capabilities() for provider in self.providers)
+        if self._runtime_capabilities_cache is None:
+            self._runtime_capabilities_cache = tuple(
+                self._verified_runtime_capabilities(provider) for provider in self.providers
+            )
+        return self._runtime_capabilities_cache
 
     def get_file_implementation_locations(self, repository_rel_path: str) -> tuple[CodeLocation, ...]:
         normalized_path = normalize_repository_relative_path(repository_rel_path)
@@ -412,6 +432,8 @@ class CodeIntelligence:
         repository_rel_path = normalize_repository_relative_path(parts[1])
         matches = [item for item in self.list_symbols_in_file(repository_rel_path) if item.id == symbol_id]
         if not matches:
+            matches = self._resolve_symbol_target_by_id_parts(symbol_id, repository_rel_path)
+        if not matches:
             raise ValueError(f"symbol id could not be resolved: `{symbol_id}`")
         if len(matches) > 1:
             raise ValueError(f"symbol id resolved ambiguously: `{symbol_id}`")
@@ -420,11 +442,249 @@ class CodeIntelligence:
             raise ValueError(f"symbol id has no usable location: `{symbol_id}`")
         return repository_rel_path, match.line_start, match.column_start
 
+    def _resolve_symbol_target_by_id_parts(self, symbol_id: str, repository_rel_path: str) -> list[EntityInfo]:
+        parts = symbol_id.split(":")
+        if len(parts) < 5:
+            return []
+        entity_kind = parts[2]
+        entity_name = parts[3]
+        line_range = parts[4]
+        line_range_parts = line_range.split("-", 1)
+        if len(line_range_parts) != 2:
+            return []
+        try:
+            line_start = int(line_range_parts[0])
+        except ValueError:
+            return []
+        return [
+            item
+            for item in self.list_symbols_in_file(repository_rel_path)
+            if item.entity_kind == entity_kind
+            and item.name == entity_name
+            and item.line_start == line_start
+        ]
+
     def _providers_for_file(self, repository_rel_path: str) -> tuple[CodeProviderBase, ...]:
         return tuple(
             provider
             for provider in self._repository.get_providers_for_file_role(repository_rel_path, ProviderRole.CODE)
             if isinstance(provider, CodeProviderBase)
+        )
+
+    def _verified_runtime_capabilities(self, provider: CodeProviderBase) -> CodeRuntimeCapabilities:
+        capabilities = provider.get_code_runtime_capabilities()
+        if not any(
+            capability.availability == RuntimeCapabilityAvailability.AVAILABLE
+            for capability in (
+                capabilities.symbol_search,
+                capabilities.symbols_in_file,
+                capabilities.definitions,
+                capabilities.references,
+                capabilities.implementations,
+            )
+        ):
+            return capabilities
+        coverage = self._provider_symbol_coverage(provider)
+        if coverage is None:
+            reason = (
+                "provider-backed symbol coverage produced no symbols on representative owned files"
+            )
+            return CodeRuntimeCapabilities(
+                symbol_search=self._degrade_runtime_capability(capabilities.symbol_search, reason),
+                symbols_in_file=self._degrade_runtime_capability(capabilities.symbols_in_file, reason),
+                definitions=self._degrade_runtime_capability(capabilities.definitions, reason),
+                references=self._degrade_runtime_capability(capabilities.references, reason),
+                implementations=self._degrade_runtime_capability(capabilities.implementations, reason),
+            )
+        return CodeRuntimeCapabilities(
+            symbol_search=(
+                capabilities.symbol_search
+                if coverage.has_workspace_match
+                else self._degrade_runtime_capability(
+                    capabilities.symbol_search,
+                    f"exact symbol search returned no provider-backed match for `{coverage.representative_symbol.name}`",
+                )
+            ),
+            symbols_in_file=capabilities.symbols_in_file,
+            definitions=(
+                capabilities.definitions
+                if coverage.has_definition
+                else self._degrade_runtime_capability(
+                    capabilities.definitions,
+                    f"provider-backed definition lookup returned no result for `{coverage.representative_symbol.name}` in `{coverage.representative_file}`",
+                )
+            ),
+            references=(
+                capabilities.references
+                if coverage.has_references
+                else self._degrade_runtime_capability(
+                    capabilities.references,
+                    f"provider-backed reference lookup returned no result for `{coverage.representative_symbol.name}` in `{coverage.representative_file}`",
+                )
+            ),
+            implementations=capabilities.implementations,
+        )
+
+    def _provider_symbol_coverage(self, provider: CodeProviderBase) -> _ProviderSymbolCoverage | None:
+        first_symbol_coverage: _ProviderSymbolCoverage | None = None
+        checked_workspace_symbols = 0
+        for file_info in self._candidate_files_for_provider(provider):
+            try:
+                symbols = provider.list_symbols_in_file(file_info.repository_rel_path)
+            except ValueError:
+                continue
+            if not symbols:
+                continue
+            for symbol in self._searchable_symbol_candidates(symbols):
+                if symbol.line_start is None or symbol.column_start is None:
+                    continue
+                checked_workspace_symbols += 1
+                if checked_workspace_symbols > 10:
+                    return first_symbol_coverage
+                has_workspace_match = self._provider_has_workspace_symbol_match(provider, symbol)
+                if not has_workspace_match:
+                    if first_symbol_coverage is None:
+                        first_symbol_coverage = _ProviderSymbolCoverage(
+                            representative_file=file_info.repository_rel_path,
+                            representative_symbol=symbol,
+                            has_workspace_match=False,
+                            has_definition=False,
+                            has_references=False,
+                        )
+                    continue
+                has_definition = self._provider_has_definition(provider, file_info.repository_rel_path, symbol)
+                has_references = self._provider_has_references(provider, file_info.repository_rel_path, symbol)
+                return _ProviderSymbolCoverage(
+                    representative_file=file_info.repository_rel_path,
+                    representative_symbol=symbol,
+                    has_workspace_match=has_workspace_match,
+                    has_definition=has_definition,
+                    has_references=has_references,
+                )
+        return first_symbol_coverage
+
+    @classmethod
+    def _searchable_symbol_candidates(cls, symbols: tuple[EntityInfo, ...]) -> tuple[EntityInfo, ...]:
+        candidates = tuple(
+            symbol
+            for symbol in symbols
+            if cls._is_searchable_symbol_name(symbol.name)
+        )
+        return tuple(
+            sorted(
+                candidates,
+                key=lambda item: (
+                    -int(item.name[:1].isupper()),
+                    item.line_start or 10**9,
+                    item.column_start or 10**9,
+                    item.name,
+                    item.id,
+                ),
+            )[:5]
+        )
+
+    @staticmethod
+    def _is_searchable_symbol_name(name: str) -> bool:
+        if not name:
+            return False
+        return all(character == "_" or character.isalnum() for character in name)
+
+    def _provider_has_workspace_symbol_match(self, provider: CodeProviderBase, symbol: EntityInfo) -> bool:
+        try:
+            matches = provider.get_symbol(symbol.name, is_case_sensitive=True)
+        except ValueError:
+            return False
+        return any(self._symbols_refer_to_same_anchor(item, symbol) for item in matches)
+
+    @staticmethod
+    def _symbols_refer_to_same_anchor(left: EntityInfo, right: EntityInfo) -> bool:
+        if left.id == right.id:
+            return True
+        return (
+            left.repository_rel_path == right.repository_rel_path
+            and left.name == right.name
+            and left.entity_kind == right.entity_kind
+            and left.line_start == right.line_start
+        )
+
+    @staticmethod
+    def _provider_has_definition(provider: CodeProviderBase, repository_rel_path: str, symbol: EntityInfo) -> bool:
+        try:
+            definitions = provider.find_definition(repository_rel_path, symbol.line_start, symbol.column_start)  # type: ignore[arg-type]
+        except ValueError:
+            return False
+        return bool(definitions)
+
+    @staticmethod
+    def _provider_has_references(provider: CodeProviderBase, repository_rel_path: str, symbol: EntityInfo) -> bool:
+        try:
+            references = provider.find_references(
+                repository_rel_path,
+                symbol.line_start,  # type: ignore[arg-type]
+                symbol.column_start,  # type: ignore[arg-type]
+                include_definition=True,
+            )
+        except ValueError:
+            return False
+        return bool(references)
+
+    def _candidate_files_for_provider(self, provider: CodeProviderBase) -> tuple[FileInfo, ...]:
+        provider_id = provider.attachment.provider_id
+        attachment_root_rel_path = provider.attachment.attachment_root_rel_path
+        source_roots = self._component_source_roots_for_provider(provider_id)
+        return tuple(
+            sorted(
+                (
+                    file_info
+                    for file_info in self._repository.arch.get_files()
+                    if self._repository.provider_id_for_owner(file_info.owner_id) == provider_id
+                    and self._attachment_contains_path(attachment_root_rel_path, file_info.repository_rel_path)
+                    and (not source_roots or self._is_under_any_root(file_info.repository_rel_path, source_roots))
+                ),
+                key=lambda item: item.repository_rel_path,
+            )
+        )
+
+    def _component_source_roots_for_provider(self, provider_id: str) -> frozenset[str]:
+        roots: set[str] = set()
+        for component in self._repository.arch.get_components():
+            try:
+                component_provider_id = self._repository.provider_id_for_owner(component.id)
+            except ValueError:
+                continue
+            if component_provider_id != provider_id:
+                continue
+            roots.update(root for root in component.source_roots if root)
+        return frozenset(roots)
+
+    @staticmethod
+    def _is_under_any_root(repository_rel_path: str, roots: frozenset[str]) -> bool:
+        normalized_path = repository_rel_path.strip().strip("/").replace("\\", "/")
+        for root in roots:
+            normalized_root = root.strip().strip("/").replace("\\", "/")
+            if not normalized_root:
+                continue
+            if normalized_path == normalized_root or normalized_path.startswith(f"{normalized_root}/"):
+                return True
+        return False
+
+    @staticmethod
+    def _attachment_contains_path(attachment_root_rel_path: str, repository_rel_path: str) -> bool:
+        attachment_root = attachment_root_rel_path.strip().strip("/").replace("\\", "/")
+        normalized_path = repository_rel_path.strip().strip("/").replace("\\", "/")
+        if not attachment_root or attachment_root == ".":
+            return True
+        return normalized_path == attachment_root or normalized_path.startswith(f"{attachment_root}/")
+
+    @staticmethod
+    def _degrade_runtime_capability(capability: RuntimeCapability, reason: str) -> RuntimeCapability:
+        if capability.availability != RuntimeCapabilityAvailability.AVAILABLE:
+            return capability
+        return capability.model_copy(
+            update={
+                "availability": RuntimeCapabilityAvailability.DEGRADED,
+                "reason": reason,
+            }
         )
 
     def _architecture_projected_file_relationships(

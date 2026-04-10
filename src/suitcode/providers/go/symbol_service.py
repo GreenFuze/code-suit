@@ -63,7 +63,40 @@ class _GoSymbolServiceBase:
         )
 
     def get_symbols(self, query: str, is_case_sensitive: bool = False) -> tuple[GoWorkspaceSymbol, ...]:
-        return tuple(self._to_go_symbol(item) for item in self._backend.get_symbols(query, is_case_sensitive=is_case_sensitive))
+        normalized_query = query.strip()
+        if not normalized_query:
+            raise ValueError("symbol query must not be empty")
+        if "*" in normalized_query or "?" in normalized_query:
+            return tuple(
+                self._to_go_symbol(item)
+                for item in self._backend.get_symbols(normalized_query, is_case_sensitive=is_case_sensitive)
+            )
+        symbols: list[GoWorkspaceSymbol] = []
+        candidate_files = self._iter_exact_query_files(normalized_query, is_case_sensitive)
+        if not candidate_files:
+            return tuple()
+        with self._backend.open_session() as client:
+            for attachment_rel_path in candidate_files:
+                symbols.extend(
+                    self._to_go_symbol(item)
+                    for item in self._backend.list_file_symbols_with_client(
+                        client,
+                        attachment_rel_path,
+                        query=normalized_query,
+                        is_case_sensitive=is_case_sensitive,
+                    )
+                )
+        return tuple(
+            sorted(
+                symbols,
+                key=lambda item: (
+                    item.name,
+                    item.repository_rel_path,
+                    item.line_start or 0,
+                    item.column_start or 0,
+                ),
+            )
+        )
 
     def list_file_symbols(
         self,
@@ -145,6 +178,24 @@ class _GoSymbolServiceBase:
         if not normalized:
             return self._attachment_root_rel_path
         return f"{self._attachment_root_rel_path}/{normalized}"
+
+    def _iter_exact_query_files(self, query: str, is_case_sensitive: bool) -> tuple[str, ...]:
+        files: list[str] = []
+        for file_path in self._attachment_root.rglob("*.go"):
+            if not file_path.is_file():
+                continue
+            relative_parts = file_path.relative_to(self._attachment_root).parts[:-1]
+            if any(part in self._IGNORED_DIRECTORIES or part.startswith(".") for part in relative_parts):
+                continue
+            try:
+                content = file_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                content = file_path.read_text(encoding="utf-8", errors="ignore")
+            candidate_content = content if is_case_sensitive else content.casefold()
+            candidate_query = query if is_case_sensitive else query.casefold()
+            if candidate_query in candidate_content:
+                files.append(file_path.relative_to(self._attachment_root).as_posix())
+        return tuple(sorted(files))
 
     @contextmanager
     def open_session(self):

@@ -13,6 +13,7 @@ from suitcode.core.intelligence_models import (
     ImplementationFlowSummaryRef,
     ImpactSummary,
     ImpactTarget,
+    SymbolLookupHit,
     SymbolContext,
 )
 from suitcode.core.change_models import ChangeImpact, ChangeTarget
@@ -29,6 +30,7 @@ from suitcode.core.repository_models import FileOwnerInfo, OwnedNodeInfo
 from suitcode.core.truth_coverage_models import TruthCoverageSummary
 from suitcode.core.truth_coverage_service import TruthCoverageService
 from suitcode.core.runner_service import RunnerService
+from suitcode.core.symbol_lookup_service import SymbolLookupService
 from suitcode.core.structured_artifact_models import StructuredArtifact
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
 from suitcode.providers.code_provider_base import CodeProviderBase
@@ -160,6 +162,7 @@ class Repository:
         self._minimum_verified_change_set_service: MinimumVerifiedChangeSetService | None = None
         self._truth_coverage_service: TruthCoverageService | None = None
         self._implementation_flow_service: ImplementationFlowService | None = None
+        self._symbol_lookup_service: SymbolLookupService | None = None
         self._truth_coverage_cache: TruthCoverageSummary | None = None
         self._truth_coverage_lock = Lock()
         self._initialize_providers(support)
@@ -467,6 +470,17 @@ class Repository:
             test_preview_limit=test_preview_limit,
         )
 
+    def find_symbols_with_context(
+        self,
+        query: str,
+        *,
+        is_case_sensitive: bool = False,
+    ) -> tuple[SymbolLookupHit, ...]:
+        return self._build_symbol_lookup_service().find_symbols(
+            query,
+            is_case_sensitive=is_case_sensitive,
+        )
+
     def analyze_impact(
         self,
         target: ImpactTarget,
@@ -649,6 +663,11 @@ class Repository:
         if self._implementation_flow_service is None:
             self._implementation_flow_service = ImplementationFlowService(self)
         return self._implementation_flow_service
+
+    def _build_symbol_lookup_service(self) -> SymbolLookupService:
+        if self._symbol_lookup_service is None:
+            self._symbol_lookup_service = SymbolLookupService(self)
+        return self._symbol_lookup_service
 
     def _validate_unique_file_ownership(self) -> None:
         file_owners: dict[str, tuple[str, str, str]] = {}

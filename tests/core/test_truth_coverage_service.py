@@ -75,18 +75,19 @@ def test_truth_coverage_summary_requires_all_domains(npm_repo_root) -> None:
 
 def test_repository_truth_coverage_for_npm(monkeypatch, npm_repo_root) -> None:
     repository = Workspace(npm_repo_root).repositories[0]
-    for provider in repository.code.providers:
-        monkeypatch.setattr(
-            provider,
-            "get_code_runtime_capabilities",
-            lambda: CodeRuntimeCapabilities(
+    monkeypatch.setattr(
+        repository.code,
+        "get_runtime_capabilities",
+        lambda: (
+            CodeRuntimeCapabilities(
                 symbol_search=_runtime_capability("repo.code.symbol_search", "available", "lsp", "typescript-language-server"),
                 symbols_in_file=_runtime_capability("repo.code.symbols_in_file", "available", "lsp", "typescript-language-server"),
                 definitions=_runtime_capability("repo.code.definitions", "available", "lsp", "typescript-language-server"),
                 references=_runtime_capability("repo.code.references", "available", "lsp", "typescript-language-server"),
                 implementations=_runtime_capability("repo.code.implementations", "available", "lsp", "typescript-language-server"),
             ),
-        )
+        ),
+    )
     for provider in repository.quality.providers:
         monkeypatch.setattr(
             provider,

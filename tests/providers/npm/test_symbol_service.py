@@ -6,6 +6,7 @@ import pytest
 
 from suitcode.core.repository import Repository
 from suitcode.providers.npm.symbol_service import NpmFileSymbolService, NpmSymbolService
+from suitcode.providers.npm.symbol_models import NpmWorkspaceSymbol
 from suitcode.providers.shared.lsp.messages import (
     LspDocumentSymbol,
     LspLocation,
@@ -63,6 +64,29 @@ def _symbol(uri: str, name: str = "Core", kind: int = 5) -> LspWorkspaceSymbol:
             ),
         ),
     )
+
+
+def _npm_symbol(path: str, name: str = "Core", kind: str = "class") -> NpmWorkspaceSymbol:
+    return NpmWorkspaceSymbol(
+        name=name,
+        kind=kind,
+        repository_rel_path=path,
+        line_start=1,
+        line_end=10,
+        column_start=1,
+        column_end=2,
+        container_name=None,
+        signature=None,
+    )
+
+
+def _stub_ast_symbols(
+    service: NpmSymbolService,
+    symbols_by_path: dict[str, tuple[NpmWorkspaceSymbol, ...]],
+) -> None:
+    service._iter_source_files = lambda: tuple(symbols_by_path)  # type: ignore[method-assign]
+    service._could_contain_symbol_query = lambda path, query, is_case_sensitive: True  # type: ignore[method-assign]
+    service._typescript_ast_file_symbols = lambda path: symbols_by_path.get(path, tuple())  # type: ignore[method-assign]
 
 
 class _FakeDocumentClient:
@@ -289,21 +313,17 @@ def test_symbol_service_rejects_empty_query(npm_repository: Repository) -> None:
         service.get_symbols("  ")
 
 
-def test_symbol_service_filters_results_to_repository_local_js_ts_files(tmp_path: Path, npm_repository: Repository) -> None:
-    inside_ts = (npm_repository.root / "packages" / "core" / "src" / "index.ts").resolve().as_uri()
-    outside_py = (tmp_path / "outside.py").resolve().as_uri()
-    inside_py = (npm_repository.root / "tools" / "codegen" / "main.py").resolve().as_uri()
-
+def test_symbol_service_filters_results_to_repository_local_js_ts_files(npm_repository: Repository) -> None:
     service = NpmSymbolService(
         npm_repository,
         resolver=_FakeResolver(),
-        client_factory=lambda command, cwd: _FakeClient(
-            (
-                _symbol(inside_ts, name="Core", kind=5),
-                _symbol(outside_py, name="Outside", kind=12),
-                _symbol(inside_py, name="Codegen", kind=12),
-            )
-        ),
+        client_factory=lambda command, cwd: _FakeClient(tuple()),
+    )
+    _stub_ast_symbols(
+        service,
+        {
+            "packages/core/src/index.ts": (_npm_symbol("packages/core/src/index.ts", name="Core", kind="class"),),
+        },
     )
 
     symbols = service.get_symbols("Core")
@@ -317,17 +337,19 @@ def test_symbol_service_filters_results_to_repository_local_js_ts_files(tmp_path
 
 
 def test_symbol_service_matches_exact_names_case_insensitively(npm_repository: Repository) -> None:
-    inside_ts = (npm_repository.root / "packages" / "core" / "src" / "index.ts").resolve().as_uri()
-
     service = NpmSymbolService(
         npm_repository,
         resolver=_FakeResolver(),
-        client_factory=lambda command, cwd: _FakeClient(
-            (
-                _symbol(inside_ts, name="Core", kind=5),
-                _symbol(inside_ts, name="CoreFactory", kind=5),
-            )
-        ),
+        client_factory=lambda command, cwd: _FakeClient(tuple()),
+    )
+    _stub_ast_symbols(
+        service,
+        {
+            "packages/core/src/index.ts": (
+                _npm_symbol("packages/core/src/index.ts", name="Core", kind="class"),
+                _npm_symbol("packages/core/src/index.ts", name="CoreFactory", kind="class"),
+            ),
+        },
     )
 
     symbols = service.get_symbols("core")
@@ -336,16 +358,16 @@ def test_symbol_service_matches_exact_names_case_insensitively(npm_repository: R
 
 
 def test_symbol_service_respects_case_sensitive_flag(npm_repository: Repository) -> None:
-    inside_ts = (npm_repository.root / "packages" / "core" / "src" / "index.ts").resolve().as_uri()
-
     service = NpmSymbolService(
         npm_repository,
         resolver=_FakeResolver(),
-        client_factory=lambda command, cwd: _FakeClient(
-            (
-                _symbol(inside_ts, name="Core", kind=5),
-            )
-        ),
+        client_factory=lambda command, cwd: _FakeClient(tuple()),
+    )
+    _stub_ast_symbols(
+        service,
+        {
+            "packages/core/src/index.ts": (_npm_symbol("packages/core/src/index.ts", name="Core", kind="class"),),
+        },
     )
 
     assert service.get_symbols("core", is_case_sensitive=True) == tuple()
@@ -353,17 +375,19 @@ def test_symbol_service_respects_case_sensitive_flag(npm_repository: Repository)
 
 
 def test_symbol_service_uses_glob_matching_when_query_contains_wildcards(npm_repository: Repository) -> None:
-    inside_ts = (npm_repository.root / "packages" / "core" / "src" / "index.ts").resolve().as_uri()
-
     service = NpmSymbolService(
         npm_repository,
         resolver=_FakeResolver(),
-        client_factory=lambda command, cwd: _FakeClient(
-            (
-                _symbol(inside_ts, name="Core", kind=5),
-                _symbol(inside_ts, name="CoreFactory", kind=5),
-            )
-        ),
+        client_factory=lambda command, cwd: _FakeClient(tuple()),
+    )
+    _stub_ast_symbols(
+        service,
+        {
+            "packages/core/src/index.ts": (
+                _npm_symbol("packages/core/src/index.ts", name="Core", kind="class"),
+                _npm_symbol("packages/core/src/index.ts", name="CoreFactory", kind="class"),
+            ),
+        },
     )
 
     symbols = service.get_symbols("Core*")
@@ -450,3 +474,73 @@ def test_file_symbol_service_definition_and_references_translate_locations(npm_r
 
     assert definition == (("packages/core/src/index.ts", 7, 7, 3, 9),)
     assert references == definition
+
+
+def test_file_symbol_service_merges_lsp_and_typescript_ast_references(npm_repository: Repository) -> None:
+    location = LspLocation(
+        uri='file:///c%3A'
+        + (npm_repository.root / "packages" / "core" / "src" / "index.ts")
+        .resolve()
+        .as_posix()
+        .removeprefix('C:'),
+        range=LspRange(
+            start=LspPosition(line=6, character=2),
+            end=LspPosition(line=6, character=8),
+        ),
+    )
+    service = NpmFileSymbolService(
+        npm_repository,
+        resolver=_FakeResolver(),
+        client_factory=lambda command, cwd: _FakeLocationClient((location,)),
+    )
+    service._typescript_ast_reference_locations = lambda path, line, column, *, include_definition: (  # type: ignore[method-assign]
+        ("packages/utils/src/index.ts", 7, 7, 12, 18),
+    )
+
+    references = service.find_references("packages/core/src/index.ts", 7, 3, include_definition=True)
+
+    assert references == (
+        ("packages/core/src/index.ts", 7, 7, 3, 9),
+        ("packages/utils/src/index.ts", 7, 7, 12, 18),
+    )
+
+
+def test_symbol_service_rebases_nested_attachment_root_paths(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    attachment_root = repo_root / "server" / "frontend"
+    target_file = attachment_root / "src" / "pages" / "GamePlayerPage.tsx"
+    (repo_root / ".git").mkdir(parents=True)
+    target_file.parent.mkdir(parents=True)
+    (attachment_root / "package.json").write_text(
+        '{"name":"frontend","private":true,"scripts":{"build":"vite build"}}\n',
+        encoding="utf-8",
+    )
+    target_file.write_text("export function GamePlayerPage() { return null; }\n", encoding="utf-8")
+
+    class _RecordingWorkspaceLoader:
+        def __init__(self) -> None:
+            self.loaded_roots: list[Path] = []
+
+        def load(self, root: Path):
+            self.loaded_roots.append(root.resolve())
+            return object()
+
+    from suitcode.core.workspace import Workspace
+
+    repository = Workspace(repo_root).repositories[0]
+    loader = _RecordingWorkspaceLoader()
+    service = NpmSymbolService(
+        repository,
+        workspace_loader=loader,  # type: ignore[arg-type]
+        resolver=_FakeResolver(),
+        client_factory=lambda command, cwd: _FakeDocumentClient(
+            (_document_symbol("GamePlayerPage", 12, 1, 1),)
+        ),
+        attachment_root=attachment_root,
+        attachment_root_rel_path="server/frontend",
+    )
+
+    symbols = service.list_file_symbols("server/frontend/src/pages/GamePlayerPage.tsx")
+
+    assert loader.loaded_roots == [attachment_root.resolve()]
+    assert tuple(item.repository_rel_path for item in symbols) == ("server/frontend/src/pages/GamePlayerPage.tsx",)

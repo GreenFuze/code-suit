@@ -34,7 +34,27 @@ class LspClient:
             {
                 "processId": None,
                 "rootUri": root.as_uri(),
-                "capabilities": {},
+                "capabilities": {
+                    "textDocument": {
+                        "documentSymbol": {
+                            "hierarchicalDocumentSymbolSupport": True,
+                        },
+                        "definition": {
+                            "linkSupport": True,
+                        },
+                        "references": {},
+                        "implementation": {
+                            "linkSupport": True,
+                        },
+                    },
+                    "workspace": {
+                        "symbol": {
+                            "symbolKind": {
+                                "valueSet": list(range(1, 27)),
+                            },
+                        },
+                    },
+                },
                 "workspaceFolders": [{"uri": root.as_uri(), "name": root.name}],
                 "initializationOptions": self._initialization_options or {},
             },

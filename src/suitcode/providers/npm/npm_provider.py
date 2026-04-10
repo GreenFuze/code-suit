@@ -446,12 +446,24 @@ class NPMProvider(
 
     def _build_symbol_service(self) -> NpmSymbolService:
         if self._symbol_service is None:
-            self._symbol_service = NpmSymbolService(self.repository, workspace_loader=self._workspace_loader)
+            self._symbol_service = NpmSymbolService(
+                self.repository,
+                workspace_loader=self._workspace_loader,
+                attachment_root=self.attachment_root,
+                attachment_root_rel_path=self.attachment_root_rel_path,
+                source_roots=frozenset(root for component in self._get_components() for root in component.source_roots),
+            )
         return self._symbol_service
 
     def _build_file_symbol_service(self) -> NpmFileSymbolService:
         if self._file_symbol_service is None:
-            self._file_symbol_service = NpmFileSymbolService(self.repository, workspace_loader=self._workspace_loader)
+            self._file_symbol_service = NpmFileSymbolService(
+                self.repository,
+                workspace_loader=self._workspace_loader,
+                attachment_root=self.attachment_root,
+                attachment_root_rel_path=self.attachment_root_rel_path,
+                source_roots=frozenset(root for component in self._get_components() for root in component.source_roots),
+            )
         return self._file_symbol_service
 
     def _build_file_relationship_service(self) -> NpmFileRelationshipService:

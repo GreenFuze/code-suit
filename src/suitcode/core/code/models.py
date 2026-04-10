@@ -78,10 +78,16 @@ class CodeLocation(StrictModel):
     @classmethod
     def _validate_column_end(cls, value: int | None, info) -> int | None:
         column_start = info.data.get("column_start")
+        line_start = info.data.get("line_start")
+        line_end = info.data.get("line_end")
         if value is not None:
             if value < 1:
                 raise ValueError("column_end must be >= 1")
-            if column_start is not None and value < column_start:
+            if (
+                column_start is not None
+                and (line_start is None or line_end is None or line_start == line_end)
+                and value < column_start
+            ):
                 raise ValueError("column_end must be >= column_start")
         return value
 

@@ -188,7 +188,14 @@ class EntityInfo(GraphNode):
     @classmethod
     def _validate_column_end(cls, column_end: int | None, info):
         column_start = info.data.get("column_start")
-        if column_start is not None and column_end is not None and column_end < column_start:
+        line_start = info.data.get("line_start")
+        line_end = info.data.get("line_end")
+        if (
+            column_start is not None
+            and column_end is not None
+            and (line_start is None or line_end is None or line_start == line_end)
+            and column_end < column_start
+        ):
             raise ValueError("column_end must be >= column_start")
         return column_end
 

@@ -31,12 +31,16 @@ class CodeMcpService:
         repository = self._registry.get_repository(workspace_id, repository_id)
         try:
             items = tuple(
-                self._code_presenter.symbol_view(item)
-                for item in repository.code.get_symbol(query, is_case_sensitive=is_case_sensitive)
+                self._code_presenter.symbol_lookup_view(item)
+                for item in repository.find_symbols_with_context(
+                    query,
+                    is_case_sensitive=is_case_sensitive,
+                )
             )
         except ValueError as exc:
             raise McpValidationError(str(exc)) from exc
-        return self._pagination.paginate(items, limit, offset)
+        effective_limit = 5 if limit is None else limit
+        return self._pagination.paginate(items, effective_limit, offset)
 
     def list_symbols_in_file(
         self,

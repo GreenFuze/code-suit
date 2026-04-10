@@ -464,6 +464,36 @@ class SymbolContext(StrictModel):
         return self
 
 
+class SymbolLookupHit(StrictModel):
+    symbol: EntityInfo
+    owner: OwnedNodeInfo | None = None
+    reference_count: int
+    reference_preview: tuple[CodeLocation, ...]
+    related_tests_preview: tuple[ResolvedRelatedTest, ...]
+    definition_anchor: CodeLocation | None = None
+    context_source: str
+    provenance: tuple[ProvenanceEntry, ...]
+
+    @field_validator("context_source")
+    @classmethod
+    def _validate_context_source(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("context_source must not be empty")
+        return value.strip()
+
+    @model_validator(mode="after")
+    def _validate_symbol_lookup_hit(self) -> "SymbolLookupHit":
+        if self.reference_count < 0:
+            raise ValueError("reference_count must be >= 0")
+        if not self.provenance:
+            raise ValueError("provenance must not be empty")
+        if (
+            self.reference_count > 0 or self.definition_anchor is not None
+        ) and not any(item.source_kind == SourceKind.LSP for item in self.provenance):
+            raise ValueError("symbol lookup hits with definitions or references must include LSP provenance")
+        return self
+
+
 class ImpactTarget(StrictModel):
     symbol_id: str | None = None
     repository_rel_path: str | None = None
