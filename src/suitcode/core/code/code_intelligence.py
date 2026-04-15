@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from suitcode.core.code.evidence_tier import CodeEvidenceTier
 from suitcode.core.code.models import CodeLocation, SymbolLookupTarget
 from suitcode.core.intelligence_models import (
     FileRelationshipKind,
@@ -80,6 +81,32 @@ class CodeIntelligence:
             try:
                 items.extend(
                     provider.list_symbols_in_file(
+                        normalized_path,
+                        query=query,
+                        is_case_sensitive=is_case_sensitive,
+                    )
+                )
+            except ValueError:
+                continue
+        return tuple(
+            sorted(
+                items,
+                key=lambda item: (item.name, item.entity_kind, item.line_start or 0, item.column_start or 0, item.id),
+            )
+        )
+
+    def list_structural_symbols_in_file(
+        self,
+        repository_rel_path: str,
+        query: str | None = None,
+        is_case_sensitive: bool = False,
+    ) -> tuple[EntityInfo, ...]:
+        normalized_path = normalize_repository_relative_path(repository_rel_path)
+        items: list[EntityInfo] = []
+        for provider in self._providers_for_file(normalized_path):
+            try:
+                items.extend(
+                    provider.list_structural_symbols_in_file(
                         normalized_path,
                         query=query,
                         is_case_sensitive=is_case_sensitive,
@@ -326,12 +353,17 @@ class CodeIntelligence:
         self,
         repository_rel_path: str,
         relationship_kind: FileRelationshipKind | None = None,
+        evidence_tier: CodeEvidenceTier = CodeEvidenceTier.SEMANTIC,
     ) -> tuple[FileRelationshipRef, ...]:
         normalized_path = normalize_repository_relative_path(repository_rel_path)
         merged: dict[tuple[FileRelationshipKind, str], FileRelationshipRef] = {}
         for provider in self._providers_for_file(normalized_path):
             try:
-                items = provider.get_file_relationships(normalized_path)
+                items = (
+                    provider.get_structural_file_relationships(normalized_path)
+                    if evidence_tier == CodeEvidenceTier.STRUCTURAL
+                    else provider.get_file_relationships(normalized_path)
+                )
             except ValueError:
                 continue
             for item in items:
@@ -490,6 +522,7 @@ class CodeIntelligence:
                 "provider-backed symbol coverage produced no symbols on representative owned files"
             )
             return CodeRuntimeCapabilities(
+                structural_symbols=capabilities.structural_symbols,
                 symbol_search=self._degrade_runtime_capability(capabilities.symbol_search, reason),
                 symbols_in_file=self._degrade_runtime_capability(capabilities.symbols_in_file, reason),
                 definitions=self._degrade_runtime_capability(capabilities.definitions, reason),
@@ -497,6 +530,7 @@ class CodeIntelligence:
                 implementations=self._degrade_runtime_capability(capabilities.implementations, reason),
             )
         return CodeRuntimeCapabilities(
+            structural_symbols=capabilities.structural_symbols,
             symbol_search=(
                 capabilities.symbol_search
                 if coverage.has_workspace_match

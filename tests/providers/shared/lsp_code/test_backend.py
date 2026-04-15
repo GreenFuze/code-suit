@@ -12,6 +12,7 @@ from suitcode.providers.shared.lsp import (
     LspRange,
     LspWorkspaceSymbol,
 )
+from suitcode.providers.shared.lsp.errors import LspProtocolError
 from suitcode.providers.shared.lsp_code.backend import LspCodeBackend
 
 
@@ -29,15 +30,19 @@ class _FakeClient:
         definition_locations: tuple[LspLocation, ...] = tuple(),
         reference_locations: tuple[LspLocation, ...] = tuple(),
         implementation_locations: tuple[LspLocation, ...] = tuple(),
+        initialize_error: Exception | None = None,
     ) -> None:
         self.workspace_symbols = workspace_symbols
         self.document_symbols_by_path = document_symbols_by_path or {}
         self.definition_locations = definition_locations
         self.reference_locations = reference_locations
         self.implementation_locations = implementation_locations
+        self.initialize_error = initialize_error
         self.initialized_with: Path | None = None
 
     def initialize(self, root_path: Path) -> None:
+        if self.initialize_error is not None:
+            raise self.initialize_error
         self.initialized_with = root_path
 
     def workspace_symbol(self, query: str) -> tuple[LspWorkspaceSymbol, ...]:
@@ -212,3 +217,25 @@ def test_backend_translates_definition_and_reference_locations(tmp_path: Path) -
         ("src/main.py", 4, 4, 2, 6),
     )
     assert backend.find_implementations("src/main.py", 1, 1) == (("src/main.py", 4, 4, 2, 6),)
+
+
+def test_backend_degrades_to_empty_when_lsp_initialize_fails(tmp_path: Path) -> None:
+    src_file = tmp_path / "src" / "main.py"
+    src_file.parent.mkdir(parents=True)
+    src_file.write_text("value = 1\n", encoding="utf-8")
+    client = _FakeClient(initialize_error=LspProtocolError("spawn EPERM"))
+    backend = LspCodeBackend(
+        repository_root=tmp_path,
+        ensure_ready=lambda: None,
+        resolver=_FakeResolver(),
+        supported_extensions=frozenset({".py"}),
+        symbol_kind_by_code={12: "function"},
+        ignored_directories=frozenset({".git"}),
+        session_manager=_FakeSessionManager(client),
+    )
+
+    assert backend.get_symbols("main") == tuple()
+    assert backend.list_file_symbols("src/main.py") == tuple()
+    assert backend.find_definition("src/main.py", 1, 1) == tuple()
+    assert backend.find_references("src/main.py", 1, 1) == tuple()
+    assert backend.find_implementations("src/main.py", 1, 1) == tuple()

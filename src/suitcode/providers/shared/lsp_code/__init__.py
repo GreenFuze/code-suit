@@ -1,5 +1,6 @@
 from suitcode.providers.shared.lsp_code.backend import LspCodeBackend, LspRepositorySymbol
 from suitcode.providers.shared.lsp_code.session import (
+    CoordinatorBackedLspSessionManager,
     LspClientFactory,
     LspResolver,
     LspSessionManager,
@@ -11,6 +12,7 @@ from suitcode.providers.shared.lsp_code.translation import LspEntityTranslatorBa
 __all__ = [
     "LspClientFactory",
     "LspCodeBackend",
+    "CoordinatorBackedLspSessionManager",
     "LspEntityTranslatorBase",
     "LspLocationTranslatorBase",
     "LspRepositorySymbol",

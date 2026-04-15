@@ -435,10 +435,14 @@ class FileContext(StrictModel):
     def _validate_provenance(self) -> "FileContext":
         if not self.provenance:
             raise ValueError("provenance must not be empty")
-        if (self.symbol_count > 0 or self.reference_site_count > 0 or self.implementation_location_count > 0) and not any(
+        if self.symbol_count > 0 and not any(
+            item.source_kind in {SourceKind.LSP, SourceKind.SYNTAX} for item in self.provenance
+        ):
+            raise ValueError("file contexts with symbol evidence must include LSP or syntax provenance")
+        if (self.reference_site_count > 0 or self.implementation_location_count > 0) and not any(
             item.source_kind == SourceKind.LSP for item in self.provenance
         ):
-            raise ValueError("file contexts with symbol, reference, or implementation evidence must include LSP provenance")
+            raise ValueError("file contexts with reference or implementation evidence must include LSP provenance")
         return self
 
 

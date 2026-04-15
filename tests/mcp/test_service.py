@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import shutil
+import time
 from pathlib import Path
 
 import pytest
 from suitcode.core.build_service import BuildService
+from suitcode.core.code.evidence_tier import CodeEvidenceTier
+from suitcode.core.change_models import ChangeTarget
 from suitcode.core.intelligence_models import (
     FileRelationshipKind,
     FileRelationshipRef,
@@ -18,7 +21,8 @@ from suitcode.core.intelligence_models import (
 )
 from suitcode.core.provenance_builders import dependency_graph_provenance
 from suitcode.core.runner_service import RunnerService
-from suitcode.mcp.errors import McpNotFoundError, McpUnsupportedRepositoryError, McpValidationError
+from suitcode.core.workspace import Workspace
+from suitcode.mcp.errors import McpNotFoundError, McpRetryableError, McpUnsupportedRepositoryError, McpValidationError
 from suitcode.mcp.models import (
     BatchChangeImpactTargetView,
     ChangeEvidencePreviewView,
@@ -37,7 +41,10 @@ from suitcode.mcp.models import (
 )
 from suitcode.mcp.service import SuitMcpService
 from suitcode.mcp.state import WorkspaceRegistry
+from suitcode.providers.npm.tool_runner import TypeScriptToolTimeoutError
 from suitcode.providers.shared.action_execution import ActionExecutionResult, ActionExecutionStatus
+from suitcode.runtime.errors import CoordinatorRuntimeNotReadyError, SemanticQueryTimeoutError
+from suitcode.runtime.models import ManagedServerState, ServerFamily
 
 
 def _provenance_view(*paths: str) -> tuple[ProvenanceView, ...]:
@@ -802,6 +809,546 @@ def test_compact_implementation_flow_summary_is_disabled_for_batches_larger_than
 
     assert understanding.target_count == 4
     assert all(target.implementation_flow_summary is None for target in understanding.targets)
+
+
+def test_compact_grouped_understand_file_disables_implementation_flow_summary(
+    service: SuitMcpService,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "frontend-grouped"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    for name in ("A.tsx", "B.tsx"):
+        (repo_root / "src" / name).write_text(
+            f"export const {name.removesuffix('.tsx')} = () => null;\n",
+            encoding="utf-8",
+        )
+
+    understanding = service.understand_file(
+        str(repo_root),
+        tuple(f"src/{name}" for name in ("A.tsx", "B.tsx")),
+        detail_level="compact",
+    )
+
+    assert understanding.target_count == 2
+    assert all(target.implementation_flow_summary is None for target in understanding.targets)
+
+
+def test_compact_grouped_change_impact_disables_implementation_flow_summary(
+    service: SuitMcpService,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "frontend-impact-grouped"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    for name in ("A.tsx", "B.tsx"):
+        (repo_root / "src" / name).write_text(
+            f"export const {name.removesuffix('.tsx')} = () => null;\n",
+            encoding="utf-8",
+        )
+
+    impact = service.what_changes_if_i_edit_this(
+        str(repo_root),
+        tuple(f"src/{name}" for name in ("A.tsx", "B.tsx")),
+        detail_level="compact",
+    )
+
+    assert impact.target_count == 2
+    assert all(target.implementation_flow_summary is None for target in impact.targets)
+
+
+def test_collect_batch_results_returns_partial_results_when_one_target_times_out(
+    service: SuitMcpService,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(service, "_BATCH_COMPACT_TARGET_TIMEOUT_SECONDS", 0.1)
+
+    def _build(repository_rel_path: str) -> str:
+        if repository_rel_path == "slow":
+            time.sleep(0.3)
+        return repository_rel_path
+
+    completed, incomplete = service._collect_batch_results(
+        repository_rel_paths=("fast", "slow"),
+        build_target=_build,
+        tool_name="understand_file",
+        detail_level="compact",
+        allow_parallel=True,
+    )
+
+    assert completed == ("fast",)
+    assert len(incomplete) == 1
+    assert incomplete[0].repository_rel_path == "slow"
+    assert incomplete[0].reason_code == "analysis_timeout"
+
+
+def test_compact_grouped_understand_file_surfaces_partial_results(
+    service: SuitMcpService,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo_root = tmp_path / "frontend-partial-file"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "package.json").write_text('{"name":"frontend","private":true}', encoding="utf-8")
+    for name in ("Fast.tsx", "Slow.tsx"):
+        (repo_root / "src" / name).write_text(
+            f"export const {name.removesuffix('.tsx')} = () => null;\n",
+            encoding="utf-8",
+        )
+
+    original = service._understand_file_target(
+        Workspace(repo_root).repositories[0],
+        "src/Fast.tsx",
+        related_test_limit=3,
+        detail_level="compact",
+        include_reference_sites=False,
+        include_implementation_locations=False,
+        enable_implementation_flow=False,
+        enable_hot_entrypoints=False,
+        reference_site_limit=3,
+        evidence_tier=service._code_evidence_tier("compact", 2),
+    )
+    incomplete = service._incomplete_batch_target_view(
+        "src/Slow.tsx",
+        reason_code="analysis_timeout",
+        message="understand_file exceeded the grouped compact per-target timeout",
+    )
+
+    monkeypatch.setattr(
+        service,
+        "_collect_understand_file_targets",
+        lambda **kwargs: ((original,), (incomplete,)),
+    )
+
+    understanding = service.understand_file(
+        str(repo_root),
+        ("src/Fast.tsx", "src/Slow.tsx"),
+        detail_level="compact",
+    )
+
+    assert understanding.target_count == 2
+    assert understanding.completed_target_count == 1
+    assert len(understanding.targets) == 1
+    assert understanding.incomplete_targets == (incomplete,)
+
+
+def test_compact_grouped_change_impact_surfaces_partial_results(
+    service: SuitMcpService,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo_root = tmp_path / "frontend-partial-impact"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "package.json").write_text('{"name":"frontend","private":true}', encoding="utf-8")
+    for name in ("Fast.tsx", "Slow.tsx"):
+        (repo_root / "src" / name).write_text(
+            f"export const {name.removesuffix('.tsx')} = () => null;\n",
+            encoding="utf-8",
+        )
+
+    repository = Workspace(repo_root).repositories[0]
+    change = repository.analyze_change(
+        ChangeTarget(repository_rel_path="src/Fast.tsx"),
+        reference_preview_limit=3,
+        dependent_preview_limit=3,
+        test_preview_limit=3,
+        runner_preview_limit=3,
+        include_reference_locations=False,
+        include_implementation_locations=False,
+        evidence_tier=service._code_evidence_tier("compact", 2),
+    )
+    target = BatchChangeImpactTargetView(
+        repository_rel_path="src/Fast.tsx",
+        impact=service._change_impact_presenter.change_impact_view(change),
+        implementation_flow_summary=None,
+        frontend_proof_summary=service._frontend_proof_summary_view(repository, "src/Fast.tsx"),
+        artifact_surface_summary=None,
+    )
+    incomplete = service._incomplete_batch_target_view(
+        "src/Slow.tsx",
+        reason_code="analysis_timeout",
+        message="what_changes_if_i_edit_this exceeded the grouped compact per-target timeout",
+    )
+
+    monkeypatch.setattr(
+        service,
+        "_collect_change_impact_targets",
+        lambda **kwargs: ((target,), (incomplete,)),
+    )
+
+    impact = service.what_changes_if_i_edit_this(
+        str(repo_root),
+        ("src/Fast.tsx", "src/Slow.tsx"),
+        detail_level="compact",
+    )
+
+    assert impact.target_count == 2
+    assert impact.completed_target_count == 1
+    assert len(impact.targets) == 1
+    assert impact.incomplete_targets == (incomplete,)
+
+
+def test_compact_single_target_large_file_prefers_structural_understand_file(
+    service: SuitMcpService,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo_root = tmp_path / "large-compact-file"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "package.json").write_text('{"name":"frontend","private":true}', encoding="utf-8")
+    (repo_root / "src" / "Large.tsx").write_text("export const Large = () => null;\n", encoding="utf-8")
+
+    monkeypatch.setattr(SuitMcpService, "_COMPACT_SINGLE_TARGET_STRUCTURAL_LINE_THRESHOLD", 0)
+    observed: dict[str, object] = {}
+
+    def _capture(**kwargs):
+        observed.update(kwargs)
+        return tuple(), tuple()
+
+    monkeypatch.setattr(service, "_collect_understand_file_targets", _capture)
+    monkeypatch.setattr(service, "_compact_file_understanding_view", lambda *args, **kwargs: {"ok": True})
+
+    result = service.understand_file(
+        str(repo_root),
+        ("src/Large.tsx",),
+        detail_level="compact",
+    )
+
+    assert result == {"ok": True}
+    assert observed["evidence_tier"] == CodeEvidenceTier.STRUCTURAL
+    assert observed["include_reference_sites"] is False
+    assert observed["include_implementation_locations"] is False
+    assert observed["enable_implementation_flow"] is False
+    assert observed["enable_hot_entrypoints"] is False
+
+
+def test_compact_single_target_large_file_prefers_structural_change_impact(
+    service: SuitMcpService,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo_root = tmp_path / "large-compact-impact"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "package.json").write_text('{"name":"frontend","private":true}', encoding="utf-8")
+    (repo_root / "src" / "Large.tsx").write_text("export const Large = () => null;\n", encoding="utf-8")
+
+    monkeypatch.setattr(SuitMcpService, "_COMPACT_SINGLE_TARGET_STRUCTURAL_LINE_THRESHOLD", 0)
+    observed: dict[str, object] = {}
+
+    def _capture(**kwargs):
+        observed.update(kwargs)
+        return tuple(), tuple()
+
+    monkeypatch.setattr(service, "_collect_change_impact_targets", _capture)
+    monkeypatch.setattr(service, "_compact_change_impact_view", lambda *args, **kwargs: {"ok": True})
+
+    result = service.what_changes_if_i_edit_this(
+        str(repo_root),
+        ("src/Large.tsx",),
+        detail_level="compact",
+    )
+
+    assert result == {"ok": True}
+    assert observed["evidence_tier"] == CodeEvidenceTier.STRUCTURAL
+    assert observed["include_reference_locations"] is False
+    assert observed["include_implementation_locations"] is False
+    assert observed["enable_deep_symbol_navigation"] is False
+
+
+def test_compact_single_target_small_file_keeps_semantic_understand_file(
+    service: SuitMcpService,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo_root = tmp_path / "small-compact-file"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "package.json").write_text('{"name":"frontend","private":true}', encoding="utf-8")
+    (repo_root / "src" / "Small.tsx").write_text("export const Small = () => null;\n", encoding="utf-8")
+
+    monkeypatch.setattr(SuitMcpService, "_COMPACT_SINGLE_TARGET_STRUCTURAL_LINE_THRESHOLD", 100)
+    monkeypatch.setattr(SuitMcpService, "_COMPACT_SINGLE_TARGET_STRUCTURAL_BYTE_THRESHOLD", 100000)
+    observed: dict[str, object] = {}
+
+    def _capture(**kwargs):
+        observed.update(kwargs)
+        return tuple(), tuple()
+
+    monkeypatch.setattr(service, "_collect_understand_file_targets", _capture)
+    monkeypatch.setattr(service, "_compact_file_understanding_view", lambda *args, **kwargs: {"ok": True})
+
+    result = service.understand_file(
+        str(repo_root),
+        ("src/Small.tsx",),
+        detail_level="compact",
+    )
+
+    assert result == {"ok": True}
+    assert observed["evidence_tier"] == CodeEvidenceTier.SEMANTIC
+    assert observed["include_reference_sites"] is True
+    assert observed["include_implementation_locations"] is True
+    assert observed["enable_implementation_flow"] is True
+    assert observed["enable_hot_entrypoints"] is True
+
+
+def test_standard_detail_level_rejects_broad_understand_file_batches(
+    service: SuitMcpService,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "frontend-standard-grouped"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "package.json").write_text('{"name":"frontend","private":true}', encoding="utf-8")
+    for name in ("A.tsx", "B.tsx", "C.tsx", "D.tsx"):
+        (repo_root / "src" / name).write_text(
+            f"export const {name.removesuffix('.tsx')} = () => null;\n",
+            encoding="utf-8",
+        )
+
+    with pytest.raises(McpValidationError, match="detail_level=standard supports at most 3 targets"):
+        service.understand_file(
+            str(repo_root),
+            tuple(f"src/{name}" for name in ("A.tsx", "B.tsx", "C.tsx", "D.tsx")),
+            detail_level="standard",
+        )
+
+
+def test_standard_detail_level_rejects_broad_change_impact_batches(
+    service: SuitMcpService,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "frontend-standard-impact-grouped"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "package.json").write_text('{"name":"frontend","private":true}', encoding="utf-8")
+    for name in ("A.tsx", "B.tsx", "C.tsx", "D.tsx"):
+        (repo_root / "src" / name).write_text(
+            f"export const {name.removesuffix('.tsx')} = () => null;\n",
+            encoding="utf-8",
+        )
+
+    with pytest.raises(McpValidationError, match="detail_level=standard supports at most 3 targets"):
+        service.what_changes_if_i_edit_this(
+            str(repo_root),
+            tuple(f"src/{name}" for name in ("A.tsx", "B.tsx", "C.tsx", "D.tsx")),
+            detail_level="standard",
+        )
+
+
+def test_understand_file_runtime_warming_maps_to_retryable_error(service: SuitMcpService) -> None:
+    expected = (
+        "runtime_not_ready: "
+        "tool=understand_file "
+        "server=gopls "
+        "attachment_root=C:\\\\repo "
+        "state=warming "
+        "retry_after_seconds=15; "
+        "retry the same request after the suggested delay"
+    )
+
+    class _Repo:
+        def describe_files(self, *args, **kwargs):
+            raise CoordinatorRuntimeNotReadyError(
+                server_family=ServerFamily.GOPLS,
+                attachment_root="C:\\repo",
+                state=ManagedServerState.WARMING,
+                retry_after_seconds=15,
+            )
+
+    with pytest.raises(McpRetryableError, match=expected):
+        service._understand_file_target(  # noqa: SLF001
+            _Repo(),
+            "src/GamePlayerPage.tsx",
+            related_test_limit=5,
+            detail_level="standard",
+            include_reference_sites=True,
+            include_implementation_locations=True,
+            enable_implementation_flow=True,
+            enable_hot_entrypoints=True,
+            reference_site_limit=None,
+            evidence_tier=CodeEvidenceTier.SEMANTIC,
+        )
+
+
+def test_read_only_repository_preserves_retryable_errors(service: SuitMcpService, monkeypatch) -> None:
+    class _Workspace:
+        repositories = (object(),)
+
+    monkeypatch.setattr("suitcode.mcp.service.Workspace", lambda *args, **kwargs: _Workspace())
+
+    with pytest.raises(McpRetryableError, match="retryable"):
+        service._with_read_only_repository(  # noqa: SLF001
+            r"C:\repo",
+            lambda repository: (_ for _ in ()).throw(McpRetryableError("retryable")),
+        )
+
+
+def test_change_impact_runtime_warming_maps_to_retryable_error(service: SuitMcpService) -> None:
+    expected = (
+        "runtime_not_ready: "
+        "tool=what_changes_if_i_edit_this "
+        "server=gopls "
+        "attachment_root=C:\\\\repo "
+        "state=warming "
+        "retry_after_seconds=15; "
+        "retry the same request after the suggested delay"
+    )
+
+    class _Repo:
+        def analyze_change(self, *args, **kwargs):
+            raise CoordinatorRuntimeNotReadyError(
+                server_family=ServerFamily.GOPLS,
+                attachment_root="C:\\repo",
+                state=ManagedServerState.WARMING,
+                retry_after_seconds=15,
+            )
+
+    with pytest.raises(McpRetryableError, match=expected):
+        service._collect_change_impact_targets(  # noqa: SLF001
+            repository=_Repo(),
+            repository_rel_paths=("server/internal/scan/manual_review_service.go",),
+            detail_level="standard",
+            reference_preview_limit=10,
+            dependent_preview_limit=10,
+            test_preview_limit=10,
+            runner_preview_limit=10,
+            include_reference_locations=True,
+            include_implementation_locations=True,
+            evidence_tier=CodeEvidenceTier.SEMANTIC,
+            enable_deep_symbol_navigation=True,
+        )
+
+
+def test_understand_file_typescript_tool_timeout_maps_to_retryable_error(service: SuitMcpService) -> None:
+    expected = (
+        "runtime_not_ready: "
+        "tool=understand_file "
+        "server=typescript-tooling "
+        "attachment_root=C:\\\\repo\\\\server\\\\frontend "
+        "state=degraded "
+        "retry_after_seconds=15; "
+        "retry the same request after the suggested delay"
+    )
+
+    class _Repo:
+        def describe_files(self, *args, **kwargs):
+            raise TypeScriptToolTimeoutError(
+                attachment_root=Path(r"C:\repo\server\frontend"),
+                script_name="ts_static_analysis.cjs",
+            )
+
+    with pytest.raises(McpRetryableError, match=expected):
+        service._understand_file_target(  # noqa: SLF001
+            _Repo(),
+            "src/GameDetailPage.tsx",
+            related_test_limit=1,
+            detail_level="standard",
+            include_reference_sites=True,
+            include_implementation_locations=True,
+            enable_implementation_flow=True,
+            enable_hot_entrypoints=True,
+            reference_site_limit=None,
+            evidence_tier=CodeEvidenceTier.SEMANTIC,
+        )
+
+
+def test_understand_file_semantic_query_timeout_maps_to_retryable_error(service: SuitMcpService) -> None:
+    expected = (
+        "runtime_not_ready: "
+        "tool=understand_file "
+        "server=typescript-language-server "
+        "attachment_root=C:\\\\repo "
+        "state=degraded "
+        "retry_after_seconds=15; "
+        "retry the same request after the suggested delay"
+    )
+
+    class _Repo:
+        def describe_files(self, *args, **kwargs):
+            raise SemanticQueryTimeoutError(
+                server_name="typescript-language-server",
+                attachment_root=r"C:\repo",
+            )
+
+    with pytest.raises(McpRetryableError, match=expected):
+        service._understand_file_target(  # noqa: SLF001
+            _Repo(),
+            "src/GameDetailPage.tsx",
+            related_test_limit=1,
+            detail_level="standard",
+            include_reference_sites=True,
+            include_implementation_locations=True,
+            enable_implementation_flow=True,
+            enable_hot_entrypoints=True,
+            reference_site_limit=None,
+            evidence_tier=CodeEvidenceTier.SEMANTIC,
+        )
+
+
+def test_full_detail_level_rejects_multi_target_understand_file_requests(
+    service: SuitMcpService,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "frontend-full-grouped"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "package.json").write_text('{"name":"frontend","private":true}', encoding="utf-8")
+    for name in ("A.tsx", "B.tsx"):
+        (repo_root / "src" / name).write_text(
+            f"export const {name.removesuffix('.tsx')} = () => null;\n",
+            encoding="utf-8",
+        )
+
+    with pytest.raises(McpValidationError, match="detail_level=full supports exactly 1 target"):
+        service.understand_file(
+            str(repo_root),
+            ("src/A.tsx", "src/B.tsx"),
+            detail_level="full",
+        )
+
+
+def test_full_detail_level_rejects_multi_target_change_impact_requests(
+    service: SuitMcpService,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "frontend-full-impact-grouped"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "package.json").write_text('{"name":"frontend","private":true}', encoding="utf-8")
+    for name in ("A.tsx", "B.tsx"):
+        (repo_root / "src" / name).write_text(
+            f"export const {name.removesuffix('.tsx')} = () => null;\n",
+            encoding="utf-8",
+        )
+
+    with pytest.raises(McpValidationError, match="detail_level=full supports exactly 1 target"):
+        service.what_changes_if_i_edit_this(
+            str(repo_root),
+            ("src/A.tsx", "src/B.tsx"),
+            detail_level="full",
+        )
 
 
 def test_explicit_artifact_member_uses_artifact_surface_summary_without_inherited_frontend_proof(
@@ -1574,6 +2121,54 @@ def test_hot_entrypoints_preview_prioritizes_externally_referenced_exported_symb
     assert [item.name for item in preview] == ["ExportedHot", "ColdType", "localHot"]
     assert preview[0].external_reference_count == 2
     assert len(preview) == 3
+
+
+def test_hot_entrypoints_preview_fails_fast_when_reference_scan_exceeds_budget(
+    service: SuitMcpService,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    class _FakeSymbol:
+        def __init__(self, symbol_id: str, name: str, kind: str, line_start: int) -> None:
+            self.id = symbol_id
+            self.name = name
+            self.entity_kind = kind
+            self.repository_rel_path = "src/GameDetailPage.tsx"
+            self.line_start = line_start
+
+    class _FakeLocation:
+        def __init__(self, path: str) -> None:
+            self.repository_rel_path = path
+
+    class _FakeCode:
+        def list_symbols_in_file(self, repository_rel_path: str):
+            return tuple(
+                _FakeSymbol(f"symbol:{index}", f"Component{index}", "function", index + 1)
+                for index in range(20)
+            )
+
+        def find_references_by_symbol_id(self, symbol_id: str):
+            return (_FakeLocation("src/App.tsx"),)
+
+    class _FakeRepo:
+        def __init__(self, root: Path) -> None:
+            self.root = root
+            self.code = _FakeCode()
+
+    timestamps = iter((0.0, 0.0, 9.0, 9.1))
+    monkeypatch.setattr("suitcode.mcp.service.time.monotonic", lambda: next(timestamps))
+
+    with pytest.raises(SemanticQueryTimeoutError) as exc_info:
+        service._hot_entrypoints_preview(  # type: ignore[attr-defined]
+            _FakeRepo(tmp_path),
+            "src/GameDetailPage.tsx",
+            detail_level="standard",
+            deadline=8.0,
+        )
+
+    assert exc_info.value.server_name == "typescript-language-server"
+    assert exc_info.value.attachment_root == str(tmp_path)
+    assert exc_info.value.retry_after_seconds == 15
 
 
 def test_compact_change_impact_ui_heavy_dedupes_reference_and_render_overlap(service: SuitMcpService) -> None:

@@ -94,4 +94,3 @@ class JsonlAnalyticsStore:
                 if stripped:
                     lines.append(stripped)
         return lines
-

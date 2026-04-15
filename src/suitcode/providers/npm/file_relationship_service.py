@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import json
-import subprocess
-from importlib import resources
 from pathlib import Path
 
 from suitcode.core.intelligence_models import FileRelationshipKind, FileRelationshipRef
 from suitcode.core.models.ids import normalize_repository_relative_path
 from suitcode.core.provenance_builders import dependency_graph_provenance
 from suitcode.providers.shared.lsp import TypeScriptLanguageServerResolver
+from suitcode.providers.npm.tool_runner import TypeScriptProbeRunner
 
 
 class NpmFileRelationshipService:
@@ -24,6 +23,11 @@ class NpmFileRelationshipService:
         self._repository_root = repository_root.expanduser().resolve()
         self._attachment_root = attachment_root.expanduser().resolve()
         self._resolver = resolver or TypeScriptLanguageServerResolver()
+        self._probe_runner = TypeScriptProbeRunner(
+            repository_root=self._repository_root,
+            attachment_root=self._attachment_root,
+            resolver=self._resolver,
+        )
         self._cache: dict[str, tuple[FileRelationshipRef, ...]] = {}
 
     def get_file_relationships(self, repository_rel_path: str) -> tuple[FileRelationshipRef, ...]:
@@ -40,34 +44,16 @@ class NpmFileRelationshipService:
         if not absolute_path.exists() or not absolute_path.is_file():
             raise ValueError(f"file does not exist: `{normalized_path}`")
 
-        node = self._resolver.resolve_node_path()
-        typescript_library = self._resolver.resolve_typescript_library_path(self._attachment_root)
-        script_path = resources.files("suitcode.providers.npm").joinpath("ts_file_relationships.cjs")
-        command = (
-            node,
-            str(script_path),
-            str(self._repository_root),
-            str(self._attachment_root),
-            str(absolute_path),
-            typescript_library,
+        payload = self._probe_runner.run_json_probe(
+            script_name="ts_file_relationships.cjs",
+            command_args=(
+                str(self._repository_root),
+                str(self._attachment_root),
+                str(absolute_path),
+                self._probe_runner.resolve_typescript_library_path(),
+            ),
+            error_label="TS file relationships",
         )
-        try:
-            result = subprocess.run(
-                command,
-                cwd=self._attachment_root,
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-        except subprocess.CalledProcessError as exc:
-            message = exc.stderr.strip() or exc.stdout.strip() or "unknown TypeScript relationship error"
-            raise ValueError(f"unable to resolve deterministic TS file relationships: {message}") from exc
-
-        try:
-            payload = json.loads(result.stdout)
-        except json.JSONDecodeError as exc:
-            raise ValueError("TypeScript relationship probe returned invalid JSON") from exc
 
         relationships = self._translate_payload(normalized_path, payload)
         self._cache[normalized_path] = relationships

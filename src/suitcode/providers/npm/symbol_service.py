@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from collections.abc import Callable
 from fnmatch import fnmatchcase
-from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -13,6 +11,7 @@ from suitcode.providers.npm.symbol_models import NpmWorkspaceSymbol
 from suitcode.providers.shared.lsp import LspClient, TypeScriptLanguageServerResolver
 from suitcode.providers.shared.lsp_code import LspRepositorySymbol, LspSessionManager, LspSymbolServiceBase
 from suitcode.providers.shared.package_json import PackageJsonWorkspaceLoader
+from suitcode.providers.npm.tool_runner import TypeScriptProbeRunner
 
 if TYPE_CHECKING:
     from suitcode.core.repository import Repository
@@ -67,6 +66,11 @@ class _NpmSymbolServiceBase(LspSymbolServiceBase[NpmWorkspaceSymbol]):
         self._attachment_root_rel_path = attachment_root_rel_path.strip().strip("/").replace("\\", "/")
         self._source_roots = source_roots
         self._resolver = resolver or TypeScriptLanguageServerResolver()
+        self._probe_runner = TypeScriptProbeRunner(
+            repository_root=repository.root,
+            attachment_root=self._attachment_root,
+            resolver=self._resolver,
+        )
         super().__init__(
             repository=repository,
             ensure_ready=self._ensure_workspace,
@@ -135,6 +139,22 @@ class _NpmSymbolServiceBase(LspSymbolServiceBase[NpmWorkspaceSymbol]):
             )
         return symbols
 
+    def typescript_ast_file_symbols(
+        self,
+        repository_rel_path: str,
+        query: str | None = None,
+        is_case_sensitive: bool = False,
+    ) -> tuple[NpmWorkspaceSymbol, ...]:
+        symbols = self._typescript_ast_file_symbols(repository_rel_path)
+        if query is None:
+            return symbols
+        normalized_query = query.strip()
+        if not normalized_query:
+            raise ValueError("symbol query must not be empty")
+        return tuple(
+            item for item in symbols if self._matches_query(item.name, normalized_query, is_case_sensitive)
+        )
+
     def find_references(
         self,
         repository_rel_path: str,
@@ -189,32 +209,15 @@ class _NpmSymbolServiceBase(LspSymbolServiceBase[NpmWorkspaceSymbol]):
             return tuple()
         if not absolute_path.exists() or not absolute_path.is_file():
             raise ValueError(f"file does not exist: `{normalized_path}`")
-        node = self._resolver.resolve_node_path()
-        typescript_library = self._resolver.resolve_typescript_library_path(self._attachment_root)
-        script_path = resources.files("suitcode.providers.npm").joinpath("ts_symbols.cjs")
-        command = (
-            node,
-            str(script_path),
-            str(self._repository.root),
-            str(absolute_path),
-            typescript_library,
+        payload = self._probe_runner.run_json_probe(
+            script_name="ts_symbols.cjs",
+            command_args=(
+                str(self._repository.root),
+                str(absolute_path),
+                self._probe_runner.resolve_typescript_library_path(),
+            ),
+            error_label="TypeScript symbols",
         )
-        try:
-            result = subprocess.run(
-                command,
-                cwd=self._attachment_root,
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-        except subprocess.CalledProcessError as exc:
-            message = exc.stderr.strip() or exc.stdout.strip() or "unknown TypeScript symbol-analysis error"
-            raise ValueError(f"unable to resolve deterministic TypeScript symbols: {message}") from exc
-        try:
-            payload = json.loads(result.stdout)
-        except json.JSONDecodeError as exc:
-            raise ValueError("TypeScript symbol analysis returned invalid JSON") from exc
         return self._coerce_typescript_symbols(payload)
 
     def _typescript_ast_reference_locations(
@@ -237,36 +240,19 @@ class _NpmSymbolServiceBase(LspSymbolServiceBase[NpmWorkspaceSymbol]):
             return tuple()
         if not absolute_path.exists() or not absolute_path.is_file():
             raise ValueError(f"file does not exist: `{normalized_path}`")
-        node = self._resolver.resolve_node_path()
-        typescript_library = self._resolver.resolve_typescript_library_path(self._attachment_root)
-        script_path = resources.files("suitcode.providers.npm").joinpath("ts_references.cjs")
-        command = (
-            node,
-            str(script_path),
-            str(self._repository.root),
-            str(self._attachment_root),
-            str(absolute_path),
-            str(line),
-            str(column),
-            "true" if include_definition else "false",
-            typescript_library,
+        payload = self._probe_runner.run_json_probe(
+            script_name="ts_references.cjs",
+            command_args=(
+                str(self._repository.root),
+                str(self._attachment_root),
+                str(absolute_path),
+                str(line),
+                str(column),
+                "true" if include_definition else "false",
+                self._probe_runner.resolve_typescript_library_path(),
+            ),
+            error_label="TypeScript references",
         )
-        try:
-            result = subprocess.run(
-                command,
-                cwd=self._attachment_root,
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-        except subprocess.CalledProcessError as exc:
-            message = exc.stderr.strip() or exc.stdout.strip() or "unknown TypeScript reference-analysis error"
-            raise ValueError(f"unable to resolve deterministic TypeScript references: {message}") from exc
-        try:
-            payload = json.loads(result.stdout)
-        except json.JSONDecodeError as exc:
-            raise ValueError("TypeScript reference analysis returned invalid JSON") from exc
         return self._coerce_typescript_reference_locations(payload)
 
     def _iter_source_files(self) -> tuple[str, ...]:

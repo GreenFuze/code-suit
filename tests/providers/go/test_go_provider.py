@@ -68,6 +68,8 @@ def test_go_runtime_capabilities_and_build_targets(go_repository) -> None:
     test_caps = provider.get_test_runtime_capabilities()
     action_caps = provider.get_action_runtime_capabilities()
 
+    assert code_caps.structural_symbols is not None
+    assert code_caps.structural_symbols.availability.value == 'available'
     assert code_caps.implementations.availability.value in {'available', 'degraded'}
     assert test_caps.discovery.availability.value == 'available'
     assert test_caps.execution.availability.value == 'available'
@@ -76,6 +78,24 @@ def test_go_runtime_capabilities_and_build_targets(go_repository) -> None:
 
     build_targets = go_repository.list_build_targets()
     assert [item.action_id for item in build_targets] == ['action:go:build:example.com/acme/go-demo/cmd/app']
+
+
+def test_go_provider_returns_tier_one_structural_symbols_without_gopls(go_provider) -> None:
+    def _unexpected_semantic_call(*args, **kwargs):
+        raise AssertionError("Tier 1 structural symbol lookup must not call gopls-backed symbol service")
+
+    go_provider._file_symbol_service = type(
+        "_UnexpectedFileSymbolService",
+        (),
+        {"list_file_symbols": _unexpected_semantic_call},
+    )()
+
+    symbols = go_provider.list_structural_symbols_in_file("internal/service/service.go")
+
+    assert [item.name for item in symbols] == ["BuildMessage"]
+    assert symbols[0].entity_kind == "function"
+    assert symbols[0].provenance[0].source_kind.value == "syntax"
+    assert symbols[0].provenance[0].source_tool == "go/parser"
 
 
 def test_go_provider_exposes_interface_implementation_candidates(tmp_path: Path) -> None:
@@ -233,7 +253,7 @@ def test_real_multi_module_repo_support_if_available() -> None:
         pytest.skip('local MyGamesAnywhere server repo is unavailable')
 
     support = Repository.support_for_path(repo_root)
-    assert support.provider_ids == ('go', 'markdown', 'npm')
+    assert support.provider_ids == ('go', 'markdown', 'npm', 'openapi')
 
     repository = Workspace(repo_root).repositories[0]
     package_manager_ids = [item.id for item in repository.arch.get_package_managers() if item.id.startswith('pkgmgr:go:')]

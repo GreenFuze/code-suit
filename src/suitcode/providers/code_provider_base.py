@@ -25,6 +25,21 @@ class CodeProviderBase(ProviderBase, ABC):
     def __init__(self, repository: Repository, attachment: ProviderAttachmentContext) -> None:
         super().__init__(repository, attachment)
 
+    # Tier 1: structural evidence. These hooks must be cheap and must not require
+    # language-server workspace warmup or file-wide semantic reference walks.
+    def list_structural_symbols_in_file(
+        self,
+        repository_rel_path: str,
+        query: str | None = None,
+        is_case_sensitive: bool = False,
+    ) -> tuple[EntityInfo, ...]:
+        return tuple()
+
+    def get_structural_file_relationships(self, repository_rel_path: str) -> Sequence[FileRelationshipRef]:
+        return tuple()
+
+    # Tier 2: semantic evidence. These operations may use LSP/compiler APIs and
+    # should remain focused operations rather than broad multi-file defaults.
     @abstractmethod
     def get_symbol(self, query: str, is_case_sensitive: bool = False) -> tuple[EntityInfo, ...]:
         raise NotImplementedError
@@ -65,6 +80,8 @@ class CodeProviderBase(ProviderBase, ABC):
     def get_code_runtime_capabilities(self) -> CodeRuntimeCapabilities:
         raise NotImplementedError
 
+    # Optional deterministic file evidence. Provider implementations should keep
+    # each method explicit about whether it is Tier 1-safe or Tier 2-only.
     def get_file_relationships(self, repository_rel_path: str) -> Sequence[FileRelationshipRef]:
         return tuple()
 

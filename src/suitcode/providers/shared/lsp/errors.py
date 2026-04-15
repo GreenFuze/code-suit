@@ -11,3 +11,7 @@ class LspProtocolError(LspError):
 
 class LspProcessError(LspError):
     pass
+
+
+class LspTimeoutError(LspError):
+    pass

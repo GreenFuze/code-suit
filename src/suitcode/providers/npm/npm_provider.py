@@ -60,6 +60,7 @@ from suitcode.providers.provider_roles import ProviderRole
 from suitcode.providers.shared.code_facade import CodeFacadeMixin
 from suitcode.providers.shared.component_index import ComponentIndexBuilder
 from suitcode.providers.shared.provider_translation_mixin import ProviderTranslationMixin
+from suitcode.providers.shared.structural_symbols import structural_symbols_to_entities
 from suitcode.providers.shared.actions import ProviderActionSpec, ProviderActionTranslator
 from suitcode.providers.shared.package_json import PackageJsonWorkspaceLoader
 from suitcode.providers.shared.package_json.models import PackageJsonWorkspace
@@ -237,7 +238,23 @@ class NPMProvider(
                 summary="TypeScript language-server tooling is unavailable for npm code intelligence",
                 reason=str(exc),
             )
+        try:
+            resolver.resolve_node_path()
+            resolver.resolve_typescript_library_path(self.attachment_root)
+            structural_availability = RuntimeCapabilityAvailability.AVAILABLE
+            structural_reason = None
+        except (AttributeError, ValueError) as exc:
+            structural_availability = RuntimeCapabilityAvailability.DEGRADED
+            structural_reason = str(exc)
         return CodeRuntimeCapabilities(
+            structural_symbols=self._runtime_capability(
+                capability_id="npm.code.structural_symbols",
+                availability=structural_availability,
+                source_kind=SourceKind.SYNTAX,
+                source_tool="typescript-compiler-api",
+                summary="npm structural symbols are available from TypeScript AST analysis without language-server reference walks",
+                reason=structural_reason,
+            ),
             symbol_search=capability,
             symbols_in_file=capability,
             definitions=capability,
@@ -493,6 +510,26 @@ class NPMProvider(
     def _get_symbols(self, query: str, is_case_sensitive: bool = False) -> tuple[NpmWorkspaceSymbol, ...]:
         return self._build_symbol_service().get_symbols(query, is_case_sensitive=is_case_sensitive)
 
+    def list_structural_symbols_in_file(
+        self,
+        repository_rel_path: str,
+        query: str | None = None,
+        is_case_sensitive: bool = False,
+    ) -> tuple[EntityInfo, ...]:
+        try:
+            symbols = self._build_file_symbol_service().typescript_ast_file_symbols(
+                repository_rel_path,
+                query=query,
+                is_case_sensitive=is_case_sensitive,
+            )
+        except ValueError:
+            return tuple()
+        return structural_symbols_to_entities(
+            symbols,
+            source_tool="typescript-compiler-api",
+            evidence_summary="discovered from TypeScript syntax structural symbol analysis",
+        )
+
     def _build_quality_service(self) -> NpmQualityService:
         if self._quality_service is None:
             self._quality_service = NpmQualityService(self.repository)
@@ -671,12 +708,18 @@ class NPMProvider(
         except ValueError:
             return tuple()
 
+    # Tier 1-safe: this reads explicit import/export relationships from the TS AST.
+    def get_structural_file_relationships(self, repository_rel_path: str) -> tuple[FileRelationshipRef, ...]:
+        return self.get_file_relationships(repository_rel_path)
+
+    # Tier 1-safe for broad compact: render edges are derived from local JSX AST resolution.
     def get_file_render_edges(self, repository_rel_path: str) -> tuple[RenderEdgeRef, ...]:
         try:
             return self._build_render_edge_service().get_file_render_edges(repository_rel_path)
         except ValueError:
             return tuple()
 
+    # Tier 2-only for broad routing: invariant findings may use TypeScript checker evidence.
     def get_file_invariant_findings(self, repository_rel_path: str) -> tuple[InvariantFindingRef, ...]:
         try:
             findings, _ = self._build_static_analysis_service().get_file_analysis(repository_rel_path)
@@ -684,6 +727,7 @@ class NPMProvider(
         except ValueError:
             return tuple()
 
+    # Tier 2-only for broad routing: local flow is deterministic but not part of the structural fast path.
     def get_file_local_flow_edges(self, repository_rel_path: str) -> tuple[StaticFlowEdgeRef, ...]:
         try:
             _, edges = self._build_static_analysis_service().get_file_analysis(repository_rel_path)

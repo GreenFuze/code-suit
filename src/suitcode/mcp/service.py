@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from pathlib import Path
+import time
 from typing import Callable, TypeVar
 
 from suitcode.analytics.recorder import ToolCallRecorder
+from suitcode.core.code.evidence_tier import CodeEvidenceTier
 from suitcode.core.change_models import ChangeTarget
 from suitcode.core.repository import Repository
 from suitcode.core.tests.models import RelatedTestTarget
 from suitcode.core.validation import validate_preview_limit
 from suitcode.core.validation import validate_change_preview_limit
 from suitcode.core.workspace import Workspace
-from suitcode.mcp.errors import McpNotFoundError, McpUnsupportedRepositoryError, McpValidationError
+from suitcode.mcp.errors import McpNotFoundError, McpRetryableError, McpUnsupportedRepositoryError, McpValidationError
 from suitcode.mcp.file_target_errors import explain_file_target_error
 from suitcode.mcp.models import (
     ActionAvailabilityView,
@@ -50,6 +53,7 @@ from suitcode.mcp.models import (
     FileUnderstandingCompactView,
     FileUnderstandingStandardTargetView,
     FileUnderstandingStandardView,
+    IncompleteBatchTargetView,
     FileView,
     ImpactSummaryView,
     HotEntrypointView,
@@ -90,11 +94,22 @@ from suitcode.mcp.models import (
 from suitcode.mcp.pagination import PaginationPolicy
 from suitcode.mcp.service_runtime import build_mcp_service_runtime
 from suitcode.mcp.state import WorkspaceRegistry
+from suitcode.providers.npm.tool_runner import TypeScriptToolTimeoutError
+from suitcode.runtime.errors import CoordinatorRuntimeNotReadyError, SemanticQueryTimeoutError
 
 T = TypeVar("T")
 
 
 class SuitMcpService:
+    _BATCH_COMPACT_MAX_WORKERS = 4
+    _BATCH_COMPACT_TARGET_TIMEOUT_SECONDS = 120.0
+    _STANDARD_MAX_TARGETS = 3
+    _FULL_MAX_TARGETS = 1
+    _COMPACT_SINGLE_TARGET_STRUCTURAL_LINE_THRESHOLD = 400
+    _COMPACT_SINGLE_TARGET_STRUCTURAL_BYTE_THRESHOLD = 48 * 1024
+    _SEMANTIC_ENRICHMENT_BUDGET_SECONDS = 10.0
+    _HOT_ENTRYPOINT_QUERY_BUDGET_SECONDS = 8.0
+
     def __init__(
         self,
         registry: WorkspaceRegistry | None = None,
@@ -232,19 +247,59 @@ class SuitMcpService:
 
         def _callback(repository: Repository) -> FileUnderstandingCompactView | FileUnderstandingStandardView | FileUnderstandingView:
             normalized_paths = self._validate_repository_rel_paths(repository_rel_paths, field_name="repository_rel_paths")
-            targets = tuple(
-                self._understand_file_target(
-                    repository,
-                    repository_rel_path,
-                    related_test_limit=self._detail_preview_limit(validated_detail_level, related_test_limit),
-                    detail_level=validated_detail_level,
+            target_count = len(normalized_paths)
+            self._validate_detail_scope(
+                tool_name="understand_file",
+                detail_level=validated_detail_level,
+                target_count=target_count,
+            )
+            degrade_compact_single_target = self._should_degrade_compact_single_target(
+                repository,
+                normalized_paths,
+                detail_level=validated_detail_level,
+            )
+            enable_deep_symbol_navigation = (
+                False
+                if degrade_compact_single_target
+                else self._should_enable_deep_symbol_navigation(
+                    validated_detail_level,
+                    target_count,
                 )
-                for repository_rel_path in normalized_paths
+            )
+            evidence_tier = (
+                CodeEvidenceTier.STRUCTURAL
+                if degrade_compact_single_target
+                else self._code_evidence_tier(validated_detail_level, target_count)
+            )
+            include_file_wide_references = enable_deep_symbol_navigation
+            targets, incomplete_targets = self._collect_understand_file_targets(
+                repository=repository,
+                repository_rel_paths=normalized_paths,
+                related_test_limit=self._detail_preview_limit(validated_detail_level, related_test_limit),
+                detail_level=validated_detail_level,
+                include_reference_sites=include_file_wide_references,
+                include_implementation_locations=enable_deep_symbol_navigation,
+                enable_implementation_flow=enable_deep_symbol_navigation,
+                enable_hot_entrypoints=enable_deep_symbol_navigation,
+                reference_site_limit=(
+                    None
+                    if enable_deep_symbol_navigation
+                    else self._detail_preview_limit(validated_detail_level, 20)
+                ),
+                evidence_tier=evidence_tier,
             )
             if validated_detail_level == "compact":
-                return self._compact_file_understanding_view(targets)
+                return self._compact_file_understanding_view(
+                    targets,
+                    target_count=target_count,
+                    incomplete_targets=incomplete_targets,
+                )
             if validated_detail_level == "standard":
-                return self._standard_file_understanding_view(targets)
+                return self._standard_file_understanding_view(
+                    targets,
+                    target_count=target_count,
+                    incomplete_targets=incomplete_targets,
+                )
             aggregate_reference_site_count, aggregate_reference_sites_preview = self._aggregate_ranked_views(
                 tuple(target.reference_sites_preview for target in targets),
                 key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
@@ -292,8 +347,10 @@ class SuitMcpService:
             )
             return FileUnderstandingView(
                 detail_level="full",
-                target_count=len(targets),
+                target_count=target_count,
+                completed_target_count=len(targets),
                 targets=targets,
+                incomplete_targets=incomplete_targets,
                 owner_ids=tuple(sorted({item.file_owner.owner.id for item in targets})),
                 aggregate_reference_site_count=aggregate_reference_site_count,
                 aggregate_reference_sites_preview=aggregate_reference_sites_preview,
@@ -392,51 +449,56 @@ class SuitMcpService:
 
         def _callback(repository: Repository) -> BatchChangeImpactCompactView | BatchChangeImpactStandardView | BatchChangeImpactView:
             normalized_paths = self._validate_repository_rel_paths(repository_rel_paths, field_name="repository_rel_paths")
-            targets: list[BatchChangeImpactTargetView] = []
-            for repository_rel_path in normalized_paths:
-                try:
-                    impact = repository.analyze_change(
-                        ChangeTarget(repository_rel_path=repository_rel_path),
-                        reference_preview_limit=self._detail_preview_limit(validated_detail_level, reference_preview_limit),
-                        dependent_preview_limit=self._detail_preview_limit(validated_detail_level, dependent_preview_limit),
-                        test_preview_limit=self._detail_preview_limit(validated_detail_level, test_preview_limit),
-                        runner_preview_limit=self._detail_preview_limit(validated_detail_level, runner_preview_limit),
-                    )
-                except ValueError as exc:
-                    raise McpValidationError(
-                        explain_file_target_error(
-                            repository,
-                            repository_rel_path,
-                            str(exc),
-                            tool_name="what_changes_if_i_edit_this",
-                        )
-                    ) from exc
-                targets.append(
-                    BatchChangeImpactTargetView(
-                        repository_rel_path=repository_rel_path,
-                        impact=self._change_impact_presenter.change_impact_view(impact),
-                        implementation_flow_summary=(
-                            None
-                            if self._artifact_surface_summary_view(repository, repository_rel_path) is not None
-                            else self._implementation_flow_summary_view(
-                                repository,
-                                repository_rel_path,
-                                detail_level=validated_detail_level,
-                            )
-                        ),
-                        frontend_proof_summary=(
-                            None
-                            if self._artifact_surface_summary_view(repository, repository_rel_path) is not None
-                            else self._frontend_proof_summary_view(repository, repository_rel_path)
-                        ),
-                        artifact_surface_summary=self._artifact_surface_summary_view(repository, repository_rel_path),
-                    )
+            target_count = len(normalized_paths)
+            self._validate_detail_scope(
+                tool_name="what_changes_if_i_edit_this",
+                detail_level=validated_detail_level,
+                target_count=target_count,
+            )
+            degrade_compact_single_target = self._should_degrade_compact_single_target(
+                repository,
+                normalized_paths,
+                detail_level=validated_detail_level,
+            )
+            enable_deep_symbol_navigation = (
+                False
+                if degrade_compact_single_target
+                else self._should_enable_deep_symbol_navigation(
+                    validated_detail_level,
+                    target_count,
                 )
-            frozen_targets = tuple(targets)
+            )
+            evidence_tier = (
+                CodeEvidenceTier.STRUCTURAL
+                if degrade_compact_single_target
+                else self._code_evidence_tier(validated_detail_level, target_count)
+            )
+            include_file_wide_references = enable_deep_symbol_navigation
+            frozen_targets, incomplete_targets = self._collect_change_impact_targets(
+                repository=repository,
+                repository_rel_paths=normalized_paths,
+                detail_level=validated_detail_level,
+                reference_preview_limit=self._detail_preview_limit(validated_detail_level, reference_preview_limit),
+                dependent_preview_limit=self._detail_preview_limit(validated_detail_level, dependent_preview_limit),
+                test_preview_limit=self._detail_preview_limit(validated_detail_level, test_preview_limit),
+                runner_preview_limit=self._detail_preview_limit(validated_detail_level, runner_preview_limit),
+                include_reference_locations=include_file_wide_references,
+                include_implementation_locations=enable_deep_symbol_navigation,
+                evidence_tier=evidence_tier,
+                enable_deep_symbol_navigation=enable_deep_symbol_navigation,
+            )
             if validated_detail_level == "compact":
-                return self._compact_change_impact_view(frozen_targets)
+                return self._compact_change_impact_view(
+                    frozen_targets,
+                    target_count=target_count,
+                    incomplete_targets=incomplete_targets,
+                )
             if validated_detail_level == "standard":
-                return self._standard_change_impact_view(frozen_targets)
+                return self._standard_change_impact_view(
+                    frozen_targets,
+                    target_count=target_count,
+                    incomplete_targets=incomplete_targets,
+                )
             _, reference_sites = self._aggregate_ranked_views(
                 tuple(target.impact.reference_locations for target in frozen_targets),
                 key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
@@ -504,8 +566,10 @@ class SuitMcpService:
             )
             return BatchChangeImpactView(
                 detail_level="full",
-                target_count=len(frozen_targets),
+                target_count=target_count,
+                completed_target_count=len(frozen_targets),
                 targets=frozen_targets,
+                incomplete_targets=incomplete_targets,
                 owner_ids=tuple(sorted({item.impact.owner.id for item in frozen_targets})),
                 reference_sites=reference_sites,
                 dependent_files=dependent_files,
@@ -1341,9 +1405,23 @@ class SuitMcpService:
         *,
         related_test_limit: int,
         detail_level: str,
+        include_reference_sites: bool,
+        include_implementation_locations: bool,
+        enable_implementation_flow: bool,
+        enable_hot_entrypoints: bool,
+        reference_site_limit: int | None,
+        evidence_tier: CodeEvidenceTier,
     ) -> FileUnderstandingTargetView:
         try:
-            context = repository.describe_files((repository_rel_path,), symbol_preview_limit=20, test_preview_limit=related_test_limit)[0]
+            context = repository.describe_files(
+                (repository_rel_path,),
+                symbol_preview_limit=20,
+                test_preview_limit=related_test_limit,
+                include_reference_sites=include_reference_sites,
+                include_implementation_locations=include_implementation_locations,
+                reference_site_limit=reference_site_limit,
+                evidence_tier=evidence_tier,
+            )[0]
             owner = self._ownership_presenter.file_owner_view(repository.get_file_owner(repository_rel_path))
             reference_sites_preview = tuple(
                 self._code_presenter.location_view(item) for item in context.reference_sites_preview
@@ -1387,25 +1465,59 @@ class SuitMcpService:
                 else None
             )
             artifact_surface_summary = self._artifact_surface_summary_view(repository, repository_rel_path)
+            semantic_deadline = self._semantic_enrichment_deadline(
+                evidence_tier=evidence_tier,
+                repository=repository,
+                repository_rel_path=repository_rel_path,
+            )
             implementation_flow_summary = (
                 None
-                if artifact_surface_summary is not None
-                else self._implementation_flow_summary_view(
-                    repository,
-                    repository_rel_path,
-                    detail_level=detail_level,
+                if artifact_surface_summary is not None or not enable_implementation_flow
+                else self._run_semantic_enrichment_stage(
+                    repository=repository,
+                    repository_rel_path=repository_rel_path,
+                    deadline=semantic_deadline,
+                    stage_name="implementation_flow_summary",
+                    build=lambda: self._implementation_flow_summary_view(
+                        repository,
+                        repository_rel_path,
+                        detail_level=detail_level,
+                    ),
                 )
             )
-            frontend_proof_summary = None if artifact_surface_summary is not None else self._frontend_proof_summary_view(repository, repository_rel_path)
-            hot_entrypoints_preview = self._hot_entrypoints_preview(
-                repository,
-                repository_rel_path,
-                detail_level=detail_level,
+            frontend_proof_summary = (
+                None
+                if artifact_surface_summary is not None
+                else self._run_semantic_enrichment_stage(
+                    repository=repository,
+                    repository_rel_path=repository_rel_path,
+                    deadline=semantic_deadline,
+                    stage_name="frontend_proof_summary",
+                    build=lambda: self._frontend_proof_summary_view(repository, repository_rel_path),
+                )
+            )
+            hot_entrypoints_preview = (
+                tuple()
+                if not enable_hot_entrypoints
+                else self._run_semantic_enrichment_stage(
+                    repository=repository,
+                    repository_rel_path=repository_rel_path,
+                    deadline=semantic_deadline,
+                    stage_name="hot_entrypoints_preview",
+                    build=lambda: self._hot_entrypoints_preview(
+                        repository,
+                        repository_rel_path,
+                        detail_level=detail_level,
+                        deadline=semantic_deadline,
+                    ),
+                )
             )
         except ValueError as exc:
             raise McpValidationError(
                 explain_file_target_error(repository, repository_rel_path, str(exc), tool_name="understand_file")
             ) from exc
+        except (CoordinatorRuntimeNotReadyError, TypeScriptToolTimeoutError, SemanticQueryTimeoutError) as exc:
+            raise self._runtime_not_ready_error(tool_name="understand_file", exc=exc) from exc
         return FileUnderstandingTargetView(
             detail_level="full",
             repository_rel_path=repository_rel_path,
@@ -1448,6 +1560,185 @@ class SuitMcpService:
             ),
         )
 
+    def _collect_understand_file_targets(
+        self,
+        *,
+        repository: Repository,
+        repository_rel_paths: tuple[str, ...],
+        related_test_limit: int,
+        detail_level: str,
+        include_reference_sites: bool,
+        include_implementation_locations: bool,
+        enable_implementation_flow: bool,
+        enable_hot_entrypoints: bool,
+        reference_site_limit: int | None,
+        evidence_tier: CodeEvidenceTier,
+    ) -> tuple[tuple[FileUnderstandingTargetView, ...], tuple[IncompleteBatchTargetView, ...]]:
+        def _build(repository_rel_path: str) -> FileUnderstandingTargetView:
+            return self._understand_file_target(
+                repository,
+                repository_rel_path,
+                related_test_limit=related_test_limit,
+                detail_level=detail_level,
+                include_reference_sites=include_reference_sites,
+                include_implementation_locations=include_implementation_locations,
+                enable_implementation_flow=enable_implementation_flow,
+                enable_hot_entrypoints=enable_hot_entrypoints,
+                reference_site_limit=reference_site_limit,
+                evidence_tier=evidence_tier,
+            )
+
+        return self._collect_batch_results(
+            repository_rel_paths=repository_rel_paths,
+            build_target=_build,
+            tool_name="understand_file",
+            detail_level=detail_level,
+            allow_parallel=self._should_parallelize_batch(detail_level, len(repository_rel_paths)),
+        )
+
+    def _collect_change_impact_targets(
+        self,
+        *,
+        repository: Repository,
+        repository_rel_paths: tuple[str, ...],
+        detail_level: str,
+        reference_preview_limit: int,
+        dependent_preview_limit: int,
+        test_preview_limit: int,
+        runner_preview_limit: int,
+        include_reference_locations: bool,
+        include_implementation_locations: bool,
+        evidence_tier: CodeEvidenceTier,
+        enable_deep_symbol_navigation: bool,
+    ) -> tuple[tuple[BatchChangeImpactTargetView, ...], tuple[IncompleteBatchTargetView, ...]]:
+        def _build(repository_rel_path: str) -> BatchChangeImpactTargetView:
+            try:
+                impact = repository.analyze_change(
+                    ChangeTarget(repository_rel_path=repository_rel_path),
+                    reference_preview_limit=reference_preview_limit,
+                    dependent_preview_limit=dependent_preview_limit,
+                    test_preview_limit=test_preview_limit,
+                    runner_preview_limit=runner_preview_limit,
+                    include_reference_locations=include_reference_locations,
+                    include_implementation_locations=include_implementation_locations,
+                    evidence_tier=evidence_tier,
+                )
+            except ValueError as exc:
+                raise McpValidationError(
+                    explain_file_target_error(
+                        repository,
+                        repository_rel_path,
+                        str(exc),
+                        tool_name="what_changes_if_i_edit_this",
+                    )
+                ) from exc
+            except (CoordinatorRuntimeNotReadyError, TypeScriptToolTimeoutError, SemanticQueryTimeoutError) as exc:
+                raise self._runtime_not_ready_error(tool_name="what_changes_if_i_edit_this", exc=exc) from exc
+            artifact_surface_summary = self._artifact_surface_summary_view(repository, repository_rel_path)
+            semantic_deadline = self._semantic_enrichment_deadline(
+                evidence_tier=evidence_tier,
+                repository=repository,
+                repository_rel_path=repository_rel_path,
+            )
+            return BatchChangeImpactTargetView(
+                repository_rel_path=repository_rel_path,
+                impact=self._change_impact_presenter.change_impact_view(impact),
+                implementation_flow_summary=(
+                    None
+                    if not enable_deep_symbol_navigation or artifact_surface_summary is not None
+                    else self._run_semantic_enrichment_stage(
+                        repository=repository,
+                        repository_rel_path=repository_rel_path,
+                        deadline=semantic_deadline,
+                        stage_name="implementation_flow_summary",
+                        build=lambda: self._implementation_flow_summary_view(
+                            repository,
+                            repository_rel_path,
+                            detail_level=detail_level,
+                        ),
+                    )
+                ),
+                frontend_proof_summary=(
+                    None
+                    if artifact_surface_summary is not None
+                    else self._run_semantic_enrichment_stage(
+                        repository=repository,
+                        repository_rel_path=repository_rel_path,
+                        deadline=semantic_deadline,
+                        stage_name="frontend_proof_summary",
+                        build=lambda: self._frontend_proof_summary_view(repository, repository_rel_path),
+                    )
+                ),
+                artifact_surface_summary=artifact_surface_summary,
+            )
+
+        return self._collect_batch_results(
+            repository_rel_paths=repository_rel_paths,
+            build_target=_build,
+            tool_name="what_changes_if_i_edit_this",
+            detail_level=detail_level,
+            allow_parallel=self._should_parallelize_batch(detail_level, len(repository_rel_paths)),
+        )
+
+    def _collect_batch_results(
+        self,
+        *,
+        repository_rel_paths: tuple[str, ...],
+        build_target: Callable[[str], T],
+        tool_name: str,
+        detail_level: str,
+        allow_parallel: bool,
+    ) -> tuple[tuple[T, ...], tuple[IncompleteBatchTargetView, ...]]:
+        if not allow_parallel:
+            completed: list[T] = []
+            for repository_rel_path in repository_rel_paths:
+                completed.append(build_target(repository_rel_path))
+            return tuple(completed), tuple()
+
+        executor = ThreadPoolExecutor(
+            max_workers=min(self._BATCH_COMPACT_MAX_WORKERS, len(repository_rel_paths)),
+            thread_name_prefix="suitcode-batch",
+        )
+        future_to_path: dict[Future[T], str] = {}
+        try:
+            for repository_rel_path in repository_rel_paths:
+                future_to_path[executor.submit(build_target, repository_rel_path)] = repository_rel_path
+            done, not_done = wait(
+                tuple(future_to_path),
+                timeout=self._BATCH_COMPACT_TARGET_TIMEOUT_SECONDS,
+            )
+            completed_by_path: dict[str, T] = {}
+            incomplete_by_path: dict[str, IncompleteBatchTargetView] = {}
+            for future in done:
+                repository_rel_path = future_to_path[future]
+                try:
+                    completed_by_path[repository_rel_path] = future.result()
+                except Exception as exc:  # noqa: BLE001
+                    incomplete_by_path[repository_rel_path] = self._incomplete_batch_target_view(
+                        repository_rel_path,
+                        reason_code="analysis_failed",
+                        message=f"{tool_name} failed for `{repository_rel_path}`: {exc}",
+                    )
+            for future in not_done:
+                repository_rel_path = future_to_path[future]
+                incomplete_by_path[repository_rel_path] = self._incomplete_batch_target_view(
+                    repository_rel_path,
+                    reason_code="analysis_timeout",
+                    message=(
+                        f"{tool_name} exceeded the grouped {detail_level} per-target timeout of "
+                        f"{int(self._BATCH_COMPACT_TARGET_TIMEOUT_SECONDS)}s for `{repository_rel_path}`"
+                    ),
+                )
+            completed_targets = tuple(
+                completed_by_path[path] for path in repository_rel_paths if path in completed_by_path
+            )
+            incomplete_targets = tuple(
+                incomplete_by_path[path] for path in repository_rel_paths if path in incomplete_by_path
+            )
+            return completed_targets, incomplete_targets
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
     @staticmethod
     def _validate_detail_level(detail_level: str) -> str:
         normalized = detail_level.strip().lower()
@@ -1456,12 +1747,94 @@ class SuitMcpService:
         return normalized
 
     @staticmethod
+    def _validate_detail_scope(*, tool_name: str, detail_level: str, target_count: int) -> None:
+        if detail_level == "standard" and target_count > SuitMcpService._STANDARD_MAX_TARGETS:
+            raise McpValidationError(
+                f"{tool_name} detail_level=standard supports at most {SuitMcpService._STANDARD_MAX_TARGETS} targets. "
+                "Narrow the request or use detail_level=compact for broader change-set orientation."
+            )
+        if detail_level == "full" and target_count > SuitMcpService._FULL_MAX_TARGETS:
+            raise McpValidationError(
+                f"{tool_name} detail_level=full supports exactly {SuitMcpService._FULL_MAX_TARGETS} target at a time. "
+                "Narrow the request to one file or use detail_level=compact/standard first."
+            )
+
+    @classmethod
+    def _should_degrade_compact_single_target(
+        cls,
+        repository: Repository,
+        repository_rel_paths: tuple[str, ...],
+        *,
+        detail_level: str,
+    ) -> bool:
+        if detail_level != "compact" or len(repository_rel_paths) != 1:
+            return False
+        repository_rel_path = repository_rel_paths[0]
+        try:
+            file_info = repository.get_file_owner(repository_rel_path).file_info
+        except ValueError:
+            return False
+        if file_info.language is None:
+            return False
+        file_path = repository.root / repository_rel_path
+        if not file_path.is_file():
+            return False
+        try:
+            line_count = 0
+            byte_count = 0
+            with file_path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(8192), b""):
+                    byte_count += len(chunk)
+                    line_count += chunk.count(b"\n")
+                    if (
+                        byte_count > cls._COMPACT_SINGLE_TARGET_STRUCTURAL_BYTE_THRESHOLD
+                        or line_count > cls._COMPACT_SINGLE_TARGET_STRUCTURAL_LINE_THRESHOLD
+                    ):
+                        return True
+        except OSError:
+            return False
+        return False
+
+    @staticmethod
     def _detail_preview_limit(detail_level: str, requested_limit: int) -> int:
         if detail_level == "compact":
             return min(requested_limit, 3)
         if detail_level == "standard":
             return min(requested_limit, 10)
         return requested_limit
+
+    @staticmethod
+    def _code_evidence_tier(detail_level: str, target_count: int) -> CodeEvidenceTier:
+        if detail_level == "compact" and target_count > 1:
+            return CodeEvidenceTier.STRUCTURAL
+        return CodeEvidenceTier.SEMANTIC
+
+    @staticmethod
+    def _should_enable_deep_symbol_navigation(detail_level: str, target_count: int) -> bool:
+        if detail_level == "compact":
+            return target_count == 1
+        if detail_level == "standard":
+            return target_count <= SuitMcpService._STANDARD_MAX_TARGETS
+        return True
+
+    @staticmethod
+    def _should_parallelize_batch(detail_level: str, target_count: int) -> bool:
+        if detail_level == "compact":
+            return target_count > 1
+        return False
+
+    @staticmethod
+    def _incomplete_batch_target_view(
+        repository_rel_path: str,
+        *,
+        reason_code: str,
+        message: str,
+    ) -> IncompleteBatchTargetView:
+        return IncompleteBatchTargetView(
+            repository_rel_path=repository_rel_path,
+            reason_code=reason_code,
+            message=message,
+        )
 
     @staticmethod
     def _compact_invariant_findings(invariant_findings):
@@ -1556,6 +1929,7 @@ class SuitMcpService:
         repository_rel_path: str,
         *,
         detail_level: str,
+        deadline: float | None = None,
     ) -> tuple[HotEntrypointView, ...]:
         symbols = repository.code.list_symbols_in_file(repository_rel_path)
         if len(symbols) < 20:
@@ -1566,6 +1940,12 @@ class SuitMcpService:
         preview_limit = 3 if detail_level == "compact" else 5
         hot_entrypoints: list[HotEntrypointView] = []
         for symbol in candidates:
+            self._ensure_semantic_stage_within_budget(
+                repository=repository,
+                repository_rel_path=repository_rel_path,
+                deadline=deadline,
+                stage_name="hot_entrypoints_preview",
+            )
             references = repository.code.find_references_by_symbol_id(symbol.id)
             external_reference_count = sum(1 for location in references if location.repository_rel_path != repository_rel_path)
             hot_entrypoints.append(
@@ -1577,6 +1957,12 @@ class SuitMcpService:
                     line_start=symbol.line_start,
                     external_reference_count=external_reference_count,
                 )
+            )
+            self._ensure_semantic_stage_within_budget(
+                repository=repository,
+                repository_rel_path=repository_rel_path,
+                deadline=deadline,
+                stage_name="hot_entrypoints_preview",
             )
         ranked = sorted(hot_entrypoints, key=self._hot_entrypoint_rank_key)
         return tuple(ranked[:preview_limit])
@@ -1637,6 +2023,74 @@ class SuitMcpService:
         if summary is None:
             return None
         return self._intelligence_presenter.implementation_flow_summary_view(summary)
+
+    def _semantic_enrichment_deadline(
+        self,
+        *,
+        evidence_tier: CodeEvidenceTier,
+        repository: Repository,
+        repository_rel_path: str,
+    ) -> float | None:
+        if evidence_tier != CodeEvidenceTier.SEMANTIC:
+            return None
+        return time.monotonic() + self._semantic_enrichment_budget_seconds(repository, repository_rel_path)
+
+    def _semantic_enrichment_budget_seconds(self, repository: Repository, repository_rel_path: str) -> float:
+        lowered = repository_rel_path.lower()
+        if lowered.endswith((".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs")):
+            return self._SEMANTIC_ENRICHMENT_BUDGET_SECONDS
+        return max(self._SEMANTIC_ENRICHMENT_BUDGET_SECONDS, self._HOT_ENTRYPOINT_QUERY_BUDGET_SECONDS)
+
+    def _run_semantic_enrichment_stage(
+        self,
+        *,
+        repository: Repository,
+        repository_rel_path: str,
+        deadline: float | None,
+        stage_name: str,
+        build: Callable[[], T],
+    ) -> T:
+        self._ensure_semantic_stage_within_budget(
+            repository=repository,
+            repository_rel_path=repository_rel_path,
+            deadline=deadline,
+            stage_name=stage_name,
+        )
+        result = build()
+        self._ensure_semantic_stage_within_budget(
+            repository=repository,
+            repository_rel_path=repository_rel_path,
+            deadline=deadline,
+            stage_name=stage_name,
+        )
+        return result
+
+    def _ensure_semantic_stage_within_budget(
+        self,
+        *,
+        repository: Repository,
+        repository_rel_path: str,
+        deadline: float | None,
+        stage_name: str,
+    ) -> None:
+        if deadline is None:
+            return
+        if time.monotonic() < deadline:
+            return
+        raise SemanticQueryTimeoutError(
+            server_name=self._semantic_server_name_for_path(repository_rel_path),
+            attachment_root=str(repository.root),
+            state="degraded",
+        ) from TimeoutError(f"semantic enrichment stage `{stage_name}` exceeded budget")
+
+    @staticmethod
+    def _semantic_server_name_for_path(repository_rel_path: str) -> str:
+        lowered = repository_rel_path.lower()
+        if lowered.endswith(".py"):
+            return "basedpyright"
+        if lowered.endswith(".go"):
+            return "gopls"
+        return "typescript-language-server"
 
     @staticmethod
     def _implementation_flow_paths(summary) -> set[str]:
@@ -1870,6 +2324,9 @@ class SuitMcpService:
     def _compact_file_understanding_view(
         self,
         targets: tuple[FileUnderstandingTargetView, ...],
+        *,
+        target_count: int | None = None,
+        incomplete_targets: tuple[IncompleteBatchTargetView, ...] = (),
     ) -> FileUnderstandingCompactView:
         flow_summary_enabled = len(targets) <= 3
         multi_target = len(targets) > 1
@@ -1961,10 +2418,24 @@ class SuitMcpService:
             )
             for target in ranked_targets
         )
+        suggested_follow_ups = (
+            tuple()
+            if compact_targets and all(target.structured_artifact is not None for target in compact_targets)
+            else (
+                "list_symbols_in_file",
+                "find_symbols",
+                "find_references",
+                "what_changes_if_i_edit_this",
+                "what_should_i_run",
+                "can_i_do_this",
+            )
+        )
         return FileUnderstandingCompactView(
             detail_level="compact",
-            target_count=len(compact_targets),
+            target_count=target_count if target_count is not None else len(compact_targets),
+            completed_target_count=len(compact_targets),
             targets=compact_targets,
+            incomplete_targets=incomplete_targets,
             owner_ids=tuple(sorted({item.file_owner.owner.id for item in compact_targets})),
             aggregate_reference_site_count=aggregate_reference_site_count,
             aggregate_reference_sites_preview=aggregate_reference_sites_preview,
@@ -1981,15 +2452,7 @@ class SuitMcpService:
             aggregate_local_flow_edge_count=aggregate_local_flow_edge_count,
             aggregate_local_flow_edges_preview=aggregate_local_flow_edges_preview,
             aggregate_related_tests=aggregate_related_tests,
-            suggested_follow_ups=(
-                tuple()
-                if compact_targets and all(target.structured_artifact is not None for target in compact_targets)
-                else (
-                    "what_changes_if_i_edit_this",
-                    "what_should_i_run",
-                    "can_i_do_this",
-                )
-            ),
+            suggested_follow_ups=suggested_follow_ups,
         )
 
     def _compact_file_target_view(
@@ -2066,6 +2529,9 @@ class SuitMcpService:
     def _standard_file_understanding_view(
         self,
         targets: tuple[FileUnderstandingTargetView, ...],
+        *,
+        target_count: int | None = None,
+        incomplete_targets: tuple[IncompleteBatchTargetView, ...] = (),
     ) -> FileUnderstandingStandardView:
         aggregate_reference_site_count, aggregate_reference_sites_preview = self._aggregate_ranked_views(
             tuple(target.reference_sites_preview for target in targets),
@@ -2154,8 +2620,10 @@ class SuitMcpService:
         )
         return FileUnderstandingStandardView(
             detail_level="standard",
-            target_count=len(standard_targets),
+            target_count=target_count if target_count is not None else len(standard_targets),
+            completed_target_count=len(standard_targets),
             targets=standard_targets,
+            incomplete_targets=incomplete_targets,
             owner_ids=tuple(sorted({item.file_owner.owner.id for item in standard_targets})),
             aggregate_reference_site_count=aggregate_reference_site_count,
             aggregate_reference_sites_preview=aggregate_reference_sites_preview,
@@ -2188,6 +2656,9 @@ class SuitMcpService:
     def _compact_change_impact_view(
         self,
         targets: tuple[BatchChangeImpactTargetView, ...],
+        *,
+        target_count: int | None = None,
+        incomplete_targets: tuple[IncompleteBatchTargetView, ...] = (),
     ) -> BatchChangeImpactCompactView:
         flow_summary_enabled = len(targets) <= 3
         multi_target = len(targets) > 1
@@ -2282,8 +2753,10 @@ class SuitMcpService:
         )
         return BatchChangeImpactCompactView(
             detail_level="compact",
-            target_count=len(compact_targets),
+            target_count=target_count if target_count is not None else len(compact_targets),
+            completed_target_count=len(compact_targets),
             targets=compact_targets,
+            incomplete_targets=incomplete_targets,
             owner_ids=tuple(sorted({item.owner.id for item in compact_targets})),
             reference_sites=reference_sites,
             dependent_files=dependent_files,
@@ -2357,6 +2830,9 @@ class SuitMcpService:
     def _standard_change_impact_view(
         self,
         targets: tuple[BatchChangeImpactTargetView, ...],
+        *,
+        target_count: int | None = None,
+        incomplete_targets: tuple[IncompleteBatchTargetView, ...] = (),
     ) -> BatchChangeImpactStandardView:
         _, reference_sites = self._aggregate_ranked_views(
             tuple(target.impact.reference_locations for target in targets),
@@ -2464,8 +2940,10 @@ class SuitMcpService:
         )
         return BatchChangeImpactStandardView(
             detail_level="standard",
-            target_count=len(standard_targets),
+            target_count=target_count if target_count is not None else len(standard_targets),
+            completed_target_count=len(standard_targets),
             targets=standard_targets,
+            incomplete_targets=incomplete_targets,
             owner_ids=tuple(sorted({item.owner.id for item in standard_targets})),
             reference_sites=reference_sites,
             dependent_files=dependent_files,
@@ -2673,7 +3151,7 @@ class SuitMcpService:
             workspace = Workspace(Path(repository_path), materialize_suit_dir=False)
             repository = workspace.repositories[0]
             return callback(repository)
-        except (McpNotFoundError, McpValidationError, McpUnsupportedRepositoryError):
+        except (McpNotFoundError, McpValidationError, McpUnsupportedRepositoryError, McpRetryableError):
             raise
         except ValueError as exc:
             message = str(exc)
@@ -2695,3 +3173,17 @@ class SuitMcpService:
                 seen.add(key)
                 merged.append(entry)
         return tuple(merged)
+
+    @staticmethod
+    def _runtime_not_ready_error(*, tool_name: str, exc) -> McpRetryableError:
+        server_name = getattr(getattr(exc, "server_family", None), "value", None) or getattr(exc, "server_name", "runtime")
+        state = getattr(getattr(exc, "state", None), "value", None) or getattr(exc, "state", "degraded")
+        return McpRetryableError(
+            "runtime_not_ready: "
+            f"tool={tool_name} "
+            f"server={server_name} "
+            f"attachment_root={exc.attachment_root} "
+            f"state={state} "
+            f"retry_after_seconds={exc.retry_after_seconds}; "
+            "retry the same request after the suggested delay"
+        )

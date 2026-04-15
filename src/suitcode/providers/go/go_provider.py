@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 from threading import Lock
@@ -28,7 +29,9 @@ from suitcode.providers.go.models import GoPackageAnalysis, GoPackageManagerAnal
 from suitcode.providers.go.symbol_models import GoWorkspaceSymbol
 from suitcode.providers.go.symbol_service import GoFileSymbolService, GoSymbolService
 from suitcode.providers.go.symbol_translation import GoSymbolTranslator
+from suitcode.providers.go.structural_symbol_service import GoStructuralSymbolService
 from suitcode.providers.go.workspace_analyzer import GoWorkspaceAnalyzer
+from suitcode.providers.shared.structural_symbols import structural_symbols_to_entities
 from suitcode.providers.provider_metadata import ProviderAttachmentCandidate, ProviderAttachmentContext
 from suitcode.providers.provider_roles import ProviderRole
 from suitcode.providers.runtime_capability_models import (
@@ -104,6 +107,7 @@ class GoProvider(
         self._tests_cache: tuple[GoTestAnalysis, ...] | None = None
         self._symbol_service: GoSymbolService | None = None
         self._file_symbol_service: GoFileSymbolService | None = None
+        self._structural_symbol_service: GoStructuralSymbolService | None = None
         self._implementation_service: GoImplementationService | None = None
         self._tests_lock = Lock()
 
@@ -191,7 +195,20 @@ class GoProvider(
                 summary="gopls is unavailable for deterministic Go code intelligence",
                 reason=str(exc),
             )
+        structural_available = shutil.which("go") is not None
         return CodeRuntimeCapabilities(
+            structural_symbols=self._runtime_capability(
+                capability_id="go.code.structural_symbols",
+                availability=(
+                    RuntimeCapabilityAvailability.AVAILABLE
+                    if structural_available
+                    else RuntimeCapabilityAvailability.DEGRADED
+                ),
+                source_kind=SourceKind.SYNTAX,
+                source_tool="go/parser",
+                summary="Go structural symbols are available from go/parser without gopls",
+                reason=None if structural_available else "go executable is unavailable for go/parser structural analysis",
+            ),
             symbol_search=capability,
             symbols_in_file=capability,
             definitions=capability,
@@ -302,6 +319,15 @@ class GoProvider(
             )
         return self._implementation_service
 
+    def _build_structural_symbol_service(self) -> GoStructuralSymbolService:
+        if self._structural_symbol_service is None:
+            self._structural_symbol_service = GoStructuralSymbolService(
+                repository_root=self.repository.root,
+                attachment_root=self.attachment_root,
+                attachment_root_rel_path=self.attachment_root_rel_path,
+            )
+        return self._structural_symbol_service
+
     def _build_test_execution_service(self) -> TestExecutionService:
         if self._test_execution_service is None:
             self._test_execution_service = TestExecutionService(repository_root=self.repository.root, suit_dir=self.repository.suit_dir)
@@ -312,6 +338,26 @@ class GoProvider(
 
     def _get_symbols(self, query: str, is_case_sensitive: bool = False) -> tuple[GoWorkspaceSymbol, ...]:
         return self._build_symbol_service().get_symbols(query, is_case_sensitive=is_case_sensitive)
+
+    def list_structural_symbols_in_file(
+        self,
+        repository_rel_path: str,
+        query: str | None = None,
+        is_case_sensitive: bool = False,
+    ) -> tuple[EntityInfo, ...]:
+        try:
+            symbols = self._build_structural_symbol_service().list_file_symbols(
+                repository_rel_path,
+                query=query,
+                is_case_sensitive=is_case_sensitive,
+            )
+        except (OSError, subprocess.CalledProcessError, ValueError):
+            return tuple()
+        return structural_symbols_to_entities(
+            symbols,
+            source_tool="go/parser",
+            evidence_summary="discovered from Go syntax structural symbol analysis",
+        )
 
     def _list_file_symbols(
         self,

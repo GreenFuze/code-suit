@@ -28,7 +28,12 @@ class CodexSessionStore:
 
         matches: list[Path] = []
         for path in self.candidate_sessions():
-            meta = self.session_meta(path)
+            try:
+                meta = self.session_meta(path)
+            except ValueError:
+                if normalized_session_id is None:
+                    matches.append(path)
+                continue
             if normalized_session_id is not None and meta["session_id"] != normalized_session_id:
                 continue
             if normalized_root is not None:

@@ -28,7 +28,7 @@ def test_build_arg_parser_defaults() -> None:
 
 def test_main_runs_stdio(monkeypatch) -> None:
     fake_app = _FakeApp()
-    monkeypatch.setattr("suitcode.mcp.server.create_mcp_app", lambda: fake_app)
+    monkeypatch.setattr("suitcode.mcp.server.create_mcp_app", lambda profile="full": fake_app)
     entered: list[tuple[str | None, bool]] = []
 
     class _ManagedPidFile:
@@ -54,7 +54,7 @@ def test_main_runs_stdio(monkeypatch) -> None:
 
 def test_main_runs_http(monkeypatch) -> None:
     fake_app = _FakeApp()
-    monkeypatch.setattr("suitcode.mcp.server.create_mcp_app", lambda: fake_app)
+    monkeypatch.setattr("suitcode.mcp.server.create_mcp_app", lambda profile="full": fake_app)
     entered: list[tuple[str | None, bool]] = []
 
     class _ManagedPidFile:

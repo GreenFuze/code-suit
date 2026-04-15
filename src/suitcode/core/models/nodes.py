@@ -172,8 +172,8 @@ class EntityInfo(GraphNode):
     def _validate_provenance(self):
         if not self.provenance:
             raise ValueError("entity provenance must not be empty")
-        if all(item.source_kind != SourceKind.LSP for item in self.provenance):
-            raise ValueError("entity provenance must include lsp evidence")
+        if all(item.source_kind not in {SourceKind.LSP, SourceKind.SYNTAX} for item in self.provenance):
+            raise ValueError("entity provenance must include lsp or syntax evidence")
         return self
 
     @field_validator("line_end")

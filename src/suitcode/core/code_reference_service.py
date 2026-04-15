@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING
 
 from suitcode.core.code.models import CodeLocation
 from suitcode.core.models import EntityInfo
 from suitcode.core.ownership_index import OwnershipIndex
+from suitcode.runtime.errors import SemanticQueryTimeoutError
 
 if TYPE_CHECKING:
     from suitcode.core.repository import Repository
 
 
 class CodeReferenceService:
+    _FILE_REFERENCE_QUERY_BUDGET_SECONDS = 10.0
+
     def __init__(self, repository: Repository, ownership_index: OwnershipIndex) -> None:
         self._repository = repository
         self._ownership_index = ownership_index
@@ -36,8 +40,11 @@ class CodeReferenceService:
     ) -> tuple[CodeLocation, ...]:
         if max_locations is not None and max_locations < 1:
             raise ValueError("max_locations must be at least 1")
+        started_at = time.monotonic()
         references: dict[tuple[str, int, int, int | None, int | None, str | None], CodeLocation] = {}
         for symbol in self._repository.code.list_symbols_in_file(repository_rel_path):
+            if time.monotonic() - started_at >= self._FILE_REFERENCE_QUERY_BUDGET_SECONDS:
+                raise self._semantic_timeout(repository_rel_path)
             for location in self._repository.code.find_references_by_symbol_id(symbol.id):
                 key = self._location_key(location)
                 references.setdefault(key, location)
@@ -85,3 +92,18 @@ class CodeReferenceService:
     @staticmethod
     def _location_sort_key(location: CodeLocation) -> tuple[str, int, int, str]:
         return (location.repository_rel_path, location.line_start, location.column_start, location.symbol_id or "")
+
+    def _semantic_timeout(self, repository_rel_path: str) -> SemanticQueryTimeoutError:
+        return SemanticQueryTimeoutError(
+            server_name=self._server_name_for_path(repository_rel_path),
+            attachment_root=str(self._repository.root),
+        )
+
+    @staticmethod
+    def _server_name_for_path(repository_rel_path: str) -> str:
+        lowered = repository_rel_path.lower()
+        if lowered.endswith(".py"):
+            return "basedpyright"
+        if lowered.endswith(".go"):
+            return "gopls"
+        return "typescript-language-server"

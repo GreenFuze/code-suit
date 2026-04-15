@@ -4,6 +4,9 @@
 
 SuitCode is an MCP server that answers repository questions through the toolchain the repository already defines: manifests, builds, tests, language servers, quality tools, and explicit structured artifacts.
 
+Your agent can search the repo. SuitCode asks the toolchain.
+Stop guessing and exploring blindly. SuitCode turns repo/toolchain signals into deterministic actions.
+
 The goal is not to help an agent search faster. The goal is to reduce uncertainty earlier:
 - who owns this file
 - what changes if I edit it
@@ -46,11 +49,13 @@ Two core tools support `detail_level`:
 
 Levels:
 - `compact`: smallest curated deterministic answer
-- `standard`: bounded richer answer
-- `full`: richest evidence payload
+- `standard`: richer drill-down for up to 3 targets
+- `full`: richest evidence payload for exactly 1 target
 
 Default:
 - `compact`
+
+For very large single code files, `compact` may degrade to structural evidence to keep latency bounded.
 
 ### Multi-file support
 
@@ -59,6 +64,10 @@ The target-bearing core tools accept `repository_rel_paths` as a list.
 That means one call can cover a local change set and return:
 - per-target detail
 - one ranked and capped aggregate view
+
+Use `compact` for broad change-set orientation.
+Use `standard` only when the request is already narrowed to at most 3 files.
+Use `full` only for single-target expert drill-down.
 
 ## What SuitCode Can Do Today
 
@@ -153,7 +162,7 @@ It will not:
 - pretend docs/spec files are executable when they are not
 - blur deterministic evidence with semantic summarization
 
-## Current Evidence
+## Quick Proof
 
 Controlled Codex v7 A/B benchmark:
 - stable downstream A/B: SuitCode `5/5` vs baseline `2/5`
@@ -171,6 +180,11 @@ Important interpretation:
 - the benchmark demonstrates that deterministic task-shaped repo intelligence can outperform baseline exploration on bounded tasks
 - it does not, by itself, prove natural live adoption
 - recent product work has therefore focused on smaller core tools, compact defaults, and better live agent fit
+
+Current agent support snapshot:
+- Codex: live evaluation and passive analytics
+- Claude Code: passive analytics
+- Cursor: passive analytics
 
 ## Install
 
@@ -292,7 +306,7 @@ Manual fallback on macOS/Linux `~/.cursor/mcp.json`:
 }
 ```
 
-## Example Workflow
+## One End-To-End Example
 
 Prompt:
 

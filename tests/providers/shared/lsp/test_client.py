@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import io
 import json
+import time
 from pathlib import Path
 
+import pytest
+
 from suitcode.providers.shared.lsp.client import LspClient
+from suitcode.providers.shared.lsp.errors import LspTimeoutError
 
 
 def _message(payload: dict) -> bytes:
@@ -17,6 +21,27 @@ class _FakeProcess:
     def __init__(self, responses: bytes) -> None:
         self.stdin = io.BytesIO()
         self.stdout = io.BytesIO(responses)
+
+    def start(self) -> None:
+        return None
+
+    def stop(self) -> None:
+        return None
+
+
+class _BlockingStdout:
+    def readline(self) -> bytes:
+        time.sleep(0.2)
+        return b""
+
+    def read(self, size: int) -> bytes:  # noqa: ARG002
+        return b""
+
+
+class _BlockingProcess:
+    def __init__(self) -> None:
+        self.stdin = io.BytesIO()
+        self.stdout = _BlockingStdout()
 
     def start(self) -> None:
         return None
@@ -141,3 +166,15 @@ def test_lsp_client_definition_and_references_open_and_close_file(tmp_path: Path
     assert '"method": "textDocument/definition"' in payload
     assert '"method": "textDocument/references"' in payload
     assert '"method": "textDocument/implementation"' in payload
+
+
+def test_lsp_client_times_out_waiting_for_response() -> None:
+    client = LspClient(
+        ("fake-server",),
+        Path("."),
+        process=_BlockingProcess(),
+        request_timeout_seconds=0.05,
+    )
+
+    with pytest.raises(LspTimeoutError, match="timed out waiting for `initialize`"):
+        client.initialize(Path("."))

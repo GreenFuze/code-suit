@@ -30,11 +30,28 @@ Current core tools:
 
 Two heavy tools support detail levels:
 - `compact`: smallest curated answer
-- `standard`: bounded richer answer
-- `full`: richest evidence payload
+- `standard`: richer drill-down for up to 3 targets
+- `full`: richest evidence payload for exactly 1 target
 
 Default:
 - `compact`
+
+For very large single code files, `compact` may degrade to structural evidence to keep latency bounded.
+
+## MCP Tools by Job
+
+Repository orientation:
+- `understand_repository`
+
+File understanding:
+- `understand_file`
+- `what_changes_if_i_edit_this`
+
+Deterministic validation planning:
+- `what_should_i_run`
+
+Feasibility and boundary checks:
+- `can_i_do_this`
 
 ## What Users Get
 
@@ -64,6 +81,7 @@ Default:
 ## Supported Today
 
 Ecosystems and artifact families:
+- `go`
 - Python
 - npm / TypeScript
 - Go
@@ -74,6 +92,30 @@ Agent integrations:
 - Codex
 - Claude Code
 - Cursor
+
+Analytics support:
+- Codex live evaluation and passive analytics
+- Claude/Cursor passive analytics
+
+## Deterministic Execution Surfaces
+
+SuitCode exposes execution-facing intelligence only when the repository toolchain proves it:
+- deterministic test targets
+- deterministic build targets
+- deterministic runner targets
+- deterministic lint and format targets where provider-owned quality tooling is resolvable
+
+Evaluation and execution references:
+- `scripts/EVALUATION.md`
+- `docs/evaluation/benchmark_protocol_v1.md`
+
+## Provenance and Trust Model
+
+SuitCode keeps provenance attached to evidence-bearing answers and distinguishes:
+- manifest-backed evidence
+- syntax-backed structural evidence
+- exact semantic/LSP-backed evidence
+- explicit unsupported or unavailable boundaries
 
 ## Product Principles
 

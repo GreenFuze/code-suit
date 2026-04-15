@@ -33,6 +33,7 @@ Protocol v1 is currently implemented for:
 - optional stress read-only reporting
 
 The current canonical task files are:
+- `benchmarks/codex/tasks/suitcode_v6_headline.json`
 - `benchmarks/codex/tasks/suitcode_v7_headline.json`
 - `benchmarks/codex/tasks/suitcode_calibration.json`
 - `benchmarks/codex/tasks/suitcode_execution_ab.json`

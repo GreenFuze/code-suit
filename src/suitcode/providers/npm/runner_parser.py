@@ -36,6 +36,8 @@ class NpmRunnerScriptInspector:
         normalized_command = command.strip()
         if not normalized_command:
             return None
+        if not self._has_external_executable_segment(normalized_command):
+            return None
         referenced_files = self._referenced_files(package_dir, normalized_command)
         return NpmRunnerAnalysis(
             package_name=package_name,
@@ -47,6 +49,16 @@ class NpmRunnerScriptInspector:
             cwd=package_path or None,
             referenced_files=referenced_files,
         )
+
+    def _has_external_executable_segment(self, command: str) -> bool:
+        return any(self._is_external_executable_segment(tokens) for tokens in self._tokenized_segments(command))
+
+    @staticmethod
+    def _is_external_executable_segment(tokens: list[str]) -> bool:
+        if not tokens:
+            return False
+        executable = tokens[0].lower()
+        return executable not in {"npm", "npx", "yarn", "pnpm", "corepack"}
 
     def _tokenized_segments(self, command: str) -> tuple[list[str], ...]:
         segments: list[list[str]] = []

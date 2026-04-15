@@ -132,6 +132,29 @@ def test_python_provider_get_symbol_translates_python_symbols(python_provider: P
     assert symbols[0].provenance[0].source_kind.value == "lsp"
 
 
+def test_python_provider_returns_tier_one_structural_symbols_without_basedpyright(python_provider: PythonProvider) -> None:
+    def _unexpected_semantic_call(*args, **kwargs):
+        raise AssertionError("Tier 1 structural symbol lookup must not call basedpyright-backed symbol service")
+
+    python_provider._file_symbol_service = type(
+        "_UnexpectedFileSymbolService",
+        (),
+        {"list_file_symbols": _unexpected_semantic_call},
+    )()
+
+    symbols = python_provider.list_structural_symbols_in_file("src/acme/core/repository.py")
+
+    assert [item.name for item in symbols] == [
+        "RepositoryManager",
+        "RepositoryManager.__init__",
+        "RepositoryManager.build",
+        "build_repository_id",
+    ]
+    assert {item.entity_kind for item in symbols} == {"class", "method", "function"}
+    assert all(item.provenance[0].source_kind.value == "syntax" for item in symbols)
+    assert all(item.provenance[0].source_tool == "python-ast" for item in symbols)
+
+
 def test_python_provider_definition_and_reference_locations_include_provenance(python_provider: PythonProvider) -> None:
     class _FakeFileSymbolService:
         def find_definition(self, repository_rel_path: str, line: int, column: int):

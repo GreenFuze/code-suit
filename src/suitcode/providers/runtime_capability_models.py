@@ -47,6 +47,7 @@ class RuntimeCapability(StrictModel):
 
 
 class CodeRuntimeCapabilities(StrictModel):
+    structural_symbols: RuntimeCapability | None = None
     symbol_search: RuntimeCapability
     symbols_in_file: RuntimeCapability
     definitions: RuntimeCapability

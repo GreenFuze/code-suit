@@ -7,7 +7,11 @@ from typing import TYPE_CHECKING, Generic, TypeVar
 
 from suitcode.providers.shared.lsp import LspClient
 from suitcode.providers.shared.lsp_code.backend import LspCodeBackend, LspRepositorySymbol
-from suitcode.providers.shared.lsp_code.session import LspResolver, LspSessionManager
+from suitcode.providers.shared.lsp_code.session import (
+    CoordinatorBackedLspSessionManager,
+    LspResolver,
+    LspSessionManager,
+)
 
 if TYPE_CHECKING:
     from suitcode.core.repository import Repository
@@ -43,6 +47,7 @@ class LspSymbolServiceBase(Generic[_SymbolT]):
             else None
         )
         self._backend = LspCodeBackend(
+            project_root=repository.root,
             repository_root=self._attachment_root,
             ensure_ready=ensure_ready,
             resolver=resolver,
@@ -52,7 +57,7 @@ class LspSymbolServiceBase(Generic[_SymbolT]):
             included_roots=included_roots,
             enable_workspace_symbol_fallback=enable_workspace_symbol_fallback,
             client_factory=client_factory,
-            session_manager=session_manager,
+            session_manager=session_manager or CoordinatorBackedLspSessionManager(),
         )
 
     def get_symbols(self, query: str, is_case_sensitive: bool = False) -> tuple[_SymbolT, ...]:

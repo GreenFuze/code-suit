@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from suitcode.core.build_service import BuildService
+from suitcode.core.code.evidence_tier import CodeEvidenceTier
 from suitcode.core.repository import Repository
 from suitcode.core.runner_service import RunnerService
 from suitcode.core.tests.models import RelatedTestTarget
@@ -353,3 +354,22 @@ def test_repository_routes_file_symbol_lookup_to_owning_provider_only(npm_reposi
     python_provider.list_symbols_in_file = _unexpected_symbol_call  # type: ignore[method-assign]
 
     assert isinstance(npm_repository.code.list_symbols_in_file("packages/core/src/index.ts"), tuple)
+
+
+def test_repository_structural_file_context_does_not_call_semantic_symbols(npm_repository) -> None:
+    npm_provider = npm_repository.get_provider("npm")
+
+    def _unexpected_semantic_symbol_call(*args, **kwargs):
+        raise AssertionError("semantic symbol lookup should not run for structural file context")
+
+    npm_provider.list_symbols_in_file = _unexpected_semantic_symbol_call  # type: ignore[method-assign]
+    npm_provider.get_structural_file_relationships = lambda _path: tuple()  # type: ignore[method-assign]
+    npm_provider.get_file_render_edges = lambda _path: tuple()  # type: ignore[method-assign]
+
+    contexts = npm_repository.describe_files(
+        ("packages/core/src/index.ts",),
+        evidence_tier=CodeEvidenceTier.STRUCTURAL,
+    )
+
+    assert contexts[0].symbol_count >= 1
+    assert contexts[0].symbols_preview[0].provenance[0].source_kind.value == "syntax"

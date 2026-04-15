@@ -8,6 +8,7 @@ from suitcode.core.models import Aggregator, Component, ExternalPackage, FileInf
 from suitcode.core.models.graph_types import ComponentKind, NodeKind, ProgrammingLanguage
 from suitcode.core.provenance_builders import manifest_node_provenance, manifest_provenance, ownership_provenance
 from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
+from suitcode.providers.provider_metadata import ProviderAttachmentCandidate, ProviderAttachmentContext
 from suitcode.providers.provider_roles import ProviderRole
 
 
@@ -31,8 +32,20 @@ class _ArchitectureProvider(ArchitectureProviderBase):
     def detect_roles(cls, repository_root: Path) -> frozenset[ProviderRole]:
         return frozenset({ProviderRole.ARCHITECTURE})
 
+    @classmethod
+    def discover_attachments(cls, repository_root: Path) -> tuple[ProviderAttachmentCandidate, ...]:
+        return tuple()
+
     def __init__(self, repository, suffix: str) -> None:
-        super().__init__(repository)
+        super().__init__(
+            repository,
+            ProviderAttachmentContext(
+                provider_id=self.PROVIDER_ID,
+                repository_root=Path("."),
+                attachment_root=Path("."),
+                attachment_root_rel_path="",
+            ),
+        )
         self._suffix = suffix
 
     def get_components(self):

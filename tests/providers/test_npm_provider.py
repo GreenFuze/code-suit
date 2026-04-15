@@ -220,6 +220,16 @@ def test_npm_provider_get_symbol_returns_entity_info(npm_provider: NPMProvider) 
     assert symbols[0].provenance[0].source_kind.value == "lsp"
 
 
+def test_npm_provider_returns_tier_one_structural_symbols_from_typescript_ast(npm_provider: NPMProvider) -> None:
+    symbols = npm_provider.list_structural_symbols_in_file("packages/core/src/index.ts")
+
+    by_name = {item.name: item for item in symbols}
+    assert "Core" in by_name
+    assert by_name["Core"].entity_kind == "class"
+    assert by_name["Core"].provenance[0].source_kind.value == "syntax"
+    assert by_name["Core"].provenance[0].source_tool == "typescript-compiler-api"
+
+
 def test_npm_provider_definition_and_reference_locations_include_provenance(npm_provider: NPMProvider) -> None:
     class _FakeFileSymbolService:
         def find_definition(self, repository_rel_path: str, line: int, column: int):
@@ -793,6 +803,7 @@ def test_npm_provider_code_runtime_capabilities_use_resolver(npm_provider: NPMPr
 
     capabilities = npm_provider.get_code_runtime_capabilities()
 
+    assert capabilities.structural_symbols is not None
     assert capabilities.symbol_search.availability == RuntimeCapabilityAvailability.AVAILABLE
     assert capabilities.definitions.availability == RuntimeCapabilityAvailability.AVAILABLE
 

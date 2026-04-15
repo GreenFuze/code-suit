@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from suitcode.core.code.evidence_tier import CodeEvidenceTier
 from suitcode.core.change_models import ChangeImpact, ChangeTarget, QualityGateInfo, RunnerImpact, TestImpact
 from suitcode.core.change_evidence import ChangeEvidenceAssembler
 from suitcode.core.code.models import CodeLocation
@@ -61,6 +62,10 @@ class ChangeImpactService:
         dependent_preview_limit: int,
         test_preview_limit: int,
         runner_preview_limit: int,
+        *,
+        include_reference_locations: bool = True,
+        include_implementation_locations: bool = True,
+        evidence_tier: CodeEvidenceTier = CodeEvidenceTier.SEMANTIC,
     ) -> ChangeImpact:
         resolved = self._target_resolver.resolve(
             symbol_id=target.symbol_id,
@@ -68,6 +73,11 @@ class ChangeImpactService:
             owner_id=target.owner_id,
             reference_preview_limit=reference_preview_limit,
             test_preview_limit=test_preview_limit,
+            include_reference_locations=include_reference_locations and evidence_tier == CodeEvidenceTier.SEMANTIC,
+            include_file_context_implementation_locations=(
+                include_implementation_locations and evidence_tier == CodeEvidenceTier.SEMANTIC
+            ),
+            evidence_tier=evidence_tier,
         )
         if resolved.target_kind == "symbol":
             return self._analyze_resolved_target(
@@ -76,6 +86,8 @@ class ChangeImpactService:
                 dependent_preview_limit=dependent_preview_limit,
                 test_preview_limit=test_preview_limit,
                 runner_preview_limit=runner_preview_limit,
+                include_implementation_locations=include_implementation_locations and evidence_tier == CodeEvidenceTier.SEMANTIC,
+                evidence_tier=evidence_tier,
             )
         if resolved.target_kind == "file":
             return self._analyze_resolved_target(
@@ -84,6 +96,8 @@ class ChangeImpactService:
                 dependent_preview_limit=dependent_preview_limit,
                 test_preview_limit=test_preview_limit,
                 runner_preview_limit=runner_preview_limit,
+                include_implementation_locations=include_implementation_locations and evidence_tier == CodeEvidenceTier.SEMANTIC,
+                evidence_tier=evidence_tier,
             )
         return self._analyze_resolved_target(
             resolved,
@@ -91,6 +105,8 @@ class ChangeImpactService:
             dependent_preview_limit=dependent_preview_limit,
             test_preview_limit=test_preview_limit,
             runner_preview_limit=runner_preview_limit,
+            include_implementation_locations=include_implementation_locations and evidence_tier == CodeEvidenceTier.SEMANTIC,
+            evidence_tier=evidence_tier,
         )
 
     def _analyze_resolved_target(
@@ -101,6 +117,8 @@ class ChangeImpactService:
         dependent_preview_limit: int,
         test_preview_limit: int,
         runner_preview_limit: int,
+        include_implementation_locations: bool,
+        evidence_tier: CodeEvidenceTier,
     ) -> ChangeImpact:
         primary_component = self._target_resolver.resolve_component(primary_component_id)
         component_context = self._primary_component_context(
@@ -109,11 +127,17 @@ class ChangeImpactService:
             test_preview_limit=test_preview_limit,
         )
         dependent_components = self._dependent_components(primary_component, dependent_preview_limit)
-        dependency_files, dependent_files = self._file_relationships(resolved.evidence_path)
+        dependency_files, dependent_files = self._file_relationships(resolved.evidence_path, evidence_tier=evidence_tier)
         render_children, render_parents = self._render_edges(resolved.evidence_path)
-        invariant_findings = self._invariant_findings(resolved.evidence_path)
-        local_flow_edges = self._local_flow_edges(resolved.evidence_path)
-        implementation_locations = self._implementation_locations(resolved.evidence_path)
+        invariant_findings = (
+            tuple() if evidence_tier == CodeEvidenceTier.STRUCTURAL else self._invariant_findings(resolved.evidence_path)
+        )
+        local_flow_edges = (
+            tuple() if evidence_tier == CodeEvidenceTier.STRUCTURAL else self._local_flow_edges(resolved.evidence_path)
+        )
+        implementation_locations = (
+            self._implementation_locations(resolved.evidence_path) if include_implementation_locations else tuple()
+        )
         implementation_components = self._implementation_components(implementation_locations)
         related_tests = self._test_impacts(resolved.related_tests)
         if resolved.target_kind == "owner":
@@ -243,6 +267,8 @@ class ChangeImpactService:
     def _file_relationships(
         self,
         evidence_path: str | None,
+        *,
+        evidence_tier: CodeEvidenceTier,
     ) -> tuple[tuple[FileRelationshipRef, ...], tuple[FileRelationshipRef, ...]]:
         if evidence_path is None:
             return tuple(), tuple()
@@ -250,10 +276,12 @@ class ChangeImpactService:
             self._repository.code.get_file_relationships(
                 evidence_path,
                 relationship_kind=FileRelationshipKind.IMPORTS,
+                evidence_tier=evidence_tier,
             ),
             self._repository.code.get_file_relationships(
                 evidence_path,
                 relationship_kind=FileRelationshipKind.IMPORTED_BY,
+                evidence_tier=evidence_tier,
             ),
         )
 

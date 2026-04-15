@@ -946,10 +946,18 @@ class FileUnderstandingTargetView(StrictModel):
     provenance: tuple[ProvenanceView, ...]
 
 
+class IncompleteBatchTargetView(StrictModel):
+    repository_rel_path: str
+    reason_code: str
+    message: str
+
+
 class FileUnderstandingView(StrictModel):
     detail_level: str
     target_count: int
+    completed_target_count: int = 0
     targets: tuple[FileUnderstandingTargetView, ...]
+    incomplete_targets: tuple[IncompleteBatchTargetView, ...] = Field(default_factory=tuple)
     owner_ids: tuple[str, ...]
     aggregate_reference_site_count: int
     aggregate_reference_sites_preview: tuple[LocationView, ...]
@@ -1002,7 +1010,9 @@ class FileUnderstandingCompactTargetView(StrictModel):
 class FileUnderstandingCompactView(StrictModel):
     detail_level: str
     target_count: int
+    completed_target_count: int = 0
     targets: tuple[FileUnderstandingCompactTargetView, ...]
+    incomplete_targets: tuple[IncompleteBatchTargetView, ...] = Field(default_factory=tuple)
     owner_ids: tuple[str, ...]
     aggregate_reference_site_count: int
     aggregate_reference_sites_preview: tuple[LocationView, ...]
@@ -1054,7 +1064,9 @@ class FileUnderstandingStandardTargetView(StrictModel):
 class FileUnderstandingStandardView(StrictModel):
     detail_level: str
     target_count: int
+    completed_target_count: int = 0
     targets: tuple[FileUnderstandingStandardTargetView, ...]
+    incomplete_targets: tuple[IncompleteBatchTargetView, ...] = Field(default_factory=tuple)
     owner_ids: tuple[str, ...]
     aggregate_reference_site_count: int
     aggregate_reference_sites_preview: tuple[LocationView, ...]
@@ -1087,7 +1099,9 @@ class BatchChangeImpactTargetView(StrictModel):
 class BatchChangeImpactView(StrictModel):
     detail_level: str
     target_count: int
+    completed_target_count: int = 0
     targets: tuple[BatchChangeImpactTargetView, ...]
+    incomplete_targets: tuple[IncompleteBatchTargetView, ...] = Field(default_factory=tuple)
     owner_ids: tuple[str, ...]
     reference_sites: tuple[LocationView, ...]
     dependent_files: tuple[FileRelationshipView, ...]
@@ -1128,7 +1142,9 @@ class BatchChangeImpactCompactTargetView(StrictModel):
 class BatchChangeImpactCompactView(StrictModel):
     detail_level: str
     target_count: int
+    completed_target_count: int = 0
     targets: tuple[BatchChangeImpactCompactTargetView, ...]
+    incomplete_targets: tuple[IncompleteBatchTargetView, ...] = Field(default_factory=tuple)
     owner_ids: tuple[str, ...]
     reference_sites: tuple[LocationView, ...]
     dependent_files: tuple[FileRelationshipView, ...]
@@ -1169,7 +1185,9 @@ class BatchChangeImpactStandardTargetView(StrictModel):
 class BatchChangeImpactStandardView(StrictModel):
     detail_level: str
     target_count: int
+    completed_target_count: int = 0
     targets: tuple[BatchChangeImpactStandardTargetView, ...]
+    incomplete_targets: tuple[IncompleteBatchTargetView, ...] = Field(default_factory=tuple)
     owner_ids: tuple[str, ...]
     reference_sites: tuple[LocationView, ...]
     dependent_files: tuple[FileRelationshipView, ...]

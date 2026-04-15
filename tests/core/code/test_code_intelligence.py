@@ -11,6 +11,7 @@ from suitcode.core.models.graph_types import ComponentKind, ProgrammingLanguage
 from suitcode.core.provenance_builders import lsp_provenance
 from suitcode.core.provenance_builders import lsp_location_provenance
 from suitcode.core.provenance_builders import ownership_provenance
+from suitcode.core.provenance_builders import syntax_node_provenance
 from suitcode.providers.code_provider_base import CodeProviderBase
 from suitcode.providers.provider_metadata import ProviderAttachmentContext
 from suitcode.providers.provider_roles import ProviderRole
@@ -86,6 +87,32 @@ class _CodeProvider(CodeProviderBase):
 
     def list_symbols_in_file(self, repository_rel_path: str, query: str | None = None, is_case_sensitive: bool = False):
         return self.get_symbol(query or self._name, is_case_sensitive=is_case_sensitive)
+
+    def list_structural_symbols_in_file(
+        self,
+        repository_rel_path: str,
+        query: str | None = None,
+        is_case_sensitive: bool = False,
+    ):
+        return (
+            EntityInfo(
+                id=f"entity:file.ts:function:{self._name}:{self._line}-{self._line}",
+                name=self._name,
+                repository_rel_path="file.ts",
+                entity_kind="function",
+                line_start=self._line,
+                line_end=self._line,
+                column_start=1,
+                column_end=5,
+                provenance=(
+                    syntax_node_provenance(
+                        source_tool="fake-parser",
+                        evidence_summary="discovered from fake structural provider",
+                        evidence_paths=("file.ts",),
+                    ),
+                ),
+            ),
+        )
 
     def find_definition(self, repository_rel_path: str, line: int, column: int):
         return (
@@ -177,6 +204,20 @@ def test_code_intelligence_concatenates_and_sorts_symbols() -> None:
     intelligence = CodeIntelligence(repo)  # type: ignore[arg-type]
 
     assert tuple(node.name for node in intelligence.get_symbol("a")) == ("Alpha", "Beta")
+
+
+def test_code_intelligence_collects_structural_symbols_without_semantic_symbol_calls() -> None:
+    class _StructuralOnlyProvider(_CodeProvider):
+        def list_symbols_in_file(self, repository_rel_path: str, query: str | None = None, is_case_sensitive: bool = False):
+            raise AssertionError("semantic symbols must not be used for structural lookup")
+
+    repo = _FakeRepository((_StructuralOnlyProvider(repository=None, name="Alpha", line=1),))  # type: ignore[arg-type]
+    intelligence = CodeIntelligence(repo)  # type: ignore[arg-type]
+
+    symbols = intelligence.list_structural_symbols_in_file("file.ts")
+
+    assert tuple(item.name for item in symbols) == ("Alpha",)
+    assert symbols[0].provenance[0].source_kind == SourceKind.SYNTAX
 
 
 def test_code_intelligence_resolves_symbol_id_for_definitions() -> None:

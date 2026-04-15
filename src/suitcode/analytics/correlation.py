@@ -62,7 +62,7 @@ class AnalyticsCorrelationService:
             correlated_events = time_window_events
             correlated_session_id = session.session_id
             quality = CorrelationQuality.STRONG
-        elif time_window_events and session.repository_root is not None:
+        elif time_window_events and session.repository_root is not None and not session.suitcode_tools:
             correlated_events = time_window_events
             quality = CorrelationQuality.STRONG
             counts = Counter(item.session_id for item in time_window_events)
@@ -128,12 +128,7 @@ class AnalyticsCorrelationService:
         cached = self._events_cache.get(cache_key)
         if cached is not None:
             return cached
-        expected_root = str(repository_root)
-        events = tuple(
-            item
-            for item in self._store.load_events(repository_root=repository_root, include_global=include_global)
-            if item.repository_root == expected_root
-        )
+        events = self._store.load_events(repository_root=repository_root, include_global=include_global)
         self._events_cache[cache_key] = events
         return events
 

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import queue
+import threading
+import time
 from pathlib import Path
 
-from suitcode.providers.shared.lsp.errors import LspProtocolError
+from suitcode.providers.shared.lsp.errors import LspProtocolError, LspTimeoutError
 from suitcode.providers.shared.lsp.messages import LspDocumentSymbol, LspLocation, LspWorkspaceSymbol
 from suitcode.providers.shared.lsp.process import LanguageServerProcess
 from suitcode.providers.shared.lsp.protocol import LspProtocolParser
@@ -17,17 +20,22 @@ class LspClient:
         process: LanguageServerProcess | None = None,
         parser: LspProtocolParser | None = None,
         initialization_options: dict[str, object] | None = None,
+        request_timeout_seconds: float = 10.0,
     ) -> None:
         self._process = process or LanguageServerProcess(command, cwd)
         self._parser = parser or LspProtocolParser()
         self._next_request_id = 1
         self._initialized = False
         self._initialization_options = initialization_options
+        self._request_timeout_seconds = request_timeout_seconds
+        self._reader_queue: queue.Queue[object] = queue.Queue()
+        self._reader_thread: threading.Thread | None = None
 
     def initialize(self, root_path: Path) -> None:
         if self._initialized:
             return
         self._process.start()
+        self._ensure_reader_started()
         root = root_path.expanduser().resolve()
         self._request(
             "initialize",
@@ -111,6 +119,7 @@ class LspClient:
     def shutdown(self) -> None:
         if not self._initialized:
             self._process.stop()
+            self._reader_thread = None
             return
         try:
             self._request("shutdown", None)
@@ -118,6 +127,7 @@ class LspClient:
         finally:
             self._process.stop()
             self._initialized = False
+            self._reader_thread = None
 
     def _request(self, method: str, params: object) -> object:
         request_id = self._next_request_id
@@ -130,8 +140,21 @@ class LspClient:
                 "params": params,
             }
         )
+        deadline = time.monotonic() + self._request_timeout_seconds
         while True:
-            response = self._read_message()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise LspTimeoutError(
+                    f"language server timed out waiting for `{method}` after {self._request_timeout_seconds:.0f}s"
+                )
+            try:
+                response = self._reader_queue.get(timeout=remaining)
+            except queue.Empty as exc:
+                raise LspTimeoutError(
+                    f"language server timed out waiting for `{method}` after {self._request_timeout_seconds:.0f}s"
+                ) from exc
+            if isinstance(response, Exception):
+                raise response
             if not isinstance(response, dict):
                 raise LspProtocolError("language server response must be an object")
             if response.get("id") != request_id:
@@ -167,6 +190,26 @@ class LspClient:
         if len(body) != content_length:
             raise LspProtocolError("language server response body was truncated")
         return json.loads(body.decode("utf-8"))
+
+    def _ensure_reader_started(self) -> None:
+        if self._reader_thread is not None and self._reader_thread.is_alive():
+            return
+        self._reader_queue = queue.Queue()
+        self._reader_thread = threading.Thread(
+            target=self._reader_loop,
+            name="suitcode-lsp-reader",
+            daemon=True,
+        )
+        self._reader_thread.start()
+
+    def _reader_loop(self) -> None:
+        while True:
+            try:
+                payload = self._read_message()
+            except Exception as exc:  # noqa: BLE001
+                self._reader_queue.put(exc)
+                return
+            self._reader_queue.put(payload)
 
     def _request_for_open_document(self, file_path: Path, method: str, params: object) -> object:
         self._notify(

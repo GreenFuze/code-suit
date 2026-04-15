@@ -4,6 +4,7 @@ from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING, Mapping
 
+from suitcode.core.code.evidence_tier import CodeEvidenceTier
 from suitcode.core.action_intelligence import ActionIntelligence
 from suitcode.core.action_models import ActionQuery, RepositoryAction
 from suitcode.core.build_service import BuildService
@@ -451,11 +452,20 @@ class Repository:
         repository_rel_paths: tuple[str, ...],
         symbol_preview_limit: int = 20,
         test_preview_limit: int = 10,
+        *,
+        include_reference_sites: bool = True,
+        include_implementation_locations: bool = True,
+        reference_site_limit: int | None = None,
+        evidence_tier: CodeEvidenceTier = CodeEvidenceTier.SEMANTIC,
     ) -> tuple[FileContext, ...]:
         return self._build_context_service().describe_files(
             repository_rel_paths,
             symbol_preview_limit=symbol_preview_limit,
             test_preview_limit=test_preview_limit,
+            include_reference_sites=include_reference_sites,
+            include_implementation_locations=include_implementation_locations,
+            reference_site_limit=reference_site_limit,
+            evidence_tier=evidence_tier,
         )
 
     def describe_symbol_context(
@@ -502,6 +512,10 @@ class Repository:
         dependent_preview_limit: int = 50,
         test_preview_limit: int = 25,
         runner_preview_limit: int = 25,
+        *,
+        include_reference_locations: bool = True,
+        include_implementation_locations: bool = True,
+        evidence_tier: CodeEvidenceTier = CodeEvidenceTier.SEMANTIC,
     ) -> ChangeImpact:
         return self._build_change_impact_service().analyze_change(
             target,
@@ -509,6 +523,9 @@ class Repository:
             dependent_preview_limit=dependent_preview_limit,
             test_preview_limit=test_preview_limit,
             runner_preview_limit=runner_preview_limit,
+            include_reference_locations=include_reference_locations,
+            include_implementation_locations=include_implementation_locations,
+            evidence_tier=evidence_tier,
         )
 
     def get_minimum_verified_change_set(self, target: ChangeTarget) -> MinimumVerifiedChangeSet:

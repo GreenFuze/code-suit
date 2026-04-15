@@ -1,16 +1,6 @@
-from suitcode.providers.architecture_provider_base import ArchitectureProviderBase
-from suitcode.providers.action_provider_base import ActionProviderBase
-from suitcode.providers.code_provider_base import CodeProviderBase
-from suitcode.providers.npm import NPMProvider
-from suitcode.providers.openapi import OpenApiProvider
-from suitcode.providers.provider_base import ProviderBase
-from suitcode.providers.provider_metadata import DetectedProviderSupport, ProviderDescriptor, RepositorySupportResult
-from suitcode.providers.provider_roles import ProviderRole
-from suitcode.providers.python import PythonProvider
-from suitcode.providers.quality_models import QualityDiagnostic, QualityEntityDelta, QualityFileResult
-from suitcode.providers.quality_provider_base import QualityProviderBase
-from suitcode.providers.registry import BUILTIN_PROVIDER_CLASSES
-from suitcode.providers.test_provider_base import TestProviderBase
+from __future__ import annotations
+
+from importlib import import_module
 
 __all__ = [
     "ArchitectureProviderBase",
@@ -31,3 +21,34 @@ __all__ = [
     "RepositorySupportResult",
     "TestProviderBase",
 ]
+
+_ATTRIBUTE_MODULES = {
+    "ArchitectureProviderBase": ("suitcode.providers.architecture_provider_base", "ArchitectureProviderBase"),
+    "ActionProviderBase": ("suitcode.providers.action_provider_base", "ActionProviderBase"),
+    "BUILTIN_PROVIDER_CLASSES": ("suitcode.providers.registry", "BUILTIN_PROVIDER_CLASSES"),
+    "CodeProviderBase": ("suitcode.providers.code_provider_base", "CodeProviderBase"),
+    "DetectedProviderSupport": ("suitcode.providers.provider_metadata", "DetectedProviderSupport"),
+    "NPMProvider": ("suitcode.providers.npm", "NPMProvider"),
+    "OpenApiProvider": ("suitcode.providers.openapi", "OpenApiProvider"),
+    "ProviderDescriptor": ("suitcode.providers.provider_metadata", "ProviderDescriptor"),
+    "ProviderBase": ("suitcode.providers.provider_base", "ProviderBase"),
+    "ProviderRole": ("suitcode.providers.provider_roles", "ProviderRole"),
+    "PythonProvider": ("suitcode.providers.python", "PythonProvider"),
+    "QualityDiagnostic": ("suitcode.providers.quality_models", "QualityDiagnostic"),
+    "QualityEntityDelta": ("suitcode.providers.quality_models", "QualityEntityDelta"),
+    "QualityFileResult": ("suitcode.providers.quality_models", "QualityFileResult"),
+    "QualityProviderBase": ("suitcode.providers.quality_provider_base", "QualityProviderBase"),
+    "RepositorySupportResult": ("suitcode.providers.provider_metadata", "RepositorySupportResult"),
+    "TestProviderBase": ("suitcode.providers.test_provider_base", "TestProviderBase"),
+}
+
+
+def __getattr__(name: str):
+    target = _ATTRIBUTE_MODULES.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attribute_name = target
+    module = import_module(module_name)
+    value = getattr(module, attribute_name)
+    globals()[name] = value
+    return value

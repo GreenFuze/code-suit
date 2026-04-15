@@ -8,7 +8,12 @@ from typing import TYPE_CHECKING
 from suitcode.providers.go.lsp_resolution import GoplsResolver
 from suitcode.providers.go.symbol_models import GoWorkspaceSymbol
 from suitcode.providers.shared.lsp import LspClient
-from suitcode.providers.shared.lsp_code import LspCodeBackend, LspRepositorySymbol, LspSessionManager
+from suitcode.providers.shared.lsp_code import (
+    CoordinatorBackedLspSessionManager,
+    LspCodeBackend,
+    LspRepositorySymbol,
+    LspSessionManager,
+)
 
 if TYPE_CHECKING:
     from suitcode.core.repository import Repository
@@ -52,6 +57,7 @@ class _GoSymbolServiceBase:
         normalized_attachment_root = attachment_root_rel_path.strip().strip("/").replace("\\", "/")
         self._attachment_root_rel_path = "" if normalized_attachment_root == "." else normalized_attachment_root
         self._backend = LspCodeBackend(
+            project_root=repository.root,
             repository_root=self._attachment_root,
             ensure_ready=lambda: None,
             resolver=resolver or GoplsResolver(),
@@ -59,7 +65,7 @@ class _GoSymbolServiceBase:
             symbol_kind_by_code=self._SYMBOL_KIND_BY_CODE,
             ignored_directories=self._IGNORED_DIRECTORIES,
             client_factory=client_factory,
-            session_manager=session_manager,
+            session_manager=session_manager or CoordinatorBackedLspSessionManager(),
         )
 
     def get_symbols(self, query: str, is_case_sensitive: bool = False) -> tuple[GoWorkspaceSymbol, ...]:

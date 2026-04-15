@@ -96,7 +96,11 @@ class NpmWorkspaceAnalyzer:
 
     def analyze_package_managers(self) -> tuple[NpmPackageManagerAnalysis, ...]:
         if self._package_managers_cache is None:
-            self._package_managers_cache = self._package_manager_discoverer.discover(self._workspace.repository_root)
+            self._package_managers_cache = tuple(
+                analysis
+                for analysis in self._package_manager_discoverer.discover(self._workspace.repository_root)
+                if analysis.manager == "npm"
+            )
         return self._package_managers_cache
 
     def analyze_external_packages(self) -> tuple[NpmExternalPackageAnalysis, ...]:

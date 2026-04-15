@@ -19,3 +19,7 @@ class McpUnsupportedRepositoryError(SuitMcpError):
 
 class McpConflictError(SuitMcpError):
     pass
+
+
+class McpRetryableError(SuitMcpError):
+    pass

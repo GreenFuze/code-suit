@@ -30,6 +30,7 @@ from suitcode.providers.python.quality_translation import PythonQualityTranslato
 from suitcode.providers.python.symbol_models import PythonWorkspaceSymbol
 from suitcode.providers.python.symbol_service import PythonFileSymbolService, PythonSymbolService
 from suitcode.providers.python.symbol_translation import PythonSymbolTranslator
+from suitcode.providers.python.structural_symbol_service import PythonStructuralSymbolService
 from suitcode.providers.python.test_discovery import PythonTestDiscoverer
 from suitcode.providers.python.test_models import PythonTestAnalysis
 from suitcode.providers.python.tool_resolution import PythonQualityToolResolver
@@ -51,6 +52,7 @@ from suitcode.providers.shared.actions import ProviderActionSpec, ProviderAction
 from suitcode.providers.shared.code_facade import CodeFacadeMixin
 from suitcode.providers.shared.component_index import ComponentIndexBuilder
 from suitcode.providers.shared.provider_translation_mixin import ProviderTranslationMixin
+from suitcode.providers.shared.structural_symbols import structural_symbols_to_entities
 from suitcode.providers.shared.pyproject import PyProjectManifest, PyProjectWorkspaceLoader
 from suitcode.providers.shared.test_facade import TestFacadeMixin
 from suitcode.providers.shared.test_execution import TestExecutionService
@@ -127,6 +129,7 @@ class PythonProvider(
         self._dependency_edges_cache: tuple[ComponentDependencyEdge, ...] | None = None
         self._symbol_service: PythonSymbolService | None = None
         self._file_symbol_service: PythonFileSymbolService | None = None
+        self._structural_symbol_service: PythonStructuralSymbolService | None = None
         self._test_discoverer: PythonTestDiscoverer | None = None
         self._quality_service: PythonQualityService | None = None
         self._test_execution_service: TestExecutionService | None = None
@@ -235,6 +238,13 @@ class PythonProvider(
                 reason="basedpyright-langserver was not found in the repository-local virtualenv",
             )
         return CodeRuntimeCapabilities(
+            structural_symbols=self._runtime_capability(
+                capability_id="python.code.structural_symbols",
+                availability=RuntimeCapabilityAvailability.AVAILABLE,
+                source_kind=SourceKind.SYNTAX,
+                source_tool="python-ast",
+                summary="Python structural symbols are available from stdlib ast without basedpyright",
+            ),
             symbol_search=capability,
             symbols_in_file=capability,
             definitions=capability,
@@ -404,6 +414,14 @@ class PythonProvider(
             self._file_symbol_service = PythonFileSymbolService(self.repository)
         return self._file_symbol_service
 
+    def _build_structural_symbol_service(self) -> PythonStructuralSymbolService:
+        if self._structural_symbol_service is None:
+            self._structural_symbol_service = PythonStructuralSymbolService(
+                repository_root=self.repository.root,
+                attachment_root=self.attachment_root,
+            )
+        return self._structural_symbol_service
+
     def _build_test_discoverer(self) -> PythonTestDiscoverer:
         if self._test_discoverer is None:
             self._test_discoverer = PythonTestDiscoverer(self.attachment_root, self._load_manifest())
@@ -484,6 +502,26 @@ class PythonProvider(
 
     def _get_symbols(self, query: str, is_case_sensitive: bool = False) -> tuple[PythonWorkspaceSymbol, ...]:
         return self._build_symbol_service().get_symbols(query, is_case_sensitive=is_case_sensitive)
+
+    def list_structural_symbols_in_file(
+        self,
+        repository_rel_path: str,
+        query: str | None = None,
+        is_case_sensitive: bool = False,
+    ) -> tuple[EntityInfo, ...]:
+        try:
+            symbols = self._build_structural_symbol_service().list_file_symbols(
+                repository_rel_path,
+                query=query,
+                is_case_sensitive=is_case_sensitive,
+            )
+        except ValueError:
+            return tuple()
+        return structural_symbols_to_entities(
+            symbols,
+            source_tool="python-ast",
+            evidence_summary="discovered from Python syntax structural symbol analysis",
+        )
 
     def _list_file_symbols(
         self,

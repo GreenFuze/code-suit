@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from suitcode.core.code.evidence_tier import CodeEvidenceTier
 from suitcode.core.intelligence_models import ComponentContext, FileContext, FileRelationshipKind, RenderEdgeKind, SymbolContext
 from suitcode.core.component_context_resolver import ComponentContextResolver
 from suitcode.core.ownership_index import OwnershipIndex
@@ -75,20 +76,38 @@ class ContextService:
         repository_rel_paths: tuple[str, ...],
         symbol_preview_limit: int,
         test_preview_limit: int,
+        *,
+        include_reference_sites: bool = True,
+        include_implementation_locations: bool = True,
+        reference_site_limit: int | None = None,
+        evidence_tier: CodeEvidenceTier = CodeEvidenceTier.SEMANTIC,
     ) -> tuple[FileContext, ...]:
         self._validate_exact_batch(repository_rel_paths, "repository_rel_paths")
         contexts: list[FileContext] = []
         for repository_rel_path in repository_rel_paths:
             file_owner = self._ownership_index.owner_for_file(repository_rel_path)
-            symbols = self._repository.code.list_symbols_in_file(repository_rel_path)
-            reference_sites = self._code_reference_service.references_for_file(repository_rel_path)
+            symbols = (
+                self._repository.code.list_structural_symbols_in_file(repository_rel_path)
+                if evidence_tier == CodeEvidenceTier.STRUCTURAL
+                else self._repository.code.list_symbols_in_file(repository_rel_path)
+            )
+            reference_sites = (
+                self._code_reference_service.references_for_file(
+                    repository_rel_path,
+                    max_locations=reference_site_limit,
+                )
+                if include_reference_sites and evidence_tier == CodeEvidenceTier.SEMANTIC
+                else tuple()
+            )
             dependency_files = self._repository.code.get_file_relationships(
                 repository_rel_path,
                 relationship_kind=FileRelationshipKind.IMPORTS,
+                evidence_tier=evidence_tier,
             )
             dependent_files = self._repository.code.get_file_relationships(
                 repository_rel_path,
                 relationship_kind=FileRelationshipKind.IMPORTED_BY,
+                evidence_tier=evidence_tier,
             )
             render_children = self._repository.code.get_file_render_edges(
                 repository_rel_path,
@@ -98,9 +117,21 @@ class ContextService:
                 repository_rel_path,
                 relationship_kind=RenderEdgeKind.RENDERED_BY,
             )
-            invariant_findings = self._repository.code.get_file_invariant_findings(repository_rel_path)
-            local_flow_edges = self._repository.code.get_file_local_flow_edges(repository_rel_path)
-            implementation_locations = self._repository.code.get_file_implementation_locations(repository_rel_path)
+            invariant_findings = (
+                tuple()
+                if evidence_tier == CodeEvidenceTier.STRUCTURAL
+                else self._repository.code.get_file_invariant_findings(repository_rel_path)
+            )
+            local_flow_edges = (
+                tuple()
+                if evidence_tier == CodeEvidenceTier.STRUCTURAL
+                else self._repository.code.get_file_local_flow_edges(repository_rel_path)
+            )
+            implementation_locations = (
+                self._repository.code.get_file_implementation_locations(repository_rel_path)
+                if include_implementation_locations and evidence_tier == CodeEvidenceTier.SEMANTIC
+                else tuple()
+            )
             related_tests = self._repository.tests.get_related_tests(RelatedTestTarget(repository_rel_path=repository_rel_path))
             contexts.append(
                 FileContext(
@@ -226,9 +257,10 @@ class ContextService:
         ]
         if symbols:
             entries.append(
-                lsp_provenance(
-                    source_tool=self._lsp_tool_for_path(repository_rel_path),
-                    evidence_summary=f"file symbols derived from LSP document symbols for `{repository_rel_path}`",
+                derived_summary_provenance(
+                    source_kind=self._symbol_source_kind(symbols),
+                    source_tool=self._symbol_source_tool(repository_rel_path, symbols),
+                    evidence_summary=f"file symbols derived from deterministic code symbols for `{repository_rel_path}`",
                     evidence_paths=(repository_rel_path,),
                 )
             )
@@ -309,6 +341,20 @@ class ContextService:
         if related_tests:
             entries.append(self._summarized_test_provenance(related_tests, "symbol-related tests"))
         return tuple(entries)
+
+    @staticmethod
+    def _symbol_source_kind(symbols) -> SourceKind:
+        provenance = tuple(entry for symbol in symbols for entry in symbol.provenance)
+        if any(entry.source_kind == SourceKind.LSP for entry in provenance):
+            return SourceKind.LSP
+        if any(entry.source_kind == SourceKind.SYNTAX for entry in provenance):
+            return SourceKind.SYNTAX
+        return SourceKind.DEPENDENCY_GRAPH
+
+    @staticmethod
+    def _symbol_source_tool(repository_rel_path: str, symbols) -> str | None:
+        provenance = tuple(entry for symbol in symbols for entry in symbol.provenance)
+        return preferred_source_tool(provenance) if provenance else ContextService._lsp_tool_for_path(repository_rel_path)
 
     @staticmethod
     def _summarized_dependency_paths(dependencies) -> tuple[str, ...]:

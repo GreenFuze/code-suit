@@ -49,6 +49,10 @@ Current live harness support not yet implemented:
 
 The report schema already records agent metadata in a reusable shape for those agents when live harnesses are added.
 
+Current schema-level support reserved for future work:
+- Claude
+- Cursor
+
 Dogfooding workflow:
 - `docs/dogfooding/tracked_repositories.v1.json`
 - `docs/dogfooding/phase3_runbook.md`

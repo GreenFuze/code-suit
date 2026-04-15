@@ -31,6 +31,20 @@ def document_provenance(
     )
 
 
+def syntax_provenance(
+    source_tool: str,
+    evidence_summary: str,
+    evidence_paths: tuple[str, ...],
+) -> ProvenanceEntry:
+    return ProvenanceEntry(
+        confidence_mode=ConfidenceMode.AUTHORITATIVE,
+        source_kind=SourceKind.SYNTAX,
+        source_tool=source_tool,
+        evidence_summary=evidence_summary,
+        evidence_paths=evidence_paths,
+    )
+
+
 def lsp_provenance(
     source_tool: str,
     evidence_summary: str,
@@ -105,6 +119,18 @@ def document_node_provenance(
         evidence_summary=evidence_summary,
         evidence_paths=evidence_paths,
         source_tool=source_tool,
+    )
+
+
+def syntax_node_provenance(
+    source_tool: str,
+    evidence_summary: str,
+    evidence_paths: tuple[str, ...],
+) -> ProvenanceEntry:
+    return syntax_provenance(
+        source_tool=source_tool,
+        evidence_summary=evidence_summary,
+        evidence_paths=evidence_paths,
     )
 
 

@@ -14,6 +14,7 @@ from suitcode.core.tests.models import (
 )
 from suitcode.core.tests.test_intelligence import TestIntelligence as RuntimeTestIntelligence
 from suitcode.providers.provider_roles import ProviderRole
+from suitcode.providers.provider_metadata import ProviderAttachmentCandidate, ProviderAttachmentContext
 from suitcode.providers.runtime_capability_models import (
     RuntimeCapability,
     RuntimeCapabilityAvailability,
@@ -43,8 +44,20 @@ class _TestProvider(TestProviderBase):
     def detect_roles(cls, repository_root: Path) -> frozenset[ProviderRole]:
         return frozenset({ProviderRole.TEST})
 
+    @classmethod
+    def discover_attachments(cls, repository_root: Path) -> tuple[ProviderAttachmentCandidate, ...]:
+        return tuple()
+
     def __init__(self, repository, suffix: str) -> None:
-        super().__init__(repository)
+        super().__init__(
+            repository,
+            ProviderAttachmentContext(
+                provider_id=self.PROVIDER_ID,
+                repository_root=Path("."),
+                attachment_root=Path("."),
+                attachment_root_rel_path="",
+            ),
+        )
         self._suffix = suffix
         self.discovered_calls = 0
 

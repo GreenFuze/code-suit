@@ -199,6 +199,15 @@ Current internal observations are:
 - large multi-target aggregate payloads remain a live issue, but per-target compact usage is substantially healthier than before
 - recent Codex dogfooding sessions commonly report meaningful token savings in the roughly `20%` to `40%` range, with the highest gains appearing in repository discovery and validation-planning passes rather than in late-stage line editing
 
+One later live Codex session exposed an important compute-fit failure: a broad 13-file `understand_file(compact)` call against `MyGamesAnywhere` took roughly 35 minutes. The content was deterministic, but the tool had converted token savings into too much cold semantic analysis time. That failure changed the interpretation of compact tooling: broad compact answers must be bounded not only in payload size, but also in the class of evidence they are allowed to collect.
+
+The resulting design split code intelligence into three compute tiers:
+- **Tier 1: structural** evidence from syntax, manifests, and local file analysis. This is the default for broad multi-file compact orientation.
+- **Tier 2: semantic** evidence from LSPs, compiler APIs, typecheckers, and exact reference/definition/implementation queries. This remains the focused drill-down tier.
+- **Tier 3: indexed** evidence from future persistent/background indexes. This is not implemented in v1, but it is the intended optimization path if Tier 2 exactness is needed at broad scale.
+
+This keeps LSPs in the system, but narrows their role. LSPs remain the right primitive for exact semantic operations such as definitions, references, implementations, and symbol drill-down. They are not the right primitive for cold, broad, multi-file repo learning. The v1 response is therefore not to add tree-sitter or another native dependency; it is to use existing ecosystem parsers where available (`go/parser`, TypeScript compiler AST, Python `ast`) for Tier 1, and reserve LSP work for Tier 2.
+
 These live observations are not yet a publication-grade benchmark. They are, however, the practical reason the project has continued in the new direction.
 
 ## Interpretation

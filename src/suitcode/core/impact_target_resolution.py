@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from suitcode.core.code.evidence_tier import CodeEvidenceTier
 from suitcode.core.code.models import CodeLocation
 from suitcode.core.code_reference_service import CodeReferenceService
 from suitcode.core.component_context_resolver import ComponentContextResolver
@@ -53,6 +54,9 @@ class ImpactTargetResolver:
         owner_id: str | None,
         reference_preview_limit: int,
         test_preview_limit: int,
+        include_reference_locations: bool = True,
+        include_file_context_implementation_locations: bool = True,
+        evidence_tier: CodeEvidenceTier = CodeEvidenceTier.SEMANTIC,
     ) -> ResolvedImpactTarget:
         if symbol_id is not None:
             return self._resolve_symbol_target(
@@ -65,6 +69,9 @@ class ImpactTargetResolver:
                 repository_rel_path,
                 reference_preview_limit=reference_preview_limit,
                 test_preview_limit=test_preview_limit,
+                include_reference_locations=include_reference_locations,
+                include_file_context_implementation_locations=include_file_context_implementation_locations,
+                evidence_tier=evidence_tier,
             )
         if owner_id is None:
             raise ValueError("target must include `symbol_id`, `repository_rel_path`, or `owner_id`")
@@ -117,6 +124,9 @@ class ImpactTargetResolver:
         *,
         reference_preview_limit: int,
         test_preview_limit: int,
+        include_reference_locations: bool,
+        include_file_context_implementation_locations: bool,
+        evidence_tier: CodeEvidenceTier,
     ) -> ResolvedImpactTarget:
         file_owner = self._ownership_index.owner_for_file(repository_rel_path)
         owner = file_owner.owner
@@ -126,14 +136,21 @@ class ImpactTargetResolver:
                 (repository_rel_path,),
                 symbol_preview_limit=20,
                 test_preview_limit=test_preview_limit,
+                include_implementation_locations=include_file_context_implementation_locations,
+                evidence_tier=evidence_tier,
             )[0]
             owner = file_context.owner
         except ValueError:
             file_context = None
         try:
-            reference_locations = self._code_reference_service.references_for_file(file_owner.file_info.repository_rel_path)[
-                :reference_preview_limit
-            ]
+            reference_locations = (
+                self._code_reference_service.references_for_file(
+                    file_owner.file_info.repository_rel_path,
+                    max_locations=reference_preview_limit,
+                )[:reference_preview_limit]
+                if include_reference_locations
+                else tuple()
+            )
         except ValueError:
             reference_locations = tuple()
         if file_context is not None:
