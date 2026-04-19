@@ -12,6 +12,15 @@ def _as_tuple(entries: tuple[ProvenanceEntry, ...] | Iterable[ProvenanceEntry]) 
     return result
 
 
+def merge_unique_provenance(*groups: tuple[ProvenanceEntry, ...] | Iterable[ProvenanceEntry]) -> tuple[ProvenanceEntry, ...]:
+    merged: list[ProvenanceEntry] = []
+    for group in groups:
+        for entry in group:
+            if entry not in merged:
+                merged.append(entry)
+    return tuple(merged)
+
+
 def merge_provenance_paths(
     entries: tuple[ProvenanceEntry, ...] | Iterable[ProvenanceEntry],
     limit: int = 10,

@@ -20,7 +20,7 @@ class LspClient:
         process: LanguageServerProcess | None = None,
         parser: LspProtocolParser | None = None,
         initialization_options: dict[str, object] | None = None,
-        request_timeout_seconds: float = 10.0,
+        request_timeout_seconds: float | None = None,
     ) -> None:
         self._process = process or LanguageServerProcess(command, cwd)
         self._parser = parser or LspProtocolParser()
@@ -140,13 +140,20 @@ class LspClient:
                 "params": params,
             }
         )
-        deadline = time.monotonic() + self._request_timeout_seconds
+        deadline = (
+            None
+            if self._request_timeout_seconds is None
+            else time.monotonic() + self._request_timeout_seconds
+        )
         while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise LspTimeoutError(
-                    f"language server timed out waiting for `{method}` after {self._request_timeout_seconds:.0f}s"
-                )
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise LspTimeoutError(
+                        f"language server timed out waiting for `{method}` after {self._request_timeout_seconds:.0f}s"
+                    )
+            else:
+                remaining = None
             try:
                 response = self._reader_queue.get(timeout=remaining)
             except queue.Empty as exc:

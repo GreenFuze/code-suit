@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import PurePosixPath
-import time
 from typing import TYPE_CHECKING
 
 from suitcode.core.intelligence_models import (
@@ -13,10 +12,9 @@ from suitcode.core.intelligence_models import (
 )
 from suitcode.core.provenance import ProvenanceEntry, SourceKind
 from suitcode.core.provenance_builders import derived_summary_provenance
-from suitcode.core.provenance_summary import preferred_source_tool
+from suitcode.core.provenance_summary import merge_unique_provenance, preferred_source_tool
 from suitcode.core.tests.models import RelatedTestTarget, ResolvedRelatedTest
 from suitcode.providers.provider_roles import ProviderRole
-from suitcode.runtime.errors import SemanticQueryTimeoutError
 
 if TYPE_CHECKING:
     from suitcode.core.code.models import CodeLocation
@@ -26,7 +24,6 @@ if TYPE_CHECKING:
 
 
 class ImplementationFlowService:
-    _EXTERNAL_REFERENCE_QUERY_BUDGET_SECONDS = 10.0
     _SYMBOL_SEAM_KINDS = frozenset(
         {
             "function",
@@ -51,8 +48,7 @@ class ImplementationFlowService:
     ) -> ImplementationFlowSummaryRef | None:
         if not self._is_eligible(repository_rel_path):
             return None
-        deadline = time.monotonic() + self._EXTERNAL_REFERENCE_QUERY_BUDGET_SECONDS
-        generic_steps = self._collect_generic_steps(repository_rel_path, deadline=deadline)
+        generic_steps = self._collect_generic_steps(repository_rel_path)
         provider_steps = self._collect_provider_steps(repository_rel_path)
         merged_steps = self._dedupe_steps((*generic_steps, *provider_steps))
         if not merged_steps:
@@ -80,11 +76,9 @@ class ImplementationFlowService:
     def _collect_generic_steps(
         self,
         repository_rel_path: str,
-        *,
-        deadline: float,
     ) -> tuple[ImplementationFlowStepRef, ...]:
         symbol_steps = self._collect_symbol_anchor_steps(repository_rel_path)
-        external_reference_steps = self._collect_external_reference_anchor_steps(repository_rel_path, deadline=deadline)
+        external_reference_steps = self._collect_external_reference_anchor_steps(repository_rel_path)
         test_seams = self._collect_test_seams(repository_rel_path)
         render_steps = self._render_steps(repository_rel_path)
         local_flow_steps = self._local_flow_steps(repository_rel_path)
@@ -101,7 +95,10 @@ class ImplementationFlowService:
     def _collect_provider_steps(self, repository_rel_path: str) -> tuple[ImplementationFlowStepRef, ...]:
         return self._repository.code.get_file_implementation_flow_steps(repository_rel_path)
 
-    def _collect_symbol_anchor_steps(self, repository_rel_path: str) -> tuple[ImplementationFlowStepRef, ...]:
+    def _collect_symbol_anchor_steps(
+        self,
+        repository_rel_path: str,
+    ) -> tuple[ImplementationFlowStepRef, ...]:
         steps: list[ImplementationFlowStepRef] = []
         for symbol in self._ranked_symbols(repository_rel_path):
             step = self._symbol_anchor_step(symbol)
@@ -112,12 +109,10 @@ class ImplementationFlowService:
     def _collect_external_reference_anchor_steps(
         self,
         repository_rel_path: str,
-        *,
-        deadline: float,
     ) -> tuple[ImplementationFlowStepRef, ...]:
         steps: list[ImplementationFlowStepRef] = []
         for symbol in self._ranked_symbols(repository_rel_path):
-            step = self._external_reference_anchor_step(repository_rel_path, symbol, deadline=deadline)
+            step = self._external_reference_anchor_step(repository_rel_path, symbol)
             if step is not None:
                 steps.append(step)
         return tuple(steps)
@@ -133,7 +128,10 @@ class ImplementationFlowService:
             break
         return tuple(steps)
 
-    def _ranked_symbols(self, repository_rel_path: str) -> tuple["EntityInfo", ...]:
+    def _ranked_symbols(
+        self,
+        repository_rel_path: str,
+    ) -> tuple["EntityInfo", ...]:
         ranked_symbols: list[tuple[tuple[int, int, int, int], "EntityInfo"]] = []
         for symbol in self._repository.code.list_symbols_in_file(repository_rel_path):
             if not self._is_symbol_anchor_candidate(symbol):
@@ -149,7 +147,11 @@ class ImplementationFlowService:
             return False
         return symbol.entity_kind in ImplementationFlowService._SYMBOL_SEAM_KINDS
 
-    def _symbol_rank_key(self, repository_rel_path: str, symbol: "EntityInfo") -> tuple[int, int, int, int]:
+    def _symbol_rank_key(
+        self,
+        repository_rel_path: str,
+        symbol: "EntityInfo",
+    ) -> tuple[int, int, int, int]:
         external_reference_count = len(self._external_references_for_symbol(repository_rel_path, symbol))
         exported = int(bool(symbol.name) and symbol.name[:1].isupper())
         return (-external_reference_count, -exported, symbol.line_start or 10**9, symbol.column_start or 10**9)
@@ -171,10 +173,8 @@ class ImplementationFlowService:
         self,
         repository_rel_path: str,
         symbol: "EntityInfo",
-        *,
-        deadline: float,
     ) -> ImplementationFlowStepRef | None:
-        references = self._external_references_for_symbol(repository_rel_path, symbol, deadline=deadline)
+        references = self._external_references_for_symbol(repository_rel_path, symbol)
         if not references:
             return None
         anchor = references[0]
@@ -193,15 +193,11 @@ class ImplementationFlowService:
         self,
         repository_rel_path: str,
         symbol: "EntityInfo",
-        *,
-        deadline: float,
     ) -> tuple["CodeLocation", ...]:
         cache_key = (repository_rel_path, symbol.id)
         cached = self._external_reference_cache.get(cache_key)
         if cached is not None:
             return cached
-        if time.monotonic() >= deadline:
-            raise self._semantic_timeout(repository_rel_path)
         try:
             references = self._repository.code.find_references_by_symbol_id(symbol.id)
         except ValueError:
@@ -214,19 +210,6 @@ class ImplementationFlowService:
         )
         self._external_reference_cache[cache_key] = external_references
         return external_references
-
-    def _semantic_timeout(self, repository_rel_path: str) -> SemanticQueryTimeoutError:
-        lowered = repository_rel_path.lower()
-        if lowered.endswith(".py"):
-            server_name = "basedpyright"
-        elif lowered.endswith(".go"):
-            server_name = "gopls"
-        else:
-            server_name = "typescript-language-server"
-        return SemanticQueryTimeoutError(
-            server_name=server_name,
-            attachment_root=str(self._repository.root),
-        )
 
     def _render_steps(self, repository_rel_path: str) -> tuple[ImplementationFlowStepRef, ...]:
         render_children = self._repository.code.get_file_render_edges(
@@ -334,9 +317,7 @@ class ImplementationFlowService:
             if existing is None:
                 merged[key] = item
                 continue
-            merged[key] = item.model_copy(
-                update={"provenance": tuple(dict.fromkeys((*existing.provenance, *item.provenance)))}
-            )
+            merged[key] = item.model_copy(update={"provenance": merge_unique_provenance(existing.provenance, item.provenance)})
         return tuple(merged.values())
 
     def _rank_steps(self, steps: Sequence[ImplementationFlowStepRef]) -> tuple[ImplementationFlowStepRef, ...]:
@@ -464,11 +445,7 @@ class ImplementationFlowService:
         repository_rel_path: str,
         steps: Sequence[ImplementationFlowStepRef],
     ) -> tuple[ProvenanceEntry, ...]:
-        merged: list[ProvenanceEntry] = []
-        for item in steps:
-            for entry in item.provenance:
-                if entry not in merged:
-                    merged.append(entry)
+        merged = list(merge_unique_provenance(*(item.provenance for item in steps)))
         merged.append(
             derived_summary_provenance(
                 source_kind=SourceKind.DEPENDENCY_GRAPH,

@@ -70,6 +70,7 @@ def test_core_tool_catalog_is_small_and_intent_shaped() -> None:
         "understand_file",
         "what_changes_if_i_edit_this",
         "what_should_i_run",
+        "what_is_not_proven",
         "can_i_do_this",
     }
     assert by_name["understand_repository"].to_annotations().readOnlyHint is True
@@ -79,11 +80,12 @@ def test_core_tool_catalog_is_small_and_intent_shaped() -> None:
     assert "degrade to structural evidence" in by_name["understand_file"].description
     assert "up to 3 targets" in by_name["understand_file"].description
     assert "exactly 1 target" in by_name["understand_file"].description
-    assert "ranked and capped" in by_name["understand_file"].description
+    assert "decision-first planning surface" in by_name["understand_file"].description
     assert "detail_level=compact" in by_name["what_changes_if_i_edit_this"].description
     assert "degrade to structural evidence" in by_name["what_changes_if_i_edit_this"].description
     assert "up to 3 targets" in by_name["what_changes_if_i_edit_this"].description
     assert "exactly 1 target" in by_name["what_changes_if_i_edit_this"].description
-    assert "ranked and capped" in by_name["what_changes_if_i_edit_this"].description
+    assert "decision-first planning surface" in by_name["what_changes_if_i_edit_this"].description
     assert "do not imply runner validation" in by_name["what_should_i_run"].description
+    assert "proof-gap reporting" in by_name["what_is_not_proven"].description.lower()
     assert "deterministic yes or no" in by_name["can_i_do_this"].description.lower()

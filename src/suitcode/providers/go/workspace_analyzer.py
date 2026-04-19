@@ -22,6 +22,7 @@ class GoWorkspaceAnalyzer:
     def __init__(self, repository_root: Path) -> None:
         self._repository_root = repository_root.expanduser().resolve()
         self._analysis: GoWorkspaceAnalysis | None = None
+        self._external_packages_by_module_root: dict[Path, tuple[GoExternalPackageAnalysis, ...]] = {}
 
     @classmethod
     def discover_module_roots(cls, repository_root: Path) -> tuple[Path, ...]:
@@ -70,6 +71,20 @@ class GoWorkspaceAnalyzer:
             self._analysis = self._build_analysis()
         return self._analysis
 
+    def load_external_packages(
+        self,
+        module_root: Path,
+        *,
+        manager_id: str,
+    ) -> tuple[GoExternalPackageAnalysis, ...]:
+        normalized_root = module_root.expanduser().resolve()
+        cached = self._external_packages_by_module_root.get(normalized_root)
+        if cached is not None:
+            return cached
+        external_packages = self._external_packages(normalized_root, manager_id)
+        self._external_packages_by_module_root[normalized_root] = external_packages
+        return external_packages
+
     def _build_analysis(self) -> GoWorkspaceAnalysis:
         module_roots = self.discover_module_roots(self._repository_root)
         if not module_roots:
@@ -77,16 +92,6 @@ class GoWorkspaceAnalyzer:
         modules = tuple(self._analyze_module(module_root, module_roots) for module_root in module_roots)
         components = tuple(sorted((item for module in modules for item in module.components), key=lambda item: item.import_path))
         package_managers = tuple(sorted((module.package_manager for module in modules), key=lambda item: item.node_id))
-        external_packages = tuple(
-            sorted(
-                {
-                    (item.external_package_id, item.package_name, item.version_spec, item.manager_id): item
-                    for module in modules
-                    for item in module.external_packages
-                }.values(),
-                key=lambda item: item.external_package_id,
-            )
-        )
         files = tuple(
             sorted(
                 {item.repository_rel_path: item for module in modules for item in module.files}.values(),
@@ -98,7 +103,7 @@ class GoWorkspaceAnalyzer:
             modules=modules,
             components=components,
             package_managers=package_managers,
-            external_packages=external_packages,
+            external_packages=tuple(),
             files=files,
         )
 
@@ -114,14 +119,13 @@ class GoWorkspaceAnalyzer:
             owned_files=tuple(path for path in (self._rel(module_root, 'go.mod'), self._rel(module_root, 'go.sum')) if path is not None),
         )
         components = self._components(module_root, module_path, all_module_roots)
-        external_packages = self._external_packages(module_root, package_manager.node_id)
         files = self._files(components, package_manager)
         return GoModuleAnalysis(
             module_root_rel_path=module_root_rel,
             module_path=module_path,
             components=components,
             package_manager=package_manager,
-            external_packages=external_packages,
+            external_packages=tuple(),
             files=files,
         )
 

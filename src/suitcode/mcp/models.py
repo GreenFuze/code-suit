@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import re
 from typing import Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 
 class StrictModel(BaseModel):
@@ -10,6 +11,39 @@ class StrictModel(BaseModel):
 
 
 T = TypeVar("T")
+
+
+_CANONICAL_PROVENANCE_SUMMARY_PATTERNS = (
+    re.compile(r"^derived from [^ ]+ (definition|reference|implementation|references|definitions|implementations) location resolution$"),
+    re.compile(r"^discovered from (Go|Python|TypeScript) LSP symbol information$"),
+)
+
+
+def _span_value(path: str, line_start: int | None, line_end: int | None = None) -> str | None:
+    if line_start is None:
+        return None
+    if line_end is None or line_end == line_start:
+        return f"{path}:{line_start}"
+    return f"{path}:{line_start}-{line_end}"
+
+
+def _compressed_anchor_payload(
+    *,
+    path: str,
+    line_start: int | None,
+    line_end: int | None = None,
+    base: dict[str, object],
+) -> dict[str, object]:
+    payload = dict(base)
+    payload["path"] = path
+    span = _span_value(path, line_start, line_end)
+    if span is not None:
+        payload["span"] = span
+    return payload
+
+
+def _canonical_provenance_summary(summary: str) -> bool:
+    return any(pattern.fullmatch(summary) for pattern in _CANONICAL_PROVENANCE_SUMMARY_PATTERNS)
 
 
 class ListResult(StrictModel, Generic[T]):
@@ -222,10 +256,27 @@ class FileView(StrictModel):
     owner_id: str
     provenance: tuple[ProvenanceView, ...]
 
+    @model_serializer(mode="plain")
+    def _serialize(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "path": self.path,
+            "language": self.language,
+            "owner_id": self.owner_id,
+            "provenance": self.provenance,
+        }
+
 
 class FileRelationshipView(StrictModel):
     path: str
     provenance: tuple[ProvenanceView, ...]
+
+    @model_serializer(mode="plain")
+    def _serialize(self) -> dict[str, object]:
+        return {
+            "path": self.path,
+            "provenance": self.provenance,
+        }
 
 
 class RenderEdgeView(StrictModel):
@@ -236,6 +287,18 @@ class RenderEdgeView(StrictModel):
     has_spread_props: bool
     provenance: tuple[ProvenanceView, ...]
 
+    @model_serializer(mode="plain")
+    def _serialize(self) -> dict[str, object]:
+        return _compressed_anchor_payload(
+            path=self.path,
+            line_start=self.line_start,
+            base={
+                "prop_names": self.prop_names,
+                "has_spread_props": self.has_spread_props,
+                "provenance": self.provenance,
+            },
+        )
+
 
 class StaticAnalysisSiteView(StrictModel):
     path: str
@@ -243,6 +306,17 @@ class StaticAnalysisSiteView(StrictModel):
     column_start: int
     label: str
     provenance: tuple[ProvenanceView, ...]
+
+    @model_serializer(mode="plain")
+    def _serialize(self) -> dict[str, object]:
+        return _compressed_anchor_payload(
+            path=self.path,
+            line_start=self.line_start,
+            base={
+                "label": self.label,
+                "provenance": self.provenance,
+            },
+        )
 
 
 class InvariantFindingView(StrictModel):
@@ -257,6 +331,23 @@ class InvariantFindingView(StrictModel):
     producer_sites_preview: tuple[StaticAnalysisSiteView, ...]
     provenance: tuple[ProvenanceView, ...]
 
+    @model_serializer(mode="plain")
+    def _serialize(self) -> dict[str, object]:
+        payload = _compressed_anchor_payload(
+            path=self.path,
+            line_start=self.line_start,
+            base={
+                "field_name": self.field_name,
+                "access_kind": self.access_kind,
+                "subject_label": self.subject_label,
+                "declared_type": self.declared_type,
+                "producer_site_count": self.producer_site_count,
+                "producer_sites_preview": self.producer_sites_preview,
+                "provenance": self.provenance,
+            },
+        )
+        return payload
+
 
 class StaticFlowEdgeView(StrictModel):
     path: str
@@ -266,6 +357,19 @@ class StaticFlowEdgeView(StrictModel):
     source_label: str
     target_label: str
     provenance: tuple[ProvenanceView, ...]
+
+    @model_serializer(mode="plain")
+    def _serialize(self) -> dict[str, object]:
+        return _compressed_anchor_payload(
+            path=self.path,
+            line_start=self.line_start,
+            base={
+                "edge_kind": self.edge_kind,
+                "source_label": self.source_label,
+                "target_label": self.target_label,
+                "provenance": self.provenance,
+            },
+        )
 
 
 class MarkdownSectionView(StrictModel):
@@ -369,6 +473,28 @@ class SymbolView(StrictModel):
     context_source: str | None = None
     provenance: tuple[ProvenanceView, ...]
 
+    @model_serializer(mode="plain")
+    def _serialize(self) -> dict[str, object]:
+        payload = _compressed_anchor_payload(
+            path=self.path,
+            line_start=self.line_start,
+            line_end=self.line_end,
+            base={
+                "id": self.id,
+                "name": self.name,
+                "kind": self.kind,
+                "signature": self.signature,
+                "owner": self.owner,
+                "reference_count": self.reference_count,
+                "reference_preview": self.reference_preview,
+                "related_tests_preview": self.related_tests_preview,
+                "definition_anchor": self.definition_anchor,
+                "context_source": self.context_source,
+                "provenance": self.provenance,
+            },
+        )
+        return payload
+
 
 class LocationView(StrictModel):
     path: str
@@ -378,6 +504,20 @@ class LocationView(StrictModel):
     column_end: int | None = None
     symbol_id: str | None = None
     provenance: tuple[ProvenanceView, ...]
+
+    @model_serializer(mode="plain")
+    def _serialize(self) -> dict[str, object]:
+        payload = _compressed_anchor_payload(
+            path=self.path,
+            line_start=self.line_start,
+            line_end=self.line_end,
+            base={
+                "provenance": self.provenance,
+            },
+        )
+        if self.symbol_id is not None:
+            payload["symbol_id"] = self.symbol_id
+        return payload
 
 
 class OwnerView(StrictModel):
@@ -397,6 +537,25 @@ class ProvenanceView(StrictModel):
     source_tool: str | None = None
     evidence_summary: str
     evidence_paths: tuple[str, ...]
+    owner_path: str | None = Field(default=None, exclude=True)
+
+    @model_serializer(mode="plain")
+    def _serialize(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "confidence_mode": self.confidence_mode,
+            "source_kind": self.source_kind,
+        }
+        if self.source_tool is not None:
+            payload["source_tool"] = self.source_tool
+        if not _canonical_provenance_summary(self.evidence_summary):
+            payload["evidence_summary"] = self.evidence_summary
+        if not (
+            self.owner_path is not None
+            and len(self.evidence_paths) == 1
+            and self.evidence_paths[0] == self.owner_path
+        ):
+            payload["evidence_paths"] = self.evidence_paths
+        return payload
 
 
 class TestDefinitionView(StrictModel):
@@ -658,6 +817,20 @@ class ImplementationFlowStepView(StrictModel):
     detail_label: str | None = None
     provenance: tuple[ProvenanceView, ...]
 
+    @model_serializer(mode="plain")
+    def _serialize(self) -> dict[str, object]:
+        return _compressed_anchor_payload(
+            path=self.path,
+            line_start=self.line_start,
+            base={
+                "step_kind": self.step_kind,
+                "source_label": self.source_label,
+                "target_label": self.target_label,
+                "detail_label": self.detail_label,
+                "provenance": self.provenance,
+            },
+        )
+
 
 class ImplementationFlowSummaryView(StrictModel):
     step_count: int
@@ -673,6 +846,22 @@ class ArtifactSurfaceSummaryView(StrictModel):
     quality_relevant: bool
 
 
+class CompactSurfaceBoundaryView(StrictModel):
+    boundary_kind: str
+    boundary_id: str
+    summary: str
+
+
+class CompactRiskView(StrictModel):
+    risk_code: str
+    summary: str
+
+
+class ProofGapItemView(StrictModel):
+    gap_code: str
+    summary: str
+
+
 class HotEntrypointView(StrictModel):
     symbol_id: str
     name: str
@@ -680,6 +869,19 @@ class HotEntrypointView(StrictModel):
     path: str
     line_start: int | None = None
     external_reference_count: int
+
+    @model_serializer(mode="plain")
+    def _serialize(self) -> dict[str, object]:
+        return _compressed_anchor_payload(
+            path=self.path,
+            line_start=self.line_start,
+            base={
+                "symbol_id": self.symbol_id,
+                "name": self.name,
+                "kind": self.kind,
+                "external_reference_count": self.external_reference_count,
+            },
+        )
 
 
 class MinimumVerifiedTestTargetView(StrictModel):
@@ -793,6 +995,26 @@ class QualityDiagnosticView(StrictModel):
     column_end: int | None = None
     rule_id: str | None = None
     provenance: tuple[ProvenanceView, ...]
+
+    @model_serializer(mode="plain")
+    def _serialize(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "tool": self.tool,
+            "severity": self.severity,
+            "message": self.message,
+            "provenance": self.provenance,
+        }
+        if self.line_start is not None:
+            payload["line_start"] = self.line_start
+        if self.line_end is not None:
+            payload["line_end"] = self.line_end
+        if self.column_start is not None:
+            payload["column_start"] = self.column_start
+        if self.column_end is not None:
+            payload["column_end"] = self.column_end
+        if self.rule_id is not None:
+            payload["rule_id"] = self.rule_id
+        return payload
 
 
 class QualityEntityDeltaView(StrictModel):
@@ -984,25 +1206,12 @@ class FileUnderstandingCompactTargetView(StrictModel):
     detail_level: str
     repository_rel_path: str
     file_owner: FileOwnerView
-    reference_site_count: int
-    reference_sites_preview: tuple[LocationView, ...]
-    dependency_file_count: int
-    dependency_files_preview: tuple[FileRelationshipView, ...]
-    dependent_file_count: int
-    dependent_files_preview: tuple[FileRelationshipView, ...]
-    render_child_count: int
-    render_children_preview: tuple[RenderEdgeView, ...]
-    render_parent_count: int
-    render_parents_preview: tuple[RenderEdgeView, ...]
-    invariant_finding_count: int
-    invariant_findings_preview: tuple[InvariantFindingView, ...]
-    local_flow_edge_count: int
-    local_flow_edges_preview: tuple[StaticFlowEdgeView, ...]
-    related_test_count: int
-    related_tests: tuple[RelatedTestView, ...]
-    hot_entrypoints_preview: tuple[HotEntrypointView, ...] = Field(default_factory=tuple)
-    implementation_flow_summary: ImplementationFlowSummaryView | None = None
-    frontend_proof_summary: FrontendProofSummaryView | None = None
+    top_dependents: tuple[FileRelationshipView, ...] = Field(default_factory=tuple)
+    top_validations: tuple[MinimumVerifiedCompactItemView, ...] = Field(default_factory=tuple)
+    public_surfaces: tuple[CompactSurfaceBoundaryView, ...] = Field(default_factory=tuple)
+    blocking_invariants: tuple[InvariantFindingView, ...] = Field(default_factory=tuple)
+    top_risks: tuple[CompactRiskView, ...] = Field(default_factory=tuple)
+    decision_summary: tuple[str, ...] = Field(default_factory=tuple)
     artifact_surface_summary: ArtifactSurfaceSummaryView | None = None
     structured_artifact: StructuredArtifactView | None = None
 
@@ -1013,23 +1222,6 @@ class FileUnderstandingCompactView(StrictModel):
     completed_target_count: int = 0
     targets: tuple[FileUnderstandingCompactTargetView, ...]
     incomplete_targets: tuple[IncompleteBatchTargetView, ...] = Field(default_factory=tuple)
-    owner_ids: tuple[str, ...]
-    aggregate_reference_site_count: int
-    aggregate_reference_sites_preview: tuple[LocationView, ...]
-    aggregate_dependency_file_count: int
-    aggregate_dependency_files_preview: tuple[FileRelationshipView, ...]
-    aggregate_dependent_file_count: int
-    aggregate_dependent_files_preview: tuple[FileRelationshipView, ...]
-    aggregate_render_child_count: int
-    aggregate_render_children_preview: tuple[RenderEdgeView, ...]
-    aggregate_render_parent_count: int
-    aggregate_render_parents_preview: tuple[RenderEdgeView, ...]
-    aggregate_invariant_finding_count: int
-    aggregate_invariant_findings_preview: tuple[InvariantFindingView, ...]
-    aggregate_local_flow_edge_count: int
-    aggregate_local_flow_edges_preview: tuple[StaticFlowEdgeView, ...]
-    aggregate_related_tests: tuple[RelatedTestView, ...]
-    suggested_follow_ups: tuple[str, ...]
 
 
 class FileUnderstandingStandardTargetView(StrictModel):
@@ -1124,18 +1316,11 @@ class BatchChangeImpactCompactTargetView(StrictModel):
     repository_rel_path: str
     owner: OwnerView
     primary_component: ComponentView | None = None
-    reference_sites: tuple[LocationView, ...]
-    dependent_files: tuple[FileRelationshipView, ...]
-    render_children: tuple[RenderEdgeView, ...]
-    render_parents: tuple[RenderEdgeView, ...]
-    invariant_findings: tuple[InvariantFindingView, ...]
-    local_flow_edges: tuple[StaticFlowEdgeView, ...]
-    dependent_components: tuple[ComponentView, ...]
-    related_tests: tuple[TestImpactView, ...]
-    related_runners: tuple[RunnerImpactView, ...]
-    quality_gates: tuple[QualityGateView, ...]
-    implementation_flow_summary: ImplementationFlowSummaryView | None = None
-    frontend_proof_summary: FrontendProofSummaryView | None = None
+    top_impacted_files: tuple[FileRelationshipView, ...] = Field(default_factory=tuple)
+    top_validations: tuple[MinimumVerifiedCompactItemView, ...] = Field(default_factory=tuple)
+    api_or_public_boundaries: tuple[CompactSurfaceBoundaryView, ...] = Field(default_factory=tuple)
+    top_risks: tuple[CompactRiskView, ...] = Field(default_factory=tuple)
+    decision_summary: tuple[str, ...] = Field(default_factory=tuple)
     artifact_surface_summary: ArtifactSurfaceSummaryView | None = None
 
 
@@ -1145,17 +1330,6 @@ class BatchChangeImpactCompactView(StrictModel):
     completed_target_count: int = 0
     targets: tuple[BatchChangeImpactCompactTargetView, ...]
     incomplete_targets: tuple[IncompleteBatchTargetView, ...] = Field(default_factory=tuple)
-    owner_ids: tuple[str, ...]
-    reference_sites: tuple[LocationView, ...]
-    dependent_files: tuple[FileRelationshipView, ...]
-    render_children: tuple[RenderEdgeView, ...]
-    render_parents: tuple[RenderEdgeView, ...]
-    invariant_findings: tuple[InvariantFindingView, ...]
-    local_flow_edges: tuple[StaticFlowEdgeView, ...]
-    dependent_components: tuple[ComponentView, ...]
-    related_tests: tuple[TestImpactView, ...]
-    related_runners: tuple[RunnerImpactView, ...]
-    quality_gates: tuple[QualityGateView, ...]
 
 
 class BatchChangeImpactStandardTargetView(StrictModel):
@@ -1202,6 +1376,27 @@ class BatchChangeImpactStandardView(StrictModel):
     related_tests: tuple[TestImpactView, ...]
     related_runners: tuple[RunnerImpactView, ...]
     quality_gates: tuple[QualityGateView, ...]
+
+
+class ProofGapTargetView(StrictModel):
+    repository_rel_path: str
+    owner: OwnerView
+    primary_component: ComponentView | None = None
+    current_validation_surfaces: tuple[MinimumVerifiedCompactItemView, ...] = Field(default_factory=tuple)
+    validation_is_build_only: bool
+    has_focused_test_surface: bool
+    has_runner_surface: bool
+    gap_items: tuple[ProofGapItemView, ...] = Field(default_factory=tuple)
+    nearest_validation_artifacts: tuple[MinimumVerifiedCompactItemView, ...] = Field(default_factory=tuple)
+    gap_summary: tuple[str, ...] = Field(default_factory=tuple)
+
+
+class BatchProofGapView(StrictModel):
+    target_count: int
+    targets: tuple[ProofGapTargetView, ...]
+    highest_priority_targets: tuple[str, ...] = Field(default_factory=tuple)
+    shared_gap_codes: tuple[str, ...] = Field(default_factory=tuple)
+    nearby_validation_surfaces: tuple[MinimumVerifiedCompactItemView, ...] = Field(default_factory=tuple)
 
 
 class BatchMinimumVerifiedChangeSetTargetView(StrictModel):

@@ -217,6 +217,66 @@ def test_implementation_flow_service_merges_generic_and_provider_steps() -> None
     assert summary.steps_preview[3].source_label == "status"
 
 
+def test_implementation_flow_service_ranks_symbol_anchors_without_missing_deadline_argument() -> None:
+    symbol = EntityInfo(
+        id=make_entity_id("src/App.tsx", "function", "AppBootstrap", 2, 10),
+        name="AppBootstrap",
+        repository_rel_path="src/App.tsx",
+        entity_kind="function",
+        line_start=2,
+        line_end=10,
+        column_start=1,
+        column_end=20,
+        signature="function AppBootstrap(): void",
+        provenance=(
+            lsp_node_provenance(
+                source_tool="typescript-language-server",
+                evidence_summary="document symbols",
+                evidence_paths=("src/App.tsx",),
+            ),
+        ),
+    )
+
+    class _StubCode:
+        def list_symbols_in_file(self, repository_rel_path: str):
+            return (symbol,)
+
+        def find_references_by_symbol_id(self, symbol_id: str):
+            return tuple()
+
+        def get_file_render_edges(self, repository_rel_path: str, relationship_kind=None):
+            return tuple()
+
+        def get_file_local_flow_edges(self, repository_rel_path: str):
+            return tuple()
+
+        def get_file_implementation_locations(self, repository_rel_path: str):
+            return tuple()
+
+        def get_file_implementation_flow_steps(self, repository_rel_path: str):
+            return tuple()
+
+    class _StubTests:
+        def get_related_tests(self, target):
+            return tuple()
+
+    class _StubRepository:
+        def __init__(self) -> None:
+            self.code = _StubCode()
+            self.tests = _StubTests()
+
+        def get_providers_for_file_role(self, repository_rel_path: str, role):
+            return (SimpleNamespace(attachment=SimpleNamespace(provider_id="npm")),)
+
+    summary = ImplementationFlowService(_StubRepository()).summarize_file(
+        "src/App.tsx",
+        detail_level="compact",
+    )
+
+    assert summary is not None
+    assert any(item.step_kind == ImplementationFlowStepKind.SYMBOL_ANCHOR for item in summary.steps_preview)
+
+
 def test_implementation_flow_service_stays_sparse_without_symbol_coverage() -> None:
     class _StubCode:
         def list_symbols_in_file(self, repository_rel_path: str):

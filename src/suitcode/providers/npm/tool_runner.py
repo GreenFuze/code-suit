@@ -33,7 +33,7 @@ class TypeScriptProbeRunner:
         repository_root: Path,
         attachment_root: Path,
         resolver: TypeScriptLanguageServerResolver | None = None,
-        timeout_seconds: float = 10.0,
+        timeout_seconds: float | None = None,
     ) -> None:
         self._repository_root = repository_root.expanduser().resolve()
         self._attachment_root = attachment_root.expanduser().resolve()

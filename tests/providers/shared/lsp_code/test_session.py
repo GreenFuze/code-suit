@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 
 from suitcode.providers.shared.lsp_code.session import CoordinatorBackedLspSessionManager, PerCallLspSessionManager
-from suitcode.runtime.errors import CoordinatorRuntimeNotReadyError
 from suitcode.runtime.models import EnsureServerReadyPayload, ManagedServerState, ManagedServerStatus, ServerFamily
 
 
@@ -136,7 +135,14 @@ def test_coordinator_backed_session_manager_proxies_supported_resolvers(monkeypa
             self.project_root = project_root
             self.connection = _FakeConnection()
 
-        def ensure_server_ready(self, family: ServerFamily, attachment_root: Path) -> EnsureServerReadyPayload:
+        def wait_until_server_ready(
+            self,
+            family: ServerFamily,
+            attachment_root: Path,
+            *,
+            timeout_seconds=None,
+            poll_interval_seconds: float = 0.5,
+        ) -> EnsureServerReadyPayload:
             return EnsureServerReadyPayload(
                 ready=True,
                 status=ManagedServerStatus(
@@ -174,26 +180,45 @@ def test_coordinator_backed_session_manager_proxies_supported_resolvers(monkeypa
     assert client._connection.requests[0]["family"] == ServerFamily.GOPLS.value
 
 
-def test_coordinator_backed_session_manager_fails_fast_when_runtime_is_warming(monkeypatch, tmp_path: Path) -> None:
+def test_coordinator_backed_session_manager_waits_until_runtime_is_ready(monkeypatch, tmp_path: Path) -> None:
     class _FakeCoordinatorClient:
         def __init__(self, project_root: Path) -> None:
             self.project_root = project_root
+            self.calls = 0
 
-        def ensure_server_ready(self, family: ServerFamily, attachment_root: Path) -> EnsureServerReadyPayload:
+        def wait_until_server_ready(
+            self,
+            family: ServerFamily,
+            attachment_root: Path,
+            *,
+            timeout_seconds=None,
+            poll_interval_seconds: float = 0.5,
+        ) -> EnsureServerReadyPayload:
+            self.calls += 1
             return EnsureServerReadyPayload(
-                ready=False,
+                ready=True,
                 status=ManagedServerStatus(
                     family=family,
                     attachment_root=str(attachment_root),
-                    state=ManagedServerState.WARMING,
+                    state=ManagedServerState.READY,
                 ),
-                retry_after_seconds=15,
                 server_family=family,
                 attachment_root=str(attachment_root),
             )
 
         def open_connection(self):
-            raise AssertionError("open_connection should not run while the runtime is still warming")
+            class _Scope:
+                def __enter__(scope_self):
+                    return type(
+                        "_FakeConnection",
+                        (),
+                        {"request": lambda self, request: {"items": tuple()}},
+                    )()
+
+                def __exit__(scope_self, exc_type, exc, tb):
+                    return False
+
+            return _Scope()
 
     monkeypatch.setattr(
         "suitcode.providers.shared.lsp_code.session.ProjectCoordinatorClient",
@@ -203,6 +228,7 @@ def test_coordinator_backed_session_manager_fails_fast_when_runtime_is_warming(m
     from suitcode.providers.go.lsp_resolution import GoplsResolver
 
     manager = CoordinatorBackedLspSessionManager()
-    with pytest.raises(CoordinatorRuntimeNotReadyError, match="retry after 15s"):
-        with manager.open_client(tmp_path, tmp_path, GoplsResolver(), lambda command, cwd: _FakeClient()):
-            raise AssertionError("expected readiness preflight failure")
+    with manager.open_client(tmp_path, tmp_path, GoplsResolver(), lambda command, cwd: _FakeClient()) as client:
+        symbols = client.workspace_symbol("Core")
+
+    assert symbols == tuple()

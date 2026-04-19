@@ -61,7 +61,32 @@ _HEARTBEAT_INTERVAL_SECONDS = 5.0
 _IDLE_MONITOR_INTERVAL_SECONDS = 5.0
 _MAX_WARMUP_WORKERS = 2
 _MAX_RETRY_BACKOFF_SECONDS = 60.0
-_LSP_REQUEST_TIMEOUT_SECONDS = 10.0
+_LSP_REQUEST_TIMEOUT_SECONDS: float | None = None
+_WARM_PROBE_WALL_BUDGET_SECONDS: float | None = None
+_IGNORED_WARMUP_DIR_NAMES = frozenset(
+    {
+        ".git",
+        "node_modules",
+        "vendor",
+        ".venv",
+        "venv",
+        "env",
+        "dist",
+        "build",
+        "out",
+        "__pycache__",
+    }
+)
+_SUPPORTED_WARMUP_EXTENSIONS: dict[ServerFamily, frozenset[str]] = {
+    ServerFamily.GOPLS: frozenset({".go"}),
+    ServerFamily.BASEDPYRIGHT: frozenset({".py"}),
+    ServerFamily.TYPESCRIPT_LANGUAGE_SERVER: frozenset({".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"}),
+}
+_ELIGIBLE_WARMUP_SYMBOL_KINDS: dict[ServerFamily, frozenset[int]] = {
+    ServerFamily.GOPLS: frozenset({6, 10, 11, 12, 23}),
+    ServerFamily.BASEDPYRIGHT: frozenset({5, 6, 12}),
+    ServerFamily.TYPESCRIPT_LANGUAGE_SERVER: frozenset({5, 6, 10, 11, 12}),
+}
 
 
 def _request_from_payload(payload: dict[str, object]) -> CoordinatorRequest:
@@ -108,6 +133,7 @@ class _ManagedLspSession:
         self._init_options: dict[str, object] | None = None
         self._lock = threading.RLock()
         self._warmup_in_progress = False
+        self._warm_probe_completed = False
 
     def status(self) -> ManagedServerStatus:
         with self._lock:
@@ -124,7 +150,7 @@ class _ManagedLspSession:
     def request_warmup(self) -> bool:
         now = time.time()
         with self._lock:
-            if self._client is not None:
+            if self._client is not None and self._warm_probe_completed:
                 self.last_activity_at = now
                 self.state = ManagedServerState.READY
                 return False
@@ -160,7 +186,15 @@ class _ManagedLspSession:
 
     def warm(self) -> None:
         try:
-            self._ensure_ready(mark_warming=True)
+            client = self._ensure_initialized(mark_warming=True)
+            self._run_warm_probe(client)
+        except CoordinatorError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            self._mark_failure(exc)
+            raise CoordinatorUnavailableError(
+                f"{self.family.value} warm-up probe failed for attachment `{self.attachment_root}`: {exc}"
+            ) from exc
         finally:
             with self._lock:
                 self._warmup_in_progress = False
@@ -212,7 +246,10 @@ class _ManagedLspSession:
 
     def _invoke(self, operation):
         with self._lock:
-            client = self._ensure_ready(mark_warming=False)
+            client = self._ensure_initialized(mark_warming=False)
+            if not self._warm_probe_completed:
+                self.state = ManagedServerState.WARMING
+                raise self._runtime_not_ready_error(ManagedServerState.WARMING)
             try:
                 result = operation(client)
             except LspTimeoutError as exc:
@@ -227,7 +264,7 @@ class _ManagedLspSession:
             self.state = ManagedServerState.READY
             return result
 
-    def _ensure_ready(self, *, mark_warming: bool) -> LspClient:
+    def _ensure_initialized(self, *, mark_warming: bool) -> LspClient:
         now = time.time()
         with self._lock:
             if self._client is not None and self.last_activity_at is not None:
@@ -238,7 +275,7 @@ class _ManagedLspSession:
                 raise self._degraded_retry_error()
             if self._client is not None:
                 self.last_activity_at = now
-                self.state = ManagedServerState.READY
+                self.state = ManagedServerState.READY if self._warm_probe_completed else ManagedServerState.WARMING
                 return self._client
 
             self.state = ManagedServerState.WARMING if mark_warming else ManagedServerState.STARTING
@@ -267,8 +304,138 @@ class _ManagedLspSession:
             self.next_retry_at = None
             self.last_failure_at = None
             self.last_activity_at = now
-            self.state = ManagedServerState.READY
+            self._warm_probe_completed = False
+            self.state = ManagedServerState.WARMING
             return client
+
+    def _run_warm_probe(self, client: LspClient) -> None:
+        deadline = (
+            None
+            if _WARM_PROBE_WALL_BUDGET_SECONDS is None
+            else time.monotonic() + _WARM_PROBE_WALL_BUDGET_SECONDS
+        )
+        representative_file = self._select_representative_file()
+        if representative_file is None:
+            self._mark_probe_complete()
+            return
+
+        symbols = self._run_probe_operation(
+            lambda: client.document_symbol(representative_file),
+            deadline=deadline,
+        )
+        probe_symbol = self._select_probe_symbol(symbols)
+        if probe_symbol is not None:
+            line = probe_symbol.selection_range.start.line + 1
+            column = probe_symbol.selection_range.start.character + 1
+            self._run_probe_operation(
+                lambda: client.definition(representative_file, line, column),
+                deadline=deadline,
+            )
+            self._run_probe_operation(
+                lambda: client.references(
+                    representative_file,
+                    line,
+                    column,
+                    include_declaration=False,
+                ),
+                deadline=deadline,
+            )
+        self._mark_probe_complete()
+
+    def _run_probe_operation(self, operation, *, deadline: float | None):
+        self._ensure_probe_budget(deadline)
+        with self._lock:
+            self.state = ManagedServerState.WARMING
+            try:
+                result = operation()
+            except LspTimeoutError as exc:
+                self._mark_failure(exc)
+                raise self._request_timeout_error() from exc
+            except Exception as exc:  # noqa: BLE001
+                self._mark_failure(exc)
+                raise CoordinatorUnavailableError(
+                    f"{self.family.value} warm-up probe failed for attachment `{self.attachment_root}`: {exc}"
+                ) from exc
+            self.last_activity_at = time.time()
+            return result
+
+    def _mark_probe_complete(self) -> None:
+        with self._lock:
+            self._warm_probe_completed = True
+            self.last_activity_at = time.time()
+            self.state = ManagedServerState.READY
+
+    def _ensure_probe_budget(self, deadline: float | None) -> None:
+        if deadline is None:
+            return
+        if time.monotonic() < deadline:
+            return
+        raise TimeoutError("warm-up probe budget exceeded")
+
+    def _select_representative_file(self) -> Path | None:
+        preferred_candidate: Path | None = None
+        fallback_candidate: Path | None = None
+        extensions = _SUPPORTED_WARMUP_EXTENSIONS.get(self.family, frozenset())
+        if not extensions or not self.attachment_root.exists():
+            return None
+
+        for current_root, dir_names, file_names in os.walk(self.attachment_root, topdown=True):
+            dir_names[:] = sorted(name for name in dir_names if name not in _IGNORED_WARMUP_DIR_NAMES)
+            current_path = Path(current_root)
+            for file_name in sorted(file_names):
+                candidate = current_path / file_name
+                if candidate.suffix.lower() not in extensions:
+                    continue
+                if self._is_test_source_file(candidate):
+                    if fallback_candidate is None:
+                        fallback_candidate = candidate
+                    continue
+                preferred_candidate = candidate
+                return preferred_candidate
+        return fallback_candidate
+
+    def _is_test_source_file(self, file_path: Path) -> bool:
+        name = file_path.name.lower()
+        stem = file_path.stem.lower()
+        if self.family == ServerFamily.GOPLS:
+            return name.endswith("_test.go")
+        if self.family == ServerFamily.BASEDPYRIGHT:
+            return stem.startswith("test_") or stem.endswith("_test")
+        return (
+            stem.startswith("test_")
+            or stem.endswith(".test")
+            or stem.endswith(".spec")
+            or name.endswith(".test.ts")
+            or name.endswith(".test.tsx")
+            or name.endswith(".test.js")
+            or name.endswith(".test.jsx")
+            or name.endswith(".spec.ts")
+            or name.endswith(".spec.tsx")
+            or name.endswith(".spec.js")
+            or name.endswith(".spec.jsx")
+        )
+
+    def _select_probe_symbol(
+        self,
+        symbols: tuple[LspDocumentSymbol, ...],
+    ) -> LspDocumentSymbol | None:
+        eligible_kinds = _ELIGIBLE_WARMUP_SYMBOL_KINDS.get(self.family, frozenset())
+        for symbol in self._walk_document_symbols(symbols):
+            if symbol.kind not in eligible_kinds:
+                continue
+            selection_start = symbol.selection_range.start
+            if selection_start.line < 0 or selection_start.character < 0:
+                continue
+            return symbol
+        return None
+
+    def _walk_document_symbols(
+        self,
+        symbols: tuple[LspDocumentSymbol, ...],
+    ):
+        for symbol in symbols:
+            yield symbol
+            yield from self._walk_document_symbols(symbol.children)
 
     def _mark_failure(self, exc: Exception) -> None:
         self.failure_count += 1
@@ -278,6 +445,7 @@ class _ManagedLspSession:
             float(2 ** min(self.failure_count, 6)),
         )
         self.state = ManagedServerState.DEGRADED
+        self._warm_probe_completed = False
         self._shutdown_locked()
 
     @staticmethod
@@ -299,11 +467,14 @@ class _ManagedLspSession:
         )
 
     def _degraded_retry_error(self) -> CoordinatorRuntimeNotReadyError:
+        return self._runtime_not_ready_error(ManagedServerState.DEGRADED)
+
+    def _runtime_not_ready_error(self, state: ManagedServerState) -> CoordinatorRuntimeNotReadyError:
         status = self.status()
         return CoordinatorRuntimeNotReadyError(
             server_family=self.family,
             attachment_root=str(self.attachment_root),
-            state=ManagedServerState.DEGRADED,
+            state=state,
             retry_after_seconds=self._retry_after_seconds(status),
         )
 
@@ -312,6 +483,7 @@ class _ManagedLspSession:
         self._client = None
         self._command = None
         self._init_options = None
+        self._warm_probe_completed = False
         if client is None:
             return
         try:

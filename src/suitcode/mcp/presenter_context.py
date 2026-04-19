@@ -157,7 +157,7 @@ class IntelligencePresenter:
     def file_relationship_view(relationship) -> FileRelationshipView:
         return FileRelationshipView(
             path=relationship.repository_rel_path,
-            provenance=provenance_views(relationship.provenance),
+            provenance=provenance_views(relationship.provenance, owner_path=relationship.repository_rel_path),
         )
 
     @staticmethod
@@ -168,7 +168,7 @@ class IntelligencePresenter:
             column_start=edge.column_start,
             prop_names=edge.prop_names,
             has_spread_props=edge.has_spread_props,
-            provenance=provenance_views(edge.provenance),
+            provenance=provenance_views(edge.provenance, owner_path=edge.repository_rel_path),
         )
 
     @staticmethod
@@ -178,7 +178,7 @@ class IntelligencePresenter:
             line_start=site.line_start,
             column_start=site.column_start,
             label=site.label,
-            provenance=provenance_views(site.provenance),
+            provenance=provenance_views(site.provenance, owner_path=site.repository_rel_path),
         )
 
     def invariant_finding_view(self, finding: InvariantFindingRef) -> InvariantFindingView:
@@ -192,7 +192,7 @@ class IntelligencePresenter:
             declared_type=finding.declared_type,
             producer_site_count=finding.producer_site_count,
             producer_sites_preview=tuple(self.static_analysis_site_view(item) for item in finding.producer_sites_preview),
-            provenance=provenance_views(finding.provenance),
+            provenance=provenance_views(finding.provenance, owner_path=finding.repository_rel_path),
         )
 
     @staticmethod
@@ -204,7 +204,7 @@ class IntelligencePresenter:
             edge_kind=edge.edge_kind.value,
             source_label=edge.source_label,
             target_label=edge.target_label,
-            provenance=provenance_views(edge.provenance),
+            provenance=provenance_views(edge.provenance, owner_path=edge.repository_rel_path),
         )
 
     def file_context_view(self, context: FileContext) -> FileContextView:
@@ -253,7 +253,7 @@ class IntelligencePresenter:
             source_label=step.source_label,
             target_label=step.target_label,
             detail_label=step.detail_label,
-            provenance=provenance_views(step.provenance),
+            provenance=provenance_views(step.provenance, owner_path=step.repository_rel_path),
         )
 
     def implementation_flow_summary_view(

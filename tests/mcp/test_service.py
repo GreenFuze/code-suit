@@ -76,7 +76,12 @@ def test_service_open_workspace_and_list_repositories(service: SuitMcpService, n
     assert repositories.total == 1
 
 
-def test_service_core_tools_reuse_existing_repository_intelligence(service: SuitMcpService, npm_repo_root: Path) -> None:
+def test_service_core_tools_reuse_existing_repository_intelligence(
+    service: SuitMcpService,
+    npm_repo_root: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(service, "_wait_for_repository_warmup", lambda repository: None)
     understanding = service.understand_repository(str(npm_repo_root), preview_limit=5)
     file_understanding = service.understand_file(
         str(npm_repo_root),
@@ -120,6 +125,29 @@ def test_service_core_tools_reuse_existing_repository_intelligence(service: Suit
     assert availability.provenance
 
 
+def test_wait_for_repository_warmup_uses_project_coordinator_client(
+    service: SuitMcpService,
+    npm_repo_root: Path,
+    monkeypatch,
+) -> None:
+    calls: list[object] = []
+
+    class _FakeCoordinatorClient:
+        def __init__(self, project_root: Path) -> None:
+            calls.append(project_root)
+
+        def wait_for_project_warmup(self, *, timeout_seconds: float | None = 90.0):
+            calls.append(timeout_seconds)
+            return None
+
+    fake_repository = type("Repository", (), {"root": npm_repo_root.resolve()})()
+    monkeypatch.setattr("suitcode.mcp.service.ProjectCoordinatorClient", _FakeCoordinatorClient)
+
+    service._wait_for_repository_warmup(fake_repository)  # noqa: SLF001
+
+    assert calls == [npm_repo_root.resolve(), None]
+
+
 def test_service_core_tools_default_to_compact_detail_level(service: SuitMcpService, npm_repo_root: Path) -> None:
     file_understanding = service.understand_file(
         str(npm_repo_root),
@@ -133,10 +161,12 @@ def test_service_core_tools_default_to_compact_detail_level(service: SuitMcpServ
 
     assert file_understanding.detail_level == "compact"
     assert not hasattr(file_understanding, "provenance")
-    assert hasattr(file_understanding.targets[0], "reference_sites_preview")
+    assert hasattr(file_understanding.targets[0], "top_validations")
+    assert hasattr(file_understanding.targets[0], "decision_summary")
     assert impact.detail_level == "compact"
     assert not hasattr(impact, "provenance")
-    assert hasattr(impact.targets[0], "reference_sites")
+    assert hasattr(impact.targets[0], "top_impacted_files")
+    assert hasattr(impact.targets[0], "decision_summary")
 
 
 def test_core_tools_reject_invalid_detail_level(service: SuitMcpService, npm_repo_root: Path) -> None:
@@ -238,6 +268,31 @@ def test_read_only_by_path_tools_match_workspace_tools_without_registry_mutation
     assert owner_by_path.model_dump() == owner.model_dump()
     assert related_by_path.model_dump() == related.model_dump()
     assert change_set_by_path.model_dump() == change_set.model_dump()
+
+
+def test_read_only_by_path_tools_reuse_process_local_repository(monkeypatch, npm_repo_root: Path) -> None:
+    workspace_creations: list[Path] = []
+
+    class _CountingWorkspace(Workspace):
+        def __init__(self, repository_directory: Path, *, materialize_suit_dir: bool = True) -> None:
+            workspace_creations.append(Path(repository_directory).resolve())
+            super().__init__(repository_directory, materialize_suit_dir=materialize_suit_dir)
+
+    monkeypatch.setattr("suitcode.mcp.state.Workspace", _CountingWorkspace)
+    service = SuitMcpService(registry=WorkspaceRegistry())
+    monkeypatch.setattr(service, "_wait_for_repository_warmup", lambda repository: None)
+
+    service.repository_summary_by_path(str(npm_repo_root), preview_limit=5)
+    service.what_should_i_run(
+        str(npm_repo_root),
+        ("packages/core/src/index.ts",),
+    )
+    service.what_is_not_proven(
+        str(npm_repo_root),
+        ("packages/core/src/index.ts",),
+    )
+
+    assert workspace_creations == [npm_repo_root.resolve()]
 
 
 def test_read_only_by_path_tools_validate_and_map_errors(service: SuitMcpService, npm_repo_root: Path, tmp_path: Path) -> None:
@@ -445,7 +500,12 @@ def test_understand_file_supports_standalone_npm_public_runtime_asset(service: S
     assert understanding.targets[0].file_owner.owner.id == "component:npm:frontend"
 
 
-def test_understand_repository_accepts_larger_preview_limit(service: SuitMcpService, npm_repo_root: Path) -> None:
+def test_understand_repository_accepts_larger_preview_limit(
+    service: SuitMcpService,
+    npm_repo_root: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(service, "_wait_for_repository_warmup", lambda repository: None)
     understanding = service.understand_repository(str(npm_repo_root), preview_limit=50)
 
     assert understanding.repository.preview_limit == 50
@@ -646,7 +706,7 @@ def test_build_only_frontend_summary_includes_exact_build_proof_facets(
     )
 
 
-def test_frontend_proof_summary_is_exposed_on_compact_file_and_change_tools(
+def test_frontend_compact_surfaces_decision_first_build_only_proof(
     service: SuitMcpService,
     tmp_path: Path,
 ) -> None:
@@ -678,21 +738,33 @@ def test_frontend_proof_summary_is_exposed_on_compact_file_and_change_tools(
         detail_level="compact",
     )
 
-    assert file_understanding.targets[0].frontend_proof_summary is not None
-    assert "TypeScript typecheck" in file_understanding.targets[0].frontend_proof_summary.proof_items[0].summary
-    assert any(
-        "no finer deterministic frontend test target was discovered" in item.summary
-        for item in file_understanding.targets[0].frontend_proof_summary.boundaries
-    )
-    assert impact.targets[0].frontend_proof_summary is not None
-    assert "frontend bundle build" in impact.targets[0].frontend_proof_summary.proof_items[0].summary
+    file_target = file_understanding.targets[0]
+    impact_target = impact.targets[0]
+
+    assert [item.item_kind for item in file_target.top_validations] == ["build_target"]
+    assert "TypeScript typecheck" in file_target.top_validations[0].summary
+    assert {item.risk_code for item in file_target.top_risks} >= {
+        "build_only_validation",
+        "public_surface_touched",
+    }
+    assert hasattr(file_target, "frontend_proof_summary") is False
+    assert len(file_target.decision_summary) >= 3
+
+    assert [item.item_kind for item in impact_target.top_validations] == ["build_target"]
+    assert "frontend bundle build" in impact_target.top_validations[0].summary
+    assert {item.risk_code for item in impact_target.top_risks} >= {
+        "build_only_validation",
+        "public_surface_touched",
+    }
+    assert hasattr(impact_target, "frontend_proof_summary") is False
+    assert len(impact_target.decision_summary) >= 3
 
 
-def test_implementation_flow_summary_is_exposed_on_bounded_frontend_targets(
+def test_what_is_not_proven_reports_build_only_frontend_gap(
     service: SuitMcpService,
     tmp_path: Path,
 ) -> None:
-    repo_root = tmp_path / "frontend-flow"
+    repo_root = tmp_path / "frontend-proof-gaps"
     (repo_root / ".git").mkdir(parents=True)
     (repo_root / "src").mkdir(parents=True)
     (repo_root / "package.json").write_text(
@@ -707,90 +779,87 @@ def test_implementation_flow_summary_is_exposed_on_bounded_frontend_targets(
         """.strip(),
         encoding="utf-8",
     )
-    (repo_root / "tsconfig.json").write_text(
-        """
-        {
-          "compilerOptions": {
-            "target": "ES2020",
-            "module": "ESNext",
-            "moduleResolution": "Node",
-            "strict": true,
-            "jsx": "preserve"
-          },
-          "include": ["src/**/*"]
-        }
-        """.strip(),
-        encoding="utf-8",
-    )
-    (repo_root / "src" / "IntegrationCard.tsx").write_text(
-        """
-        export type IntegrationCardProps = {
-          status: string;
-          onReady: () => void;
-        };
+    (repo_root / "src" / "App.tsx").write_text("export const App = () => null;\n", encoding="utf-8")
 
-        export function IntegrationCard(props: IntegrationCardProps) {
-          return <button onClick={props.onReady}>{props.status}</button>;
-        }
-        """.strip(),
-        encoding="utf-8",
-    )
-    (repo_root / "src" / "IntegrationsTab.tsx").write_text(
-        """
-        import React, { useState } from "react";
-        import { IntegrationCard } from "./IntegrationCard";
-
-        export function IntegrationsTab() {
-          const [status, setStatus] = useState("idle");
-          window.addEventListener("oauth_complete", () => setStatus("done"));
-          window.dispatchEvent(new CustomEvent("oauth_error"));
-          return <IntegrationCard status={status} onReady={() => setStatus("ready")} />;
-        }
-        """.strip(),
-        encoding="utf-8",
-    )
-
-    file_understanding = service.understand_file(
+    proof = service.what_is_not_proven(
         str(repo_root),
-        ("src/IntegrationsTab.tsx",),
-        detail_level="compact",
-    )
-    impact = service.what_changes_if_i_edit_this(
-        str(repo_root),
-        ("src/IntegrationsTab.tsx",),
-        detail_level="compact",
+        ("src/App.tsx",),
     )
 
-    file_summary = file_understanding.targets[0].implementation_flow_summary
-    impact_summary = impact.targets[0].implementation_flow_summary
-
-    assert file_summary is not None
-    assert impact_summary is not None
-    assert len(file_summary.steps_preview) <= 4
-    assert len(impact_summary.steps_preview) <= 4
-    assert any(item.step_kind == "symbol_anchor" for item in file_summary.steps_preview)
-    assert any(item.step_kind == "state_site" for item in file_summary.steps_preview)
-    assert any(item.step_kind == "event_subscribe" for item in file_summary.steps_preview)
-    assert any(item.step_kind == "event_publish" for item in file_summary.steps_preview)
-    assert any(item.step_kind == "symbol_anchor" for item in impact_summary.steps_preview)
-    assert len(file_understanding.targets[0].render_children_preview) <= 1
-    assert len(file_understanding.targets[0].local_flow_edges_preview) <= 1
-    assert len(impact.targets[0].render_children) <= 1
-    assert len(impact.targets[0].local_flow_edges) <= 1
+    target = proof.targets[0]
+    assert target.validation_is_build_only is True
+    assert target.has_focused_test_surface is False
+    assert {item.gap_code for item in target.gap_items} >= {
+        "build_only_frontend_surface",
+        "no_focused_test_surface",
+    }
+    assert proof.highest_priority_targets == ("src/App.tsx",)
 
 
-def test_compact_implementation_flow_summary_is_disabled_for_batches_larger_than_three_targets(
+def test_what_is_not_proven_reports_focused_backend_test_surface(
+    service: SuitMcpService,
+    go_repo_root: Path,
+) -> None:
+    proof = service.what_is_not_proven(
+        str(go_repo_root),
+        ("internal/service/service.go",),
+    )
+
+    target = proof.targets[0]
+    assert target.has_focused_test_surface is True
+    assert "no_focused_test_surface" not in {item.gap_code for item in target.gap_items}
+    assert target.current_validation_surfaces
+
+
+def test_what_is_not_proven_reports_artifact_member_without_validation_surface(
     service: SuitMcpService,
     tmp_path: Path,
 ) -> None:
-    repo_root = tmp_path / "frontend-many"
+    repo_root = tmp_path / "artifact-proof-gaps"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src").mkdir(parents=True)
+    (repo_root / "public" / "runtimes").mkdir(parents=True)
+    (repo_root / "package.json").write_text(
+        """
+        {
+          "name": "frontend",
+          "private": true
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    (repo_root / "src" / "App.tsx").write_text("export const App = () => null;\n", encoding="utf-8")
+    (repo_root / "public" / "runtimes" / "bundle.js").write_text("console.log('bundle');\n", encoding="utf-8")
+
+    proof = service.what_is_not_proven(
+        str(repo_root),
+        ("public/runtimes/bundle.js",),
+    )
+
+    target = proof.targets[0]
+    assert target.current_validation_surfaces == tuple()
+    assert {item.gap_code for item in target.gap_items} >= {
+        "no_deterministic_validation_surface",
+        "artifact_member_without_validation_surface",
+        "no_focused_test_surface",
+    }
+
+
+def test_compact_grouped_file_understanding_returns_decision_first_targets(
+    service: SuitMcpService,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "frontend-grouped"
     (repo_root / ".git").mkdir(parents=True)
     (repo_root / "src").mkdir(parents=True)
     (repo_root / "package.json").write_text(
         """
         {
           "name": "frontend",
-          "private": true
+          "private": true,
+          "scripts": {
+            "build": "vite build"
+          }
         }
         """.strip(),
         encoding="utf-8",
@@ -808,42 +877,13 @@ def test_compact_implementation_flow_summary_is_disabled_for_batches_larger_than
     )
 
     assert understanding.target_count == 4
-    assert all(target.implementation_flow_summary is None for target in understanding.targets)
+    assert understanding.completed_target_count == 4
+    assert all(target.top_validations for target in understanding.targets)
+    assert all(target.decision_summary for target in understanding.targets)
+    assert all(hasattr(target, "implementation_flow_summary") is False for target in understanding.targets)
 
 
-def test_compact_grouped_understand_file_disables_implementation_flow_summary(
-    service: SuitMcpService,
-    tmp_path: Path,
-) -> None:
-    repo_root = tmp_path / "frontend-grouped"
-    (repo_root / ".git").mkdir(parents=True)
-    (repo_root / "src").mkdir(parents=True)
-    (repo_root / "package.json").write_text(
-        """
-        {
-          "name": "frontend",
-          "private": true
-        }
-        """.strip(),
-        encoding="utf-8",
-    )
-    for name in ("A.tsx", "B.tsx"):
-        (repo_root / "src" / name).write_text(
-            f"export const {name.removesuffix('.tsx')} = () => null;\n",
-            encoding="utf-8",
-        )
-
-    understanding = service.understand_file(
-        str(repo_root),
-        tuple(f"src/{name}" for name in ("A.tsx", "B.tsx")),
-        detail_level="compact",
-    )
-
-    assert understanding.target_count == 2
-    assert all(target.implementation_flow_summary is None for target in understanding.targets)
-
-
-def test_compact_grouped_change_impact_disables_implementation_flow_summary(
+def test_compact_grouped_change_impact_returns_decision_first_targets(
     service: SuitMcpService,
     tmp_path: Path,
 ) -> None:
@@ -854,7 +894,10 @@ def test_compact_grouped_change_impact_disables_implementation_flow_summary(
         """
         {
           "name": "frontend",
-          "private": true
+          "private": true,
+          "scripts": {
+            "build": "vite build"
+          }
         }
         """.strip(),
         encoding="utf-8",
@@ -872,7 +915,10 @@ def test_compact_grouped_change_impact_disables_implementation_flow_summary(
     )
 
     assert impact.target_count == 2
-    assert all(target.implementation_flow_summary is None for target in impact.targets)
+    assert impact.completed_target_count == 2
+    assert all(target.top_validations for target in impact.targets)
+    assert all(target.decision_summary for target in impact.targets)
+    assert all(hasattr(target, "implementation_flow_summary") is False for target in impact.targets)
 
 
 def test_collect_batch_results_returns_partial_results_when_one_target_times_out(
@@ -1157,15 +1203,20 @@ def test_standard_detail_level_rejects_broad_change_impact_batches(
         )
 
 
-def test_understand_file_runtime_warming_maps_to_retryable_error(service: SuitMcpService) -> None:
+def test_understand_file_runtime_warming_maps_to_retryable_error(service: SuitMcpService, monkeypatch) -> None:
+    monkeypatch.setattr("suitcode.mcp.service.time.sleep", lambda seconds: None)
     expected = (
         "runtime_not_ready: "
         "tool=understand_file "
         "server=gopls "
         "attachment_root=C:\\\\repo "
         "state=warming "
-        "retry_after_seconds=15; "
-        "retry the same request after the suggested delay"
+        "retry_after_seconds=15 "
+        "attempted_retries=3 "
+        "max_attempts=3 "
+        "retry_exhausted=true; "
+        "SuitCode retried internally and the runtime is still not ready. "
+        "Narrow to 1 target or use detail_level=compact."
     )
 
     class _Repo:
@@ -1193,27 +1244,69 @@ def test_understand_file_runtime_warming_maps_to_retryable_error(service: SuitMc
 
 
 def test_read_only_repository_preserves_retryable_errors(service: SuitMcpService, monkeypatch) -> None:
-    class _Workspace:
-        repositories = (object(),)
+    class _OpenState:
+        repository = object()
 
-    monkeypatch.setattr("suitcode.mcp.service.Workspace", lambda *args, **kwargs: _Workspace())
+    monkeypatch.setattr(service._read_only_registry, "open_repository", lambda repository_path: _OpenState())  # noqa: SLF001
 
     with pytest.raises(McpRetryableError, match="retryable"):
         service._with_read_only_repository(  # noqa: SLF001
             r"C:\repo",
             lambda repository: (_ for _ in ()).throw(McpRetryableError("retryable")),
+            tool_name="understand_repository",
         )
 
 
-def test_change_impact_runtime_warming_maps_to_retryable_error(service: SuitMcpService) -> None:
+def test_read_only_repository_maps_raw_runtime_errors_to_retryable_error(service: SuitMcpService, monkeypatch) -> None:
+    monkeypatch.setattr("suitcode.mcp.service.time.sleep", lambda seconds: None)
+
+    class _OpenState:
+        repository = object()
+
+    monkeypatch.setattr(service._read_only_registry, "open_repository", lambda repository_path: _OpenState())  # noqa: SLF001
+
+    with pytest.raises(
+        McpRetryableError,
+        match=(
+            "runtime_not_ready: "
+            "tool=understand_repository "
+            "server=gopls "
+            "attachment_root=C:\\\\repo "
+            "state=warming "
+            "retry_after_seconds=15 "
+            "attempted_retries=3 "
+            "max_attempts=3 "
+            "retry_exhausted=true"
+        ),
+    ):
+        service._with_read_only_repository(  # noqa: SLF001
+            r"C:\repo",
+            lambda repository: (_ for _ in ()).throw(
+                CoordinatorRuntimeNotReadyError(
+                    server_family=ServerFamily.GOPLS,
+                    attachment_root=r"C:\repo",
+                    state=ManagedServerState.WARMING,
+                    retry_after_seconds=15,
+                )
+            ),
+            tool_name="understand_repository",
+        )
+
+
+def test_change_impact_runtime_warming_maps_to_retryable_error(service: SuitMcpService, monkeypatch) -> None:
+    monkeypatch.setattr("suitcode.mcp.service.time.sleep", lambda seconds: None)
     expected = (
         "runtime_not_ready: "
         "tool=what_changes_if_i_edit_this "
         "server=gopls "
         "attachment_root=C:\\\\repo "
         "state=warming "
-        "retry_after_seconds=15; "
-        "retry the same request after the suggested delay"
+        "retry_after_seconds=15 "
+        "attempted_retries=3 "
+        "max_attempts=3 "
+        "retry_exhausted=true; "
+        "SuitCode retried internally and the runtime is still not ready. "
+        "Narrow to 1 target or use detail_level=compact."
     )
 
     class _Repo:
@@ -1241,15 +1334,20 @@ def test_change_impact_runtime_warming_maps_to_retryable_error(service: SuitMcpS
         )
 
 
-def test_understand_file_typescript_tool_timeout_maps_to_retryable_error(service: SuitMcpService) -> None:
+def test_understand_file_typescript_tool_timeout_maps_to_retryable_error(service: SuitMcpService, monkeypatch) -> None:
+    monkeypatch.setattr("suitcode.mcp.service.time.sleep", lambda seconds: None)
     expected = (
         "runtime_not_ready: "
         "tool=understand_file "
         "server=typescript-tooling "
         "attachment_root=C:\\\\repo\\\\server\\\\frontend "
         "state=degraded "
-        "retry_after_seconds=15; "
-        "retry the same request after the suggested delay"
+        "retry_after_seconds=15 "
+        "attempted_retries=3 "
+        "max_attempts=3 "
+        "retry_exhausted=true; "
+        "SuitCode retried internally and the runtime is still not ready. "
+        "Narrow to 1 target or use detail_level=compact."
     )
 
     class _Repo:
@@ -1274,15 +1372,20 @@ def test_understand_file_typescript_tool_timeout_maps_to_retryable_error(service
         )
 
 
-def test_understand_file_semantic_query_timeout_maps_to_retryable_error(service: SuitMcpService) -> None:
+def test_understand_file_semantic_query_timeout_maps_to_retryable_error(service: SuitMcpService, monkeypatch) -> None:
+    monkeypatch.setattr("suitcode.mcp.service.time.sleep", lambda seconds: None)
     expected = (
         "runtime_not_ready: "
         "tool=understand_file "
         "server=typescript-language-server "
         "attachment_root=C:\\\\repo "
         "state=degraded "
-        "retry_after_seconds=15; "
-        "retry the same request after the suggested delay"
+        "retry_after_seconds=15 "
+        "attempted_retries=3 "
+        "max_attempts=3 "
+        "retry_exhausted=true; "
+        "SuitCode retried internally and the runtime is still not ready. "
+        "Narrow to 1 target or use detail_level=compact."
     )
 
     class _Repo:
@@ -1305,6 +1408,94 @@ def test_understand_file_semantic_query_timeout_maps_to_retryable_error(service:
             reference_site_limit=None,
             evidence_tier=CodeEvidenceTier.SEMANTIC,
         )
+
+
+def test_semantic_runtime_retry_helper_succeeds_after_retry(service: SuitMcpService, monkeypatch) -> None:
+    monkeypatch.setattr("suitcode.mcp.service.time.sleep", lambda seconds: None)
+    attempts = {"count": 0}
+
+    def _build():
+        attempts["count"] += 1
+        if attempts["count"] < 2:
+            raise CoordinatorRuntimeNotReadyError(
+                server_family=ServerFamily.GOPLS,
+                attachment_root="C:\\repo",
+                state=ManagedServerState.WARMING,
+                retry_after_seconds=15,
+            )
+        return "ok"
+
+    result = service._with_semantic_runtime_retries(  # noqa: SLF001
+        tool_name="understand_file",
+        build_target=_build,
+    )
+
+    assert result == "ok"
+    assert attempts["count"] == 2
+
+
+def test_semantic_runtime_retry_helper_retries_three_total_attempts(service: SuitMcpService, monkeypatch) -> None:
+    monkeypatch.setattr("suitcode.mcp.service.time.sleep", lambda seconds: None)
+    attempts = {"count": 0}
+
+    def _build():
+        attempts["count"] += 1
+        raise CoordinatorRuntimeNotReadyError(
+            server_family=ServerFamily.GOPLS,
+            attachment_root="C:\\repo",
+            state=ManagedServerState.WARMING,
+            retry_after_seconds=15,
+        )
+
+    with pytest.raises(McpRetryableError, match="attempted_retries=3 max_attempts=3 retry_exhausted=true"):
+        service._with_semantic_runtime_retries(  # noqa: SLF001
+            tool_name="understand_file",
+            build_target=_build,
+        )
+
+    assert attempts["count"] == 3
+
+
+def test_semantic_runtime_retry_helper_stops_when_sleep_budget_is_exhausted(service: SuitMcpService, monkeypatch) -> None:
+    sleeps: list[float] = []
+    monkeypatch.setattr("suitcode.mcp.service.time.sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(service, "_SEMANTIC_RUNTIME_MAX_TOTAL_RETRY_SLEEP_SECONDS", 5.0)
+    attempts = {"count": 0}
+
+    def _build():
+        attempts["count"] += 1
+        raise CoordinatorRuntimeNotReadyError(
+            server_family=ServerFamily.GOPLS,
+            attachment_root="C:\\repo",
+            state=ManagedServerState.WARMING,
+            retry_after_seconds=15,
+        )
+
+    with pytest.raises(McpRetryableError, match="retry_exhausted=true"):
+        service._with_semantic_runtime_retries(  # noqa: SLF001
+            tool_name="understand_file",
+            build_target=_build,
+        )
+
+    assert sleeps == [5.0]
+    assert attempts["count"] == 2
+
+
+def test_semantic_runtime_retry_helper_does_not_retry_non_retryable_errors(service: SuitMcpService, monkeypatch) -> None:
+    monkeypatch.setattr("suitcode.mcp.service.time.sleep", lambda seconds: None)
+    attempts = {"count": 0}
+
+    def _build():
+        attempts["count"] += 1
+        raise McpValidationError("bad input")
+
+    with pytest.raises(McpValidationError, match="bad input"):
+        service._with_semantic_runtime_retries(  # noqa: SLF001
+            tool_name="understand_file",
+            build_target=_build,
+        )
+
+    assert attempts["count"] == 1
 
 
 def test_full_detail_level_rejects_multi_target_understand_file_requests(
@@ -1397,11 +1588,11 @@ def test_explicit_artifact_member_uses_artifact_surface_summary_without_inherite
     )
     assert file_understanding.targets[0].artifact_surface_summary is not None
     assert file_understanding.targets[0].artifact_surface_summary.artifact_root == "public/runtimes"
-    assert file_understanding.targets[0].frontend_proof_summary is None
-    assert file_understanding.targets[0].implementation_flow_summary is None
+    assert hasattr(file_understanding.targets[0], "frontend_proof_summary") is False
+    assert hasattr(file_understanding.targets[0], "implementation_flow_summary") is False
     assert impact.targets[0].artifact_surface_summary is not None
-    assert impact.targets[0].frontend_proof_summary is None
-    assert impact.targets[0].implementation_flow_summary is None
+    assert hasattr(impact.targets[0], "frontend_proof_summary") is False
+    assert hasattr(impact.targets[0], "implementation_flow_summary") is False
 
 
 def test_batch_minimum_verified_compact_summary_keeps_one_closest_surface_per_target(
@@ -1609,470 +1800,45 @@ def test_docs_only_validation_exclusions_omit_runner_noise_in_mixed_repo(
     ]
 
 
-def test_compact_file_understanding_aggregate_ranks_by_shared_reference_sites(service: SuitMcpService) -> None:
-    shared = LocationView(
-        path="src/shared.ts",
-        line_start=10,
-        line_end=10,
-        column_start=2,
-        column_end=8,
-        symbol_id="symbol:shared",
-        provenance=_provenance_view("src/a.ts", "src/shared.ts"),
-    )
-    first_only = LocationView(
-        path="src/first.ts",
-        line_start=5,
-        line_end=5,
-        column_start=1,
-        column_end=4,
-        symbol_id="symbol:first",
-        provenance=_provenance_view("src/a.ts", "src/first.ts"),
-    )
-    second_only = LocationView(
-        path="src/second.ts",
-        line_start=6,
-        line_end=6,
-        column_start=1,
-        column_end=4,
-        symbol_id="symbol:second",
-        provenance=_provenance_view("src/b.ts", "src/second.ts"),
-    )
-    third_only = LocationView(
-        path="src/third.ts",
-        line_start=7,
-        line_end=7,
-        column_start=1,
-        column_end=4,
-        symbol_id="symbol:third",
-        provenance=_provenance_view("src/c.ts", "src/third.ts"),
-    )
-    owner = FileOwnerView(
-        file=FileView(
-            id="file:src/a.ts",
-            path="src/a.ts",
-            language="typescript",
-            owner_id="component:npm:demo",
-            provenance=_provenance_view("src/a.ts"),
-        ),
-        owner=OwnerView(id="component:npm:demo", kind="component", name="demo"),
-    )
+def test_grouped_frontend_file_and_change_tools_do_not_raise_provenance_hash_errors(
+    service: SuitMcpService,
+    npm_repo_root: Path,
+) -> None:
     targets = (
-        FileUnderstandingTargetView(
-            detail_level="full",
-            repository_rel_path="src/a.ts",
-            file_owner=owner,
-            reference_site_count=2,
-            reference_sites_preview=(shared, first_only),
-            dependency_file_count=0,
-            dependency_files_preview=tuple(),
-            dependent_file_count=0,
-            dependent_files_preview=tuple(),
-            render_child_count=0,
-            render_children_preview=tuple(),
-            render_parent_count=0,
-            render_parents_preview=tuple(),
-            invariant_finding_count=0,
-            invariant_findings_preview=tuple(),
-            local_flow_edge_count=0,
-            local_flow_edges_preview=tuple(),
-            implementation_location_count=0,
-            implementation_locations_preview=tuple(),
-            related_tests=tuple(),
-            provenance=_provenance_view("src/a.ts"),
-        ),
-        FileUnderstandingTargetView(
-            detail_level="full",
-            repository_rel_path="src/b.ts",
-            file_owner=owner.model_copy(
-                update={
-                    "file": FileView(
-                        id="file:src/b.ts",
-                        path="src/b.ts",
-                        language="typescript",
-                        owner_id="component:npm:demo",
-                        provenance=_provenance_view("src/b.ts"),
-                    )
-                }
-            ),
-            reference_site_count=2,
-            reference_sites_preview=(shared, second_only),
-            dependency_file_count=0,
-            dependency_files_preview=tuple(),
-            dependent_file_count=0,
-            dependent_files_preview=tuple(),
-            render_child_count=0,
-            render_children_preview=tuple(),
-            render_parent_count=0,
-            render_parents_preview=tuple(),
-            invariant_finding_count=0,
-            invariant_findings_preview=tuple(),
-            local_flow_edge_count=0,
-            local_flow_edges_preview=tuple(),
-            implementation_location_count=0,
-            implementation_locations_preview=tuple(),
-            related_tests=tuple(),
-            provenance=_provenance_view("src/b.ts"),
-        ),
-        FileUnderstandingTargetView(
-            detail_level="full",
-            repository_rel_path="src/c.ts",
-            file_owner=owner.model_copy(
-                update={
-                    "file": FileView(
-                        id="file:src/c.ts",
-                        path="src/c.ts",
-                        language="typescript",
-                        owner_id="component:npm:demo",
-                        provenance=_provenance_view("src/c.ts"),
-                    )
-                }
-            ),
-            reference_site_count=1,
-            reference_sites_preview=(third_only,),
-            dependency_file_count=0,
-            dependency_files_preview=tuple(),
-            dependent_file_count=0,
-            dependent_files_preview=tuple(),
-            render_child_count=0,
-            render_children_preview=tuple(),
-            render_parent_count=0,
-            render_parents_preview=tuple(),
-            invariant_finding_count=0,
-            invariant_findings_preview=tuple(),
-            local_flow_edge_count=0,
-            local_flow_edges_preview=tuple(),
-            implementation_location_count=0,
-            implementation_locations_preview=tuple(),
-            related_tests=tuple(),
-            provenance=_provenance_view("src/c.ts"),
-        ),
+        "apps/admin-portal/src/index.tsx",
+        "apps/web-app/src/index.tsx",
+        "libs/shared-ui/src/index.tsx",
     )
 
-    view = service._compact_file_understanding_view(targets)
-
-    assert view.aggregate_reference_site_count == 4
-    assert len(view.aggregate_reference_sites_preview) == 3
-    assert view.aggregate_reference_sites_preview[0].path == "src/shared.ts"
-
-
-def test_compact_change_impact_aggregate_ranks_by_shared_reference_sites(service: SuitMcpService) -> None:
-    shared = LocationView(
-        path="src/shared.ts",
-        line_start=10,
-        line_end=10,
-        column_start=2,
-        column_end=8,
-        symbol_id="symbol:shared",
-        provenance=_provenance_view("src/a.ts", "src/shared.ts"),
+    understanding_standard = service.understand_file(
+        str(npm_repo_root),
+        targets,
+        detail_level="standard",
     )
-    first_only = LocationView(
-        path="src/first.ts",
-        line_start=5,
-        line_end=5,
-        column_start=1,
-        column_end=4,
-        symbol_id="symbol:first",
-        provenance=_provenance_view("src/a.ts", "src/first.ts"),
+    understanding_compact = service.understand_file(
+        str(npm_repo_root),
+        targets,
+        detail_level="compact",
     )
-    second_only = LocationView(
-        path="src/second.ts",
-        line_start=6,
-        line_end=6,
-        column_start=1,
-        column_end=4,
-        symbol_id="symbol:second",
-        provenance=_provenance_view("src/b.ts", "src/second.ts"),
+    impact_standard = service.what_changes_if_i_edit_this(
+        str(npm_repo_root),
+        targets,
+        detail_level="standard",
     )
-    truth_coverage = TruthCoverageSummaryView(
-        scope_kind="change",
-        scope_id="change_target:file:src/a.ts",
-        domains=(
-            TruthCoverageByDomainView(
-                domain="code",
-                total_entities=1,
-                authoritative_count=1,
-                derived_count=0,
-                heuristic_count=0,
-                unavailable_count=0,
-                availability="available",
-                degraded_reason=None,
-                source_kind_mix={"dependency_graph": 1},
-                source_tool_mix={"typescript": 1},
-                execution_available=None,
-                action_capabilities={},
-            ),
-        ),
-        overall_authoritative_count=1,
-        overall_derived_count=0,
-        overall_heuristic_count=0,
-        overall_unavailable_count=0,
-        overall_availability="available",
-        provenance=_provenance_view("src/a.ts"),
-    )
-    impact = ChangeImpactView(
-        target_kind="file",
-        owner=OwnerView(id="component:npm:demo", kind="component", name="demo"),
-        primary_component=None,
-        component_context=None,
-        file_context=None,
-        symbol_context=None,
-        dependency_files=tuple(),
-        dependent_files=tuple(),
-        render_children=tuple(),
-        render_parents=tuple(),
-        invariant_findings=tuple(),
-        local_flow_edges=tuple(),
-        implementation_locations=tuple(),
-        implementation_components=tuple(),
-        dependent_components=tuple(),
-        reference_locations=(shared, first_only),
-        related_tests=tuple(),
-        related_runners=tuple(),
-        quality_gates=tuple(),
-        evidence=ChangeEvidencePreviewView(total_edges=0, counts_by_kind={}, edges_preview=tuple(), truncated=False),
-        truth_coverage=truth_coverage,
-        provenance=_provenance_view("src/a.ts"),
-    )
-    second_impact = impact.model_copy(
-        update={
-            "reference_locations": (shared, second_only),
-            "provenance": _provenance_view("src/b.ts"),
-        }
+    impact_compact = service.what_changes_if_i_edit_this(
+        str(npm_repo_root),
+        targets,
+        detail_level="compact",
     )
 
-    view = service._compact_change_impact_view(
-        (
-            BatchChangeImpactTargetView(repository_rel_path="src/a.ts", impact=impact),
-            BatchChangeImpactTargetView(repository_rel_path="src/b.ts", impact=second_impact),
-        )
-    )
-
-    assert len(view.reference_sites) == 3
-    assert view.reference_sites[0].path == "src/shared.ts"
-
-
-def test_compact_file_understanding_ui_heavy_dedupes_reference_and_render_overlap(service: SuitMcpService) -> None:
-    owner = FileOwnerView(
-        file=FileView(
-            id="file:src/App.tsx",
-            path="src/App.tsx",
-            language="typescript",
-            owner_id="component:npm:demo",
-            provenance=_provenance_view("src/App.tsx"),
-        ),
-        owner=OwnerView(id="component:npm:demo", kind="component", name="demo"),
-    )
-    shared_reference = LocationView(
-        path="src/components/Button.tsx",
-        line_start=12,
-        line_end=12,
-        column_start=3,
-        column_end=12,
-        symbol_id="symbol:button",
-        provenance=_provenance_view("src/App.tsx", "src/components/Button.tsx"),
-    )
-    render_child = RenderEdgeView(
-        path="src/components/Button.tsx",
-        line_start=20,
-        column_start=5,
-        prop_names=("label",),
-        has_spread_props=False,
-        provenance=_provenance_view("src/App.tsx", "src/components/Button.tsx"),
-    )
-    unique_dependent = FileRelationshipView(
-        path="src/features/Shelf.tsx",
-        provenance=_provenance_view("src/App.tsx", "src/features/Shelf.tsx"),
-    )
-    overlapping_dependent = FileRelationshipView(
-        path="src/components/Button.tsx",
-        provenance=_provenance_view("src/App.tsx", "src/components/Button.tsx"),
-    )
-
-    target = FileUnderstandingTargetView(
-        detail_level="full",
-        repository_rel_path="src/App.tsx",
-        file_owner=owner,
-        reference_site_count=1,
-        reference_sites_preview=(shared_reference,),
-        dependency_file_count=0,
-        dependency_files_preview=tuple(),
-        dependent_file_count=2,
-        dependent_files_preview=(overlapping_dependent, unique_dependent),
-        render_child_count=1,
-        render_children_preview=(render_child,),
-        render_parent_count=0,
-        render_parents_preview=tuple(),
-        invariant_finding_count=0,
-        invariant_findings_preview=tuple(),
-        local_flow_edge_count=0,
-        local_flow_edges_preview=tuple(),
-        implementation_location_count=0,
-        implementation_locations_preview=tuple(),
-        related_tests=tuple(),
-        provenance=_provenance_view("src/App.tsx"),
-    )
-
-    view = service._compact_file_understanding_view((target,))
-
-    assert view.aggregate_reference_sites_preview[0].path == "src/components/Button.tsx"
-    assert [item.path for item in view.aggregate_render_children_preview] == ["src/components/Button.tsx"]
-    assert [item.path for item in view.aggregate_dependent_files_preview] == ["src/features/Shelf.tsx"]
-    assert view.aggregate_dependent_file_count == 2
-
-
-def test_compact_file_understanding_multi_target_ui_heavy_caps_per_target_previews(service: SuitMcpService) -> None:
-    owner = FileOwnerView(
-        file=FileView(
-            id="file:src/App.tsx",
-            path="src/App.tsx",
-            language="typescript",
-            owner_id="component:npm:demo",
-            provenance=_provenance_view("src/App.tsx"),
-        ),
-        owner=OwnerView(id="component:npm:demo", kind="component", name="demo"),
-    )
-    reference_sites = (
-        LocationView(
-            path="src/components/Button.tsx",
-            line_start=12,
-            line_end=12,
-            column_start=3,
-            column_end=12,
-            symbol_id="symbol:button",
-            provenance=_provenance_view("src/App.tsx", "src/components/Button.tsx"),
-        ),
-        LocationView(
-            path="src/components/StatusPill.tsx",
-            line_start=16,
-            line_end=16,
-            column_start=3,
-            column_end=16,
-            symbol_id="symbol:status",
-            provenance=_provenance_view("src/App.tsx", "src/components/StatusPill.tsx"),
-        ),
-    )
-    render_children = (
-        RenderEdgeView(
-            path="src/components/Button.tsx",
-            line_start=20,
-            column_start=5,
-            prop_names=("label",),
-            has_spread_props=False,
-            provenance=_provenance_view("src/App.tsx", "src/components/Button.tsx"),
-        ),
-        RenderEdgeView(
-            path="src/components/StatusPill.tsx",
-            line_start=24,
-            column_start=5,
-            prop_names=("status",),
-            has_spread_props=False,
-            provenance=_provenance_view("src/App.tsx", "src/components/StatusPill.tsx"),
-        ),
-    )
-    dependent_files = (
-        FileRelationshipView(path="src/features/Shelf.tsx", provenance=_provenance_view("src/App.tsx", "src/features/Shelf.tsx")),
-        FileRelationshipView(path="src/features/Grid.tsx", provenance=_provenance_view("src/App.tsx", "src/features/Grid.tsx")),
-    )
-    targets = tuple(
-        FileUnderstandingTargetView(
-            detail_level="full",
-            repository_rel_path=f"src/View{index}.tsx",
-            file_owner=owner.model_copy(
-                update={
-                    "file": owner.file.model_copy(
-                        update={
-                            "id": f"file:src/View{index}.tsx",
-                            "path": f"src/View{index}.tsx",
-                            "provenance": _provenance_view(f"src/View{index}.tsx"),
-                        }
-                    )
-                }
-            ),
-            reference_site_count=len(reference_sites),
-            reference_sites_preview=reference_sites,
-            dependency_file_count=2,
-            dependency_files_preview=dependent_files,
-            dependent_file_count=2,
-            dependent_files_preview=dependent_files,
-            render_child_count=len(render_children),
-            render_children_preview=render_children,
-            render_parent_count=0,
-            render_parents_preview=tuple(),
-            invariant_finding_count=0,
-            invariant_findings_preview=tuple(),
-            local_flow_edge_count=0,
-            local_flow_edges_preview=tuple(),
-            implementation_location_count=0,
-            implementation_locations_preview=tuple(),
-            related_tests=tuple(),
-            provenance=_provenance_view(f"src/View{index}.tsx"),
-        )
-        for index in range(1, 4)
-    )
-
-    view = service._compact_file_understanding_view(targets)
-
-    assert all(len(item.reference_sites_preview) <= 1 for item in view.targets)
-    assert all(len(item.render_children_preview) <= 1 for item in view.targets)
-    assert all(len(item.dependent_files_preview) <= 1 for item in view.targets)
-    assert all(len(item.related_tests) <= 1 for item in view.targets)
-
-
-def test_compact_file_understanding_filters_weak_invariant_findings(service: SuitMcpService) -> None:
-    owner = FileOwnerView(
-        file=FileView(
-            id="file:src/App.tsx",
-            path="src/App.tsx",
-            language="typescript",
-            owner_id="component:npm:demo",
-            provenance=_provenance_view("src/App.tsx"),
-        ),
-        owner=OwnerView(id="component:npm:demo", kind="component", name="demo"),
-    )
-    weak_finding = InvariantFindingView(
-        path="src/App.tsx",
-        line_start=18,
-        column_start=9,
-        access_kind="method_call",
-        field_name="status",
-        subject_label="integration",
-        declared_type="string | undefined",
-        producer_site_count=0,
-        producer_sites_preview=tuple(),
-        provenance=_provenance_view("src/App.tsx"),
-    )
-
-    target = FileUnderstandingTargetView(
-        detail_level="full",
-        repository_rel_path="src/App.tsx",
-        file_owner=owner,
-        reference_site_count=0,
-        reference_sites_preview=tuple(),
-        dependency_file_count=0,
-        dependency_files_preview=tuple(),
-        dependent_file_count=0,
-        dependent_files_preview=tuple(),
-        render_child_count=0,
-        render_children_preview=tuple(),
-        render_parent_count=0,
-        render_parents_preview=tuple(),
-        invariant_finding_count=1,
-        invariant_findings_preview=(weak_finding,),
-        local_flow_edge_count=0,
-        local_flow_edges_preview=tuple(),
-        implementation_location_count=0,
-        implementation_locations_preview=tuple(),
-        related_tests=tuple(),
-        provenance=_provenance_view("src/App.tsx"),
-    )
-
-    compact = service._compact_file_understanding_view((target,))
-    standard = service._standard_file_understanding_view((target,))
-
-    assert compact.targets[0].invariant_finding_count == 0
-    assert compact.targets[0].invariant_findings_preview == tuple()
-    assert standard.targets[0].invariant_finding_count == 1
-    assert len(standard.targets[0].invariant_findings_preview) == 1
+    assert understanding_standard.target_count == 3
+    assert understanding_compact.target_count == 3
+    assert understanding_compact.completed_target_count == 3
+    assert impact_standard.target_count == 3
+    assert impact_compact.target_count == 3
+    assert impact_compact.completed_target_count == 3
+    assert all(target.decision_summary for target in understanding_compact.targets)
+    assert all(target.decision_summary for target in impact_compact.targets)
 
 
 def test_hot_entrypoints_preview_prioritizes_externally_referenced_exported_symbols(service: SuitMcpService) -> None:
@@ -2171,179 +1937,6 @@ def test_hot_entrypoints_preview_fails_fast_when_reference_scan_exceeds_budget(
     assert exc_info.value.retry_after_seconds == 15
 
 
-def test_compact_change_impact_ui_heavy_dedupes_reference_and_render_overlap(service: SuitMcpService) -> None:
-    shared_reference = LocationView(
-        path="src/components/Button.tsx",
-        line_start=12,
-        line_end=12,
-        column_start=3,
-        column_end=12,
-        symbol_id="symbol:button",
-        provenance=_provenance_view("src/App.tsx", "src/components/Button.tsx"),
-    )
-    render_child = RenderEdgeView(
-        path="src/components/Button.tsx",
-        line_start=20,
-        column_start=5,
-        prop_names=("label",),
-        has_spread_props=False,
-        provenance=_provenance_view("src/App.tsx", "src/components/Button.tsx"),
-    )
-    unique_dependent = FileRelationshipView(
-        path="src/features/Shelf.tsx",
-        provenance=_provenance_view("src/App.tsx", "src/features/Shelf.tsx"),
-    )
-    overlapping_dependent = FileRelationshipView(
-        path="src/components/Button.tsx",
-        provenance=_provenance_view("src/App.tsx", "src/components/Button.tsx"),
-    )
-    truth_coverage = TruthCoverageSummaryView(
-        scope_kind="change",
-        scope_id="change_target:file:src/App.tsx",
-        domains=(
-            TruthCoverageByDomainView(
-                domain="code",
-                total_entities=1,
-                authoritative_count=1,
-                derived_count=0,
-                heuristic_count=0,
-                unavailable_count=0,
-                availability="available",
-                degraded_reason=None,
-                source_kind_mix={"dependency_graph": 1},
-                source_tool_mix={"typescript": 1},
-                execution_available=None,
-                action_capabilities={},
-            ),
-        ),
-        overall_authoritative_count=1,
-        overall_derived_count=0,
-        overall_heuristic_count=0,
-        overall_unavailable_count=0,
-        overall_availability="available",
-        provenance=_provenance_view("src/App.tsx"),
-    )
-    impact = ChangeImpactView(
-        target_kind="file",
-        owner=OwnerView(id="component:npm:demo", kind="component", name="demo"),
-        primary_component=None,
-        component_context=None,
-        file_context=None,
-        symbol_context=None,
-        dependency_files=tuple(),
-        dependent_files=(overlapping_dependent, unique_dependent),
-        render_children=(render_child,),
-        render_parents=tuple(),
-        invariant_findings=tuple(),
-        local_flow_edges=tuple(),
-        implementation_locations=tuple(),
-        implementation_components=tuple(),
-        dependent_components=tuple(),
-        reference_locations=(shared_reference,),
-        related_tests=tuple(),
-        related_runners=tuple(),
-        quality_gates=tuple(),
-        evidence=ChangeEvidencePreviewView(total_edges=0, counts_by_kind={}, edges_preview=tuple(), truncated=False),
-        truth_coverage=truth_coverage,
-        provenance=_provenance_view("src/App.tsx"),
-    )
-
-    view = service._compact_change_impact_view(
-        (BatchChangeImpactTargetView(repository_rel_path="src/App.tsx", impact=impact),)
-    )
-
-    assert [item.path for item in view.reference_sites] == ["src/components/Button.tsx"]
-    assert [item.path for item in view.render_children] == ["src/components/Button.tsx"]
-    assert [item.path for item in view.dependent_files] == ["src/features/Shelf.tsx"]
-
-
-def test_compact_change_impact_multi_target_ui_heavy_caps_per_target_previews(service: SuitMcpService) -> None:
-    reference_site = LocationView(
-        path="src/components/Button.tsx",
-        line_start=12,
-        line_end=12,
-        column_start=3,
-        column_end=12,
-        symbol_id="symbol:button",
-        provenance=_provenance_view("src/App.tsx", "src/components/Button.tsx"),
-    )
-    render_child = RenderEdgeView(
-        path="src/components/Button.tsx",
-        line_start=20,
-        column_start=5,
-        prop_names=("label",),
-        has_spread_props=False,
-        provenance=_provenance_view("src/App.tsx", "src/components/Button.tsx"),
-    )
-    dependent_file = FileRelationshipView(
-        path="src/features/Shelf.tsx",
-        provenance=_provenance_view("src/App.tsx", "src/features/Shelf.tsx"),
-    )
-    truth_coverage = TruthCoverageSummaryView(
-        scope_kind="change",
-        scope_id="change_target:file:src/App.tsx",
-        domains=(
-            TruthCoverageByDomainView(
-                domain="code",
-                total_entities=1,
-                authoritative_count=1,
-                derived_count=0,
-                heuristic_count=0,
-                unavailable_count=0,
-                availability="available",
-                degraded_reason=None,
-                source_kind_mix={"dependency_graph": 1},
-                source_tool_mix={"typescript": 1},
-                execution_available=None,
-                action_capabilities={},
-            ),
-        ),
-        overall_authoritative_count=1,
-        overall_derived_count=0,
-        overall_heuristic_count=0,
-        overall_unavailable_count=0,
-        overall_availability="available",
-        provenance=_provenance_view("src/App.tsx"),
-    )
-    targets = tuple(
-        BatchChangeImpactTargetView(
-            repository_rel_path=f"src/View{index}.tsx",
-            impact=ChangeImpactView(
-                target_kind="file",
-                owner=OwnerView(id="component:npm:demo", kind="component", name="demo"),
-                primary_component=None,
-                component_context=None,
-                file_context=None,
-                symbol_context=None,
-                dependency_files=tuple(),
-                dependent_files=(dependent_file, dependent_file),
-                render_children=(render_child, render_child),
-                render_parents=tuple(),
-                invariant_findings=tuple(),
-                local_flow_edges=tuple(),
-                implementation_locations=tuple(),
-                implementation_components=tuple(),
-                dependent_components=tuple(),
-                reference_locations=(reference_site, reference_site),
-                related_tests=tuple(),
-                related_runners=tuple(),
-                quality_gates=tuple(),
-                evidence=ChangeEvidencePreviewView(total_edges=0, counts_by_kind={}, edges_preview=tuple(), truncated=False),
-                truth_coverage=truth_coverage,
-                provenance=_provenance_view(f"src/View{index}.tsx"),
-            ),
-        )
-        for index in range(1, 4)
-    )
-
-    view = service._compact_change_impact_view(targets)
-
-    assert all(len(item.reference_sites) <= 1 for item in view.targets)
-    assert all(len(item.render_children) <= 1 for item in view.targets)
-    assert all(len(item.dependent_files) <= 1 for item in view.targets)
-    assert all(len(item.related_tests) <= 1 for item in view.targets)
-
-
 def test_what_changes_if_i_edit_this_supports_provider_owned_markdown_and_openapi(
     service: SuitMcpService,
     tmp_path: Path,
@@ -2365,7 +1958,11 @@ def test_what_changes_if_i_edit_this_supports_provider_owned_markdown_and_openap
     }
 
 
-def test_repository_summary_excludes_tracked_artifact_files_from_file_count(service: SuitMcpService, tmp_path: Path) -> None:
+def test_repository_summary_excludes_tracked_artifact_files_from_file_count(
+    service: SuitMcpService,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     repo_root = tmp_path / "frontend"
     (repo_root / ".git").mkdir(parents=True)
     (repo_root / "src").mkdir(parents=True)
@@ -2383,6 +1980,7 @@ def test_repository_summary_excludes_tracked_artifact_files_from_file_count(serv
     (repo_root / "src" / "index.ts").write_text("export const value = 1;\n", encoding="utf-8")
     (repo_root / "dist" / "index.js").write_text("export const value = 1;\n", encoding="utf-8")
 
+    monkeypatch.setattr(service, "_wait_for_repository_warmup", lambda repository: None)
     understanding = service.understand_repository(str(repo_root), preview_limit=10)
 
     assert understanding.repository.file_count == 2

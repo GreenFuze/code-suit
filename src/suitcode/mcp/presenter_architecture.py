@@ -66,7 +66,7 @@ class ArchitecturePresenter:
             path=file_info.repository_rel_path,
             language=file_info.language.value if file_info.language else None,
             owner_id=file_info.owner_id,
-            provenance=provenance_views(file_info.provenance),
+            provenance=provenance_views(file_info.provenance, owner_path=file_info.repository_rel_path),
         )
 
     def architecture_snapshot(self, repository: Repository) -> ArchitectureSnapshotView:

@@ -7,7 +7,6 @@ from typing import ContextManager, Protocol
 
 from suitcode.providers.shared.lsp import LspClient
 from suitcode.runtime.client import ProjectCoordinatorClient
-from suitcode.runtime.errors import CoordinatorRuntimeNotReadyError
 from suitcode.runtime.lsp_payloads import (
     document_symbols_from_payload,
     locations_from_payload,
@@ -95,14 +94,7 @@ class CoordinatorBackedLspSessionManager:
         normalized_project_root = project_root.expanduser().resolve()
         normalized_attachment_root = repository_root.expanduser().resolve()
         coordinator = ProjectCoordinatorClient(normalized_project_root)
-        readiness = coordinator.ensure_server_ready(family, normalized_attachment_root)
-        if not readiness.ready:
-            raise CoordinatorRuntimeNotReadyError(
-                server_family=readiness.server_family,
-                attachment_root=readiness.attachment_root,
-                state=readiness.status.state,
-                retry_after_seconds=readiness.retry_after_seconds or 15,
-            )
+        coordinator.wait_until_server_ready(family, normalized_attachment_root, timeout_seconds=None)
         with coordinator.open_connection() as connection:
             yield _CoordinatorLspClient(
                 connection=connection,

@@ -34,10 +34,12 @@ def opened_workspace(service: SuitMcpService, npm_repo_root: Path):
 
 
 @pytest.fixture
-def app():
+def app(monkeypatch):
+    monkeypatch.setattr(SuitMcpService, "_wait_for_repository_warmup", lambda self, repository: None)
     return create_mcp_app()
 
 
 @pytest.fixture
-def core_app():
+def core_app(monkeypatch):
+    monkeypatch.setattr(SuitMcpService, "_wait_for_repository_warmup", lambda self, repository: None)
     return create_core_mcp_app()

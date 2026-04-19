@@ -20,11 +20,13 @@ from suitcode.runtime.errors import (
 )
 from suitcode.runtime.lockfile import project_lock
 from suitcode.runtime.models import (
+    CoordinatorState,
     EnsureServerReadyPayload,
     EnsureServerReadyRequest,
     GetRuntimeStatusRequest,
     HandshakePayload,
     HandshakeRequest,
+    ManagedServerState,
     ResponseEnvelope,
     RuntimeStatus,
     ServerFamily,
@@ -36,7 +38,7 @@ from suitcode.runtime.transport import connect, receive_payload, send_payload
 from suitcode.runtime.versioning import PROTOCOL_VERSION, build_version
 
 
-_BOOTSTRAP_TIMEOUT_SECONDS = 20.0
+_BOOTSTRAP_TIMEOUT_SECONDS: float | None = None
 _CONNECT_RETRY_ATTEMPTS = 10
 _CONNECT_RETRY_DELAY_SECONDS = 0.1
 
@@ -132,6 +134,53 @@ class ProjectCoordinatorClient:
                 raise CoordinatorProtocolError("ensure_server_ready response is missing a payload")
             return EnsureServerReadyPayload.model_validate(payload)
 
+    def wait_until_server_ready(
+        self,
+        family: ServerFamily,
+        attachment_root: Path,
+        *,
+        timeout_seconds: float | None = None,
+        poll_interval_seconds: float = 0.5,
+    ) -> EnsureServerReadyPayload:
+        normalized_attachment_root = attachment_root.expanduser().resolve()
+        deadline = None if timeout_seconds is None else time.monotonic() + max(0.0, timeout_seconds)
+        last_payload: EnsureServerReadyPayload | None = None
+        while True:
+            last_payload = self.ensure_server_ready(family, normalized_attachment_root)
+            if last_payload.ready:
+                return last_payload
+            retry_after = float(max(0, last_payload.retry_after_seconds or 0))
+            sleep_seconds = max(poll_interval_seconds, retry_after)
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return last_payload
+                sleep_seconds = min(sleep_seconds, remaining)
+            time.sleep(sleep_seconds)
+
+    def wait_for_project_warmup(
+        self,
+        *,
+        timeout_seconds: float | None = 90.0,
+        poll_interval_seconds: float = 0.5,
+    ) -> RuntimeStatus | None:
+        expected_sessions = self._expected_project_sessions()
+        if not expected_sessions:
+            return None
+
+        deadline = None if timeout_seconds is None else time.monotonic() + max(0.0, timeout_seconds)
+        for family, attachment_root in sorted(expected_sessions, key=lambda item: (item[0].value, item[1])):
+            remaining_timeout = None if deadline is None else max(0.0, deadline - time.monotonic())
+            readiness = self.wait_until_server_ready(
+                family,
+                Path(attachment_root),
+                timeout_seconds=remaining_timeout,
+                poll_interval_seconds=poll_interval_seconds,
+            )
+            if not readiness.ready:
+                return self.get_runtime_status()
+        return self.get_runtime_status()
+
     def shutdown(self) -> None:
         record = self._current_status_record()
         endpoint_uri = self.endpoint_uri if record is None else record.endpoint
@@ -148,6 +197,39 @@ class ProjectCoordinatorClient:
             connection.request(ShutdownRequest())
         finally:
             connection.close()
+
+    def _expected_project_sessions(self) -> set[tuple[ServerFamily, str]]:
+        from suitcode.providers.registry import detect_support_for_root
+        from suitcode.runtime.resolution import provider_id_to_server_family
+
+        support = detect_support_for_root(self.project_root)
+        expected: set[tuple[ServerFamily, str]] = set()
+        for detected_provider in support.detected_providers:
+            family = provider_id_to_server_family(detected_provider.provider_id)
+            if family is None:
+                continue
+            for attachment in detected_provider.attachments:
+                expected.add((family, str(attachment.attachment_root.expanduser().resolve())))
+        return expected
+
+    @staticmethod
+    def _warmup_has_settled(
+        status: RuntimeStatus,
+        expected_sessions: set[tuple[ServerFamily, str]],
+    ) -> bool:
+        if status.state == CoordinatorState.SHUTTING_DOWN:
+            return False
+        managed_by_key = {
+            (managed.family, managed.attachment_root): managed
+            for managed in status.managed_servers
+        }
+        for key in expected_sessions:
+            managed = managed_by_key.get(key)
+            if managed is None:
+                return False
+            if managed.state != ManagedServerState.READY:
+                return False
+        return True
 
     def _ensure_coordinator(self) -> None:
         last_error = self._probe_existing_coordinator()
@@ -230,9 +312,9 @@ class ProjectCoordinatorClient:
         return subprocess.Popen(command, **kwargs)
 
     def _wait_for_coordinator(self, candidate_process=None) -> None:
-        deadline = time.time() + _BOOTSTRAP_TIMEOUT_SECONDS
+        deadline = None if _BOOTSTRAP_TIMEOUT_SECONDS is None else time.time() + _BOOTSTRAP_TIMEOUT_SECONDS
         last_error: Exception | None = None
-        while time.time() < deadline:
+        while deadline is None or time.time() < deadline:
             try:
                 connection = self._connect_to_coordinator(self.endpoint_uri)
             except (CoordinatorUnavailableError, CoordinatorVersionMismatchError) as exc:
@@ -249,12 +331,16 @@ class ProjectCoordinatorClient:
                 continue
             connection.close()
             return
-        if last_error is not None:
+        if deadline is not None and last_error is not None:
             raise CoordinatorUnavailableError(
                 f"timed out waiting for coordinator startup for `{self.project_root}`: {last_error}"
             ) from last_error
-        raise CoordinatorElectionError(
-            f"timed out waiting for coordinator startup to settle for `{self.project_root}`"
+        if deadline is not None:
+            raise CoordinatorElectionError(
+                f"timed out waiting for coordinator startup to settle for `{self.project_root}`"
+            )
+        raise CoordinatorUnavailableError(
+            f"unable to wait for coordinator startup for `{self.project_root}`"
         )
 
     def _connect_to_coordinator(self, endpoint_uri: str) -> CoordinatorRpcConnection:

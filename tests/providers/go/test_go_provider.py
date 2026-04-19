@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -78,6 +79,37 @@ def test_go_runtime_capabilities_and_build_targets(go_repository) -> None:
 
     build_targets = go_repository.list_build_targets()
     assert [item.action_id for item in build_targets] == ['action:go:build:example.com/acme/go-demo/cmd/app']
+
+
+def test_go_provider_loads_external_modules_lazily_and_reuses_baseline_analysis(
+    go_repo_root: Path,
+    monkeypatch,
+) -> None:
+    original_run = subprocess.run
+    baseline_calls: list[tuple[str, ...]] = []
+    external_calls: list[tuple[str, ...]] = []
+
+    def _counting_run(argv, *args, **kwargs):
+        argv_tuple = tuple(argv)
+        if argv_tuple[:5] == ("go", "list", "-buildvcs=false", "-json", "./..."):
+            baseline_calls.append(argv_tuple)
+        if argv_tuple[:6] == ("go", "list", "-buildvcs=false", "-m", "-json", "all"):
+            external_calls.append(argv_tuple)
+        return original_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr("suitcode.providers.go.workspace_analyzer.subprocess.run", _counting_run)
+
+    repository = Workspace(go_repo_root).repositories[0]
+
+    assert repository.arch.get_package_managers()
+    assert repository.arch.get_package_managers()
+    assert len(baseline_calls) == 1
+    assert len(external_calls) == 0
+
+    assert isinstance(repository.arch.get_external_packages(), tuple)
+    assert isinstance(repository.arch.get_external_packages(), tuple)
+    assert len(baseline_calls) == 1
+    assert len(external_calls) == 1
 
 
 def test_go_provider_returns_tier_one_structural_symbols_without_gopls(go_provider) -> None:

@@ -281,6 +281,18 @@ def test_core_tools_return_structured_results(core_app, npm_repo_root) -> None:
             )
         )
     )
+    proof_gaps = _payload_from_result(
+        asyncio.run(
+            _call_tool(
+                core_app,
+                "what_is_not_proven",
+                {
+                    "repository_path": str(npm_repo_root),
+                    "repository_rel_paths": ["packages/core/src/index.ts"],
+                },
+            )
+        )
+    )
     availability = _payload_from_result(
         asyncio.run(
             _call_tool(
@@ -300,10 +312,36 @@ def test_core_tools_return_structured_results(core_app, npm_repo_root) -> None:
     assert file_understanding["detail_level"] == "compact"
     assert file_understanding["target_count"] == 1
     assert file_understanding["targets"][0]["file_owner"]["owner"]["id"]
-    assert isinstance(file_understanding["aggregate_related_tests"], list)
+    assert isinstance(file_understanding["targets"][0]["top_validations"], list)
     assert impact["detail_level"] == "compact"
     assert impact["target_count"] == 1
     assert impact["targets"][0]["owner"]["id"]
+    assert isinstance(impact["targets"][0]["top_impacted_files"], list)
     assert isinstance(minimum["tests"], list)
+    assert proof_gaps["target_count"] == 1
+    assert isinstance(proof_gaps["targets"][0]["gap_items"], list)
     assert availability["supported"] is True
     assert "test" in availability["available_action_kinds"]
+
+
+def test_core_tool_payloads_use_compressed_span_encoding(core_app, npm_repo_root) -> None:
+    file_understanding = _payload_from_result(
+        asyncio.run(
+            _call_tool(
+                core_app,
+                "understand_file",
+                {
+                    "repository_path": str(npm_repo_root),
+                    "repository_rel_paths": ["packages/core/src/index.ts"],
+                    "detail_level": "standard",
+                },
+            )
+        )
+    )
+
+    reference_sites = file_understanding["targets"][0]["reference_sites_preview"]
+    assert reference_sites
+    first_site = reference_sites[0]
+    assert "span" in first_site
+    assert "line_start" not in first_site
+    assert "column_start" not in first_site

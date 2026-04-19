@@ -13,7 +13,6 @@ from suitcode.core.repository import Repository
 from suitcode.core.tests.models import RelatedTestTarget
 from suitcode.core.validation import validate_preview_limit
 from suitcode.core.validation import validate_change_preview_limit
-from suitcode.core.workspace import Workspace
 from suitcode.mcp.errors import McpNotFoundError, McpRetryableError, McpUnsupportedRepositoryError, McpValidationError
 from suitcode.mcp.file_target_errors import explain_file_target_error
 from suitcode.mcp.models import (
@@ -40,10 +39,13 @@ from suitcode.mcp.models import (
     ComponentDependencyEdgeView,
     ComponentContextView,
     ComponentView,
+    CompactRiskView,
+    CompactSurfaceBoundaryView,
     DependencyRefView,
     ExcludedMinimumVerifiedItemView,
     ExternalPackageView,
     ArtifactSurfaceSummaryView,
+    BatchProofGapView,
     FileContextView,
     FrontendProofSummaryView,
     FileOwnerView,
@@ -66,6 +68,8 @@ from suitcode.mcp.models import (
     MinimumVerifiedTestTargetView,
     OpenWorkspaceResult,
     PackageManagerView,
+    ProofGapItemView,
+    ProofGapTargetView,
     ProviderDescriptorView,
     QualityFileResultView,
     QualityProvidersView,
@@ -93,8 +97,10 @@ from suitcode.mcp.models import (
 )
 from suitcode.mcp.pagination import PaginationPolicy
 from suitcode.mcp.service_runtime import build_mcp_service_runtime
-from suitcode.mcp.state import WorkspaceRegistry
+from suitcode.mcp.state import ReadOnlyRepositoryRegistry, WorkspaceRegistry
+from suitcode.providers.provider_roles import ProviderRole
 from suitcode.providers.npm.tool_runner import TypeScriptToolTimeoutError
+from suitcode.runtime.client import ProjectCoordinatorClient
 from suitcode.runtime.errors import CoordinatorRuntimeNotReadyError, SemanticQueryTimeoutError
 
 T = TypeVar("T")
@@ -107,15 +113,18 @@ class SuitMcpService:
     _FULL_MAX_TARGETS = 1
     _COMPACT_SINGLE_TARGET_STRUCTURAL_LINE_THRESHOLD = 400
     _COMPACT_SINGLE_TARGET_STRUCTURAL_BYTE_THRESHOLD = 48 * 1024
-    _SEMANTIC_ENRICHMENT_BUDGET_SECONDS = 10.0
-    _HOT_ENTRYPOINT_QUERY_BUDGET_SECONDS = 8.0
+    _SEMANTIC_RUNTIME_MAX_ATTEMPTS = 3
+    _SEMANTIC_RUNTIME_MAX_TOTAL_RETRY_SLEEP_SECONDS = 30.0
+    _SEMANTIC_RUNTIME_MAX_TOTAL_WALL_CLOCK_SECONDS = 45.0
 
     def __init__(
         self,
         registry: WorkspaceRegistry | None = None,
         pagination: PaginationPolicy | None = None,
+        read_only_registry: ReadOnlyRepositoryRegistry | None = None,
     ) -> None:
         self._registry = registry or WorkspaceRegistry()
+        self._read_only_registry = read_only_registry or ReadOnlyRepositoryRegistry()
         self._pagination = pagination or PaginationPolicy()
         runtime = build_mcp_service_runtime(
             registry=self._registry,
@@ -209,7 +218,7 @@ class SuitMcpService:
         def _callback(repository: Repository) -> RepositorySummaryView:
             return self._repository_summary_presenter.summary_view(repository, preview_limit)
 
-        return self._with_read_only_repository(repository_path, _callback)
+        return self._with_read_only_repository(repository_path, _callback, tool_name="repository_summary_by_path")
 
     def understand_repository(
         self,
@@ -219,6 +228,7 @@ class SuitMcpService:
         validate_preview_limit(preview_limit, "preview_limit", max_value=50, error_cls=McpValidationError)
 
         def _callback(repository: Repository) -> RepositoryUnderstandingView:
+            self._wait_for_repository_warmup(repository)
             summary = self._repository_summary_presenter.summary_view(repository, preview_limit)
             truth_coverage = self._intelligence_presenter.truth_coverage_summary_view(repository.get_truth_coverage())
             return RepositoryUnderstandingView(
@@ -233,7 +243,12 @@ class SuitMcpService:
                 provenance=self._merge_view_provenance(summary.provenance, truth_coverage.provenance),
             )
 
-        return self._with_read_only_repository(repository_path, _callback)
+        return self._with_read_only_repository(repository_path, _callback, tool_name="understand_repository")
+
+    def _wait_for_repository_warmup(self, repository: Repository) -> None:
+        ProjectCoordinatorClient(repository.root).wait_for_project_warmup(
+            timeout_seconds=None,
+        )
 
     def understand_file(
         self,
@@ -290,6 +305,7 @@ class SuitMcpService:
             )
             if validated_detail_level == "compact":
                 return self._compact_file_understanding_view(
+                    repository,
                     targets,
                     target_count=target_count,
                     incomplete_targets=incomplete_targets,
@@ -383,7 +399,7 @@ class SuitMcpService:
                 ),
             )
 
-        return self._with_read_only_repository(repository_path, _callback)
+        return self._with_read_only_repository(repository_path, _callback, tool_name="understand_file")
 
     def get_file_owner_by_path(self, repository_path: str, repository_rel_path: str) -> FileOwnerView:
         def _callback(repository: Repository) -> FileOwnerView:
@@ -399,7 +415,7 @@ class SuitMcpService:
                     )
                 ) from exc
 
-        return self._with_read_only_repository(repository_path, _callback)
+        return self._with_read_only_repository(repository_path, _callback, tool_name="get_file_owner_by_path")
 
     def get_related_tests_by_path(
         self,
@@ -429,7 +445,7 @@ class SuitMcpService:
                     )
                 raise McpValidationError(message) from exc
 
-        return self._with_read_only_repository(repository_path, _callback)
+        return self._with_read_only_repository(repository_path, _callback, tool_name="get_related_tests_by_path")
 
     def what_changes_if_i_edit_this(
         self,
@@ -489,6 +505,7 @@ class SuitMcpService:
             )
             if validated_detail_level == "compact":
                 return self._compact_change_impact_view(
+                    repository,
                     frozen_targets,
                     target_count=target_count,
                     incomplete_targets=incomplete_targets,
@@ -587,7 +604,7 @@ class SuitMcpService:
                 provenance=self._merge_view_provenance(*(target.impact.provenance for target in frozen_targets)),
             )
 
-        return self._with_read_only_repository(repository_path, _callback)
+        return self._with_read_only_repository(repository_path, _callback, tool_name="what_changes_if_i_edit_this")
 
     def get_minimum_verified_change_set_by_path(
         self,
@@ -616,7 +633,7 @@ class SuitMcpService:
                     )
                 raise McpValidationError(message) from exc
 
-        return self._with_read_only_repository(repository_path, _callback)
+        return self._with_read_only_repository(repository_path, _callback, tool_name="get_minimum_verified_change_set_by_path")
 
     def what_should_i_run(
         self,
@@ -627,23 +644,11 @@ class SuitMcpService:
             normalized_paths = self._validate_repository_rel_paths(repository_rel_paths, field_name="repository_rel_paths")
             targets: list[BatchMinimumVerifiedChangeSetTargetView] = []
             for repository_rel_path in normalized_paths:
-                try:
-                    change_set = repository.get_minimum_verified_change_set(
-                        ChangeTarget(repository_rel_path=repository_rel_path)
-                    )
-                except ValueError as exc:
-                    raise McpValidationError(
-                        explain_file_target_error(
-                            repository,
-                            repository_rel_path,
-                            str(exc),
-                            tool_name="what_should_i_run",
-                        )
-                    ) from exc
                 targets.append(
-                    BatchMinimumVerifiedChangeSetTargetView(
-                        repository_rel_path=repository_rel_path,
-                        change_set=self._change_impact_presenter.minimum_verified_change_set_view(change_set),
+                    self._minimum_verified_batch_target_view(
+                        repository,
+                        repository_rel_path,
+                        tool_name="what_should_i_run",
                     )
                 )
             frozen_targets = tuple(targets)
@@ -700,7 +705,75 @@ class SuitMcpService:
                 provenance=self._merge_view_provenance(*(target.change_set.provenance for target in frozen_targets)),
             )
 
-        return self._with_read_only_repository(repository_path, _callback)
+        return self._with_read_only_repository(repository_path, _callback, tool_name="what_should_i_run")
+
+    def what_is_not_proven(
+        self,
+        repository_path: str,
+        repository_rel_paths: tuple[str, ...],
+    ) -> BatchProofGapView:
+        def _callback(repository: Repository) -> BatchProofGapView:
+            normalized_paths = self._validate_repository_rel_paths(repository_rel_paths, field_name="repository_rel_paths")
+            targets = tuple(
+                self._proof_gap_target_view(repository, repository_rel_path)
+                for repository_rel_path in normalized_paths
+            )
+            targets_with_gaps = tuple(target for target in targets if target.gap_items)
+            shared_gap_codes = tuple(
+                sorted(
+                    set.intersection(*(set(item.gap_code for item in target.gap_items) for target in targets_with_gaps))
+                )
+            ) if len(targets_with_gaps) > 1 else (
+                tuple(sorted({item.gap_code for item in targets_with_gaps[0].gap_items}))
+                if targets_with_gaps
+                else tuple()
+            )
+            nearby_validation_surfaces = self._dedupe_views(
+                tuple(item for target in targets for item in target.nearest_validation_artifacts),
+                key=lambda item: (item.item_kind, item.item_id),
+            )
+            ranked_targets = tuple(
+                item.repository_rel_path
+                for item in sorted(
+                    targets_with_gaps,
+                    key=lambda target: (
+                        -self._proof_gap_priority(target.gap_items),
+                        target.repository_rel_path,
+                    ),
+                )[:3]
+            )
+            return BatchProofGapView(
+                target_count=len(targets),
+                targets=targets,
+                highest_priority_targets=ranked_targets,
+                shared_gap_codes=shared_gap_codes,
+                nearby_validation_surfaces=nearby_validation_surfaces,
+            )
+
+        return self._with_read_only_repository(repository_path, _callback, tool_name="what_is_not_proven")
+
+    def _minimum_verified_batch_target_view(
+        self,
+        repository: Repository,
+        repository_rel_path: str,
+        *,
+        tool_name: str,
+    ) -> BatchMinimumVerifiedChangeSetTargetView:
+        try:
+            change_set = repository.get_minimum_verified_change_set(ChangeTarget(repository_rel_path=repository_rel_path))
+        except ValueError as exc:
+            raise McpValidationError(
+                explain_file_target_error(
+                    repository,
+                    repository_rel_path,
+                    str(exc),
+                    tool_name=tool_name,
+                )
+            ) from exc
+        return BatchMinimumVerifiedChangeSetTargetView(
+            repository_rel_path=repository_rel_path,
+            change_set=self._change_impact_presenter.minimum_verified_change_set_view(change_set),
+        )
 
     def _batch_minimum_verified_compact_summary(
         self,
@@ -749,6 +822,118 @@ class SuitMcpService:
             exclusion_count=base.exclusion_count,
             exclusions=base.exclusions,
         )
+
+    def _proof_gap_target_view(
+        self,
+        repository: Repository,
+        repository_rel_path: str,
+    ) -> ProofGapTargetView:
+        minimum = self._minimum_verified_batch_target_view(
+            repository,
+            repository_rel_path,
+            tool_name="what_is_not_proven",
+        )
+        change_set = minimum.change_set
+        validation_surfaces = change_set.compact_summary.required_validation
+        nearest_validation_artifacts = validation_surfaces[:3]
+        validation_is_build_only = bool(validation_surfaces) and all(
+            item.item_kind == "build_target" for item in validation_surfaces
+        )
+        has_focused_test_surface = bool(change_set.tests)
+        has_runner_surface = bool(change_set.runner_actions)
+        artifact_surface_summary = self._artifact_surface_summary_view(repository, repository_rel_path)
+        gap_items: list[ProofGapItemView] = []
+        if not validation_surfaces:
+            gap_items.append(
+                ProofGapItemView(
+                    gap_code="no_deterministic_validation_surface",
+                    summary="No deterministic validation surface was identified for this target.",
+                )
+            )
+        if artifact_surface_summary is not None and not validation_surfaces:
+            gap_items.append(
+                ProofGapItemView(
+                    gap_code="artifact_member_without_validation_surface",
+                    summary="This artifact member has no deterministic validation surface beyond ownership.",
+                )
+            )
+        if validation_is_build_only and self._is_frontend_npm_file_target(repository, repository_rel_path):
+            gap_items.append(
+                ProofGapItemView(
+                    gap_code="build_only_frontend_surface",
+                    summary="Frontend proof currently bottoms out at build-only validation.",
+                )
+            )
+        if not has_focused_test_surface:
+            gap_items.append(
+                ProofGapItemView(
+                    gap_code="no_focused_test_surface",
+                    summary="No focused deterministic test surface was identified.",
+                )
+            )
+        if any(item.reason_code == "no_narrower_direct_validation_surface_for_file_target" for item in change_set.excluded_items):
+            gap_items.append(
+                ProofGapItemView(
+                    gap_code="only_broad_owner_level_validation",
+                    summary="Only broader owner-level validation surfaces were found for this file target.",
+                )
+            )
+        gap_items = list(
+            self._dedupe_views(
+                tuple(gap_items),
+                key=lambda item: item.gap_code,
+            )
+        )
+        return ProofGapTargetView(
+            repository_rel_path=repository_rel_path,
+            owner=change_set.owner,
+            primary_component=change_set.primary_component,
+            current_validation_surfaces=validation_surfaces,
+            validation_is_build_only=validation_is_build_only,
+            has_focused_test_surface=has_focused_test_surface,
+            has_runner_surface=has_runner_surface,
+            gap_items=tuple(gap_items),
+            nearest_validation_artifacts=nearest_validation_artifacts,
+            gap_summary=self._proof_gap_summary(
+                repository_rel_path=repository_rel_path,
+                validation_surfaces=validation_surfaces,
+                gap_items=tuple(gap_items),
+            ),
+        )
+
+    @staticmethod
+    def _proof_gap_summary(
+        *,
+        repository_rel_path: str,
+        validation_surfaces: tuple[MinimumVerifiedCompactItemView, ...],
+        gap_items: tuple[ProofGapItemView, ...],
+    ) -> tuple[str, ...]:
+        statements = [
+            (
+                f"{len(validation_surfaces)} deterministic validation surfaces were found for `{repository_rel_path}`."
+                if validation_surfaces
+                else f"No deterministic validation surfaces were found for `{repository_rel_path}`."
+            ),
+            (
+                f"Highest proof gap: {gap_items[0].summary}"
+                if gap_items
+                else "No deterministic proof gaps were detected from current repository evidence."
+            ),
+        ]
+        if len(gap_items) > 1:
+            statements.append(f"{len(gap_items)} distinct proof-gap codes were identified.")
+        return tuple(statements[:3])
+
+    @staticmethod
+    def _proof_gap_priority(gap_items: tuple[ProofGapItemView, ...]) -> int:
+        weights = {
+            "no_deterministic_validation_surface": 5,
+            "artifact_member_without_validation_surface": 4,
+            "build_only_frontend_surface": 3,
+            "no_focused_test_surface": 2,
+            "only_broad_owner_level_validation": 1,
+        }
+        return sum(weights.get(item.gap_code, 0) for item in gap_items)
 
     def can_i_do_this(
         self,
@@ -841,7 +1026,7 @@ class SuitMcpService:
                 provenance=self._merge_view_provenance(*provenance_groups),
             )
 
-        return self._with_read_only_repository(repository_path, _callback)
+        return self._with_read_only_repository(repository_path, _callback, tool_name="can_i_do_this")
 
     def list_components(self, workspace_id: str, repository_id: str, limit: int | None = None, offset: int = 0) -> ListResult[ComponentView]:
         return self._architecture_service.list_components(workspace_id, repository_id, limit=limit, offset=offset)
@@ -1412,152 +1597,156 @@ class SuitMcpService:
         reference_site_limit: int | None,
         evidence_tier: CodeEvidenceTier,
     ) -> FileUnderstandingTargetView:
-        try:
-            context = repository.describe_files(
-                (repository_rel_path,),
-                symbol_preview_limit=20,
-                test_preview_limit=related_test_limit,
-                include_reference_sites=include_reference_sites,
-                include_implementation_locations=include_implementation_locations,
-                reference_site_limit=reference_site_limit,
-                evidence_tier=evidence_tier,
-            )[0]
-            owner = self._ownership_presenter.file_owner_view(repository.get_file_owner(repository_rel_path))
-            reference_sites_preview = tuple(
-                self._code_presenter.location_view(item) for item in context.reference_sites_preview
-            )
-            dependency_files_preview = tuple(
-                self._intelligence_presenter.file_relationship_view(item) for item in context.dependency_files_preview
-            )
-            dependent_files_preview = tuple(
-                self._intelligence_presenter.file_relationship_view(item) for item in context.dependent_files_preview
-            )
-            render_children_preview = tuple(
-                self._intelligence_presenter.render_edge_view(item) for item in context.render_children_preview
-            )
-            render_parents_preview = tuple(
-                self._intelligence_presenter.render_edge_view(item) for item in context.render_parents_preview
-            )
-            invariant_findings_preview = tuple(
-                self._intelligence_presenter.invariant_finding_view(item) for item in context.invariant_findings_preview
-            )
-            local_flow_edges_preview = tuple(
-                self._intelligence_presenter.static_flow_edge_view(item) for item in context.local_flow_edges_preview
-            )
-            if detail_level == "compact":
-                invariant_findings_preview = self._compact_invariant_findings(invariant_findings_preview)
-            implementation_locations_preview = tuple(
-                self._code_presenter.location_view(item) for item in context.implementation_locations_preview
-            )
-            related_tests = tuple(
-                self._test_presenter.related_test_view(item)
-                for item in repository.tests.get_related_tests(
-                    RelatedTestTarget(repository_rel_path=repository_rel_path)
-                )[:related_test_limit]
-            )
-            structured_artifact = repository.describe_structured_artifact(repository_rel_path)
-            structured_artifact_view = (
-                self._shape_structured_artifact_view(
-                    self._intelligence_presenter.structured_artifact_view(structured_artifact),
-                    detail_level=detail_level,
+        def _build_target() -> FileUnderstandingTargetView:
+            try:
+                context = repository.describe_files(
+                    (repository_rel_path,),
+                    symbol_preview_limit=20,
+                    test_preview_limit=related_test_limit,
+                    include_reference_sites=include_reference_sites,
+                    include_implementation_locations=include_implementation_locations,
+                    reference_site_limit=reference_site_limit,
+                    evidence_tier=evidence_tier,
+                )[0]
+                owner = self._ownership_presenter.file_owner_view(repository.get_file_owner(repository_rel_path))
+                reference_sites_preview = tuple(
+                    self._code_presenter.location_view(item) for item in context.reference_sites_preview
                 )
-                if structured_artifact is not None
-                else None
-            )
-            artifact_surface_summary = self._artifact_surface_summary_view(repository, repository_rel_path)
-            semantic_deadline = self._semantic_enrichment_deadline(
-                evidence_tier=evidence_tier,
-                repository=repository,
-                repository_rel_path=repository_rel_path,
-            )
-            implementation_flow_summary = (
-                None
-                if artifact_surface_summary is not None or not enable_implementation_flow
-                else self._run_semantic_enrichment_stage(
-                    repository=repository,
-                    repository_rel_path=repository_rel_path,
-                    deadline=semantic_deadline,
-                    stage_name="implementation_flow_summary",
-                    build=lambda: self._implementation_flow_summary_view(
-                        repository,
-                        repository_rel_path,
+                dependency_files_preview = tuple(
+                    self._intelligence_presenter.file_relationship_view(item) for item in context.dependency_files_preview
+                )
+                dependent_files_preview = tuple(
+                    self._intelligence_presenter.file_relationship_view(item) for item in context.dependent_files_preview
+                )
+                render_children_preview = tuple(
+                    self._intelligence_presenter.render_edge_view(item) for item in context.render_children_preview
+                )
+                render_parents_preview = tuple(
+                    self._intelligence_presenter.render_edge_view(item) for item in context.render_parents_preview
+                )
+                invariant_findings_preview = tuple(
+                    self._intelligence_presenter.invariant_finding_view(item) for item in context.invariant_findings_preview
+                )
+                local_flow_edges_preview = tuple(
+                    self._intelligence_presenter.static_flow_edge_view(item) for item in context.local_flow_edges_preview
+                )
+                if detail_level == "compact":
+                    invariant_findings_preview = self._compact_invariant_findings(invariant_findings_preview)
+                implementation_locations_preview = tuple(
+                    self._code_presenter.location_view(item) for item in context.implementation_locations_preview
+                )
+                related_tests = tuple(
+                    self._test_presenter.related_test_view(item)
+                    for item in repository.tests.get_related_tests(
+                        RelatedTestTarget(repository_rel_path=repository_rel_path)
+                    )[:related_test_limit]
+                )
+                structured_artifact = repository.describe_structured_artifact(repository_rel_path)
+                structured_artifact_view = (
+                    self._shape_structured_artifact_view(
+                        self._intelligence_presenter.structured_artifact_view(structured_artifact),
                         detail_level=detail_level,
-                    ),
+                    )
+                    if structured_artifact is not None
+                    else None
                 )
-            )
-            frontend_proof_summary = (
-                None
-                if artifact_surface_summary is not None
-                else self._run_semantic_enrichment_stage(
+                artifact_surface_summary = self._artifact_surface_summary_view(repository, repository_rel_path)
+                semantic_deadline = self._semantic_enrichment_deadline(
+                    evidence_tier=evidence_tier,
                     repository=repository,
                     repository_rel_path=repository_rel_path,
-                    deadline=semantic_deadline,
-                    stage_name="frontend_proof_summary",
-                    build=lambda: self._frontend_proof_summary_view(repository, repository_rel_path),
                 )
-            )
-            hot_entrypoints_preview = (
-                tuple()
-                if not enable_hot_entrypoints
-                else self._run_semantic_enrichment_stage(
-                    repository=repository,
-                    repository_rel_path=repository_rel_path,
-                    deadline=semantic_deadline,
-                    stage_name="hot_entrypoints_preview",
-                    build=lambda: self._hot_entrypoints_preview(
-                        repository,
-                        repository_rel_path,
-                        detail_level=detail_level,
+                implementation_flow_summary = (
+                    None
+                    if artifact_surface_summary is not None or not enable_implementation_flow
+                    else self._run_semantic_enrichment_stage(
+                        repository=repository,
+                        repository_rel_path=repository_rel_path,
                         deadline=semantic_deadline,
-                    ),
+                        stage_name="implementation_flow_summary",
+                        build=lambda: self._implementation_flow_summary_view(
+                            repository,
+                            repository_rel_path,
+                            detail_level=detail_level,
+                        ),
+                    )
                 )
+                frontend_proof_summary = (
+                    None
+                    if artifact_surface_summary is not None
+                    else self._run_semantic_enrichment_stage(
+                        repository=repository,
+                        repository_rel_path=repository_rel_path,
+                        deadline=semantic_deadline,
+                        stage_name="frontend_proof_summary",
+                        build=lambda: self._frontend_proof_summary_view(repository, repository_rel_path),
+                    )
+                )
+                hot_entrypoints_preview = (
+                    tuple()
+                    if not enable_hot_entrypoints
+                    else self._run_semantic_enrichment_stage(
+                        repository=repository,
+                        repository_rel_path=repository_rel_path,
+                        deadline=semantic_deadline,
+                        stage_name="hot_entrypoints_preview",
+                        build=lambda: self._hot_entrypoints_preview(
+                            repository,
+                            repository_rel_path,
+                            detail_level=detail_level,
+                            deadline=semantic_deadline,
+                        ),
+                    )
+                )
+            except ValueError as exc:
+                raise McpValidationError(
+                    explain_file_target_error(repository, repository_rel_path, str(exc), tool_name="understand_file")
+                ) from exc
+            return FileUnderstandingTargetView(
+                detail_level="full",
+                repository_rel_path=repository_rel_path,
+                file_owner=owner,
+                reference_site_count=context.reference_site_count,
+                reference_sites_preview=reference_sites_preview,
+                dependency_file_count=context.dependency_file_count,
+                dependency_files_preview=dependency_files_preview,
+                dependent_file_count=context.dependent_file_count,
+                dependent_files_preview=dependent_files_preview,
+                render_child_count=context.render_child_count,
+                render_children_preview=render_children_preview,
+                render_parent_count=context.render_parent_count,
+                render_parents_preview=render_parents_preview,
+                invariant_finding_count=context.invariant_finding_count,
+                invariant_findings_preview=invariant_findings_preview,
+                local_flow_edge_count=context.local_flow_edge_count,
+                local_flow_edges_preview=local_flow_edges_preview,
+                implementation_location_count=context.implementation_location_count,
+                implementation_locations_preview=implementation_locations_preview,
+                related_tests=related_tests,
+                hot_entrypoints_preview=hot_entrypoints_preview,
+                implementation_flow_summary=implementation_flow_summary,
+                frontend_proof_summary=frontend_proof_summary,
+                artifact_surface_summary=artifact_surface_summary,
+                structured_artifact=structured_artifact_view,
+                provenance=self._merge_view_provenance(
+                    owner.file.provenance,
+                    *(item.provenance for item in reference_sites_preview),
+                    *(item.provenance for item in dependency_files_preview),
+                    *(item.provenance for item in dependent_files_preview),
+                    *(item.provenance for item in render_children_preview),
+                    *(item.provenance for item in render_parents_preview),
+                    *(item.provenance for item in invariant_findings_preview),
+                    *(item.provenance for item in local_flow_edges_preview),
+                    *(item.provenance for item in implementation_locations_preview),
+                    *(item.provenance for item in related_tests),
+                    implementation_flow_summary.provenance if implementation_flow_summary is not None else tuple(),
+                    structured_artifact_view.provenance if structured_artifact_view is not None else tuple(),
+                ),
             )
-        except ValueError as exc:
-            raise McpValidationError(
-                explain_file_target_error(repository, repository_rel_path, str(exc), tool_name="understand_file")
-            ) from exc
-        except (CoordinatorRuntimeNotReadyError, TypeScriptToolTimeoutError, SemanticQueryTimeoutError) as exc:
-            raise self._runtime_not_ready_error(tool_name="understand_file", exc=exc) from exc
-        return FileUnderstandingTargetView(
-            detail_level="full",
-            repository_rel_path=repository_rel_path,
-            file_owner=owner,
-            reference_site_count=context.reference_site_count,
-            reference_sites_preview=reference_sites_preview,
-            dependency_file_count=context.dependency_file_count,
-            dependency_files_preview=dependency_files_preview,
-            dependent_file_count=context.dependent_file_count,
-            dependent_files_preview=dependent_files_preview,
-            render_child_count=context.render_child_count,
-            render_children_preview=render_children_preview,
-            render_parent_count=context.render_parent_count,
-            render_parents_preview=render_parents_preview,
-            invariant_finding_count=context.invariant_finding_count,
-            invariant_findings_preview=invariant_findings_preview,
-            local_flow_edge_count=context.local_flow_edge_count,
-            local_flow_edges_preview=local_flow_edges_preview,
-            implementation_location_count=context.implementation_location_count,
-            implementation_locations_preview=implementation_locations_preview,
-            related_tests=related_tests,
-            hot_entrypoints_preview=hot_entrypoints_preview,
-            implementation_flow_summary=implementation_flow_summary,
-            frontend_proof_summary=frontend_proof_summary,
-            artifact_surface_summary=artifact_surface_summary,
-            structured_artifact=structured_artifact_view,
-            provenance=self._merge_view_provenance(
-                owner.file.provenance,
-                *(item.provenance for item in reference_sites_preview),
-                *(item.provenance for item in dependency_files_preview),
-                *(item.provenance for item in dependent_files_preview),
-                *(item.provenance for item in render_children_preview),
-                *(item.provenance for item in render_parents_preview),
-                *(item.provenance for item in invariant_findings_preview),
-                *(item.provenance for item in local_flow_edges_preview),
-                *(item.provenance for item in implementation_locations_preview),
-                *(item.provenance for item in related_tests),
-                implementation_flow_summary.provenance if implementation_flow_summary is not None else tuple(),
-                structured_artifact_view.provenance if structured_artifact_view is not None else tuple(),
-            ),
+
+        return self._with_semantic_runtime_retries(
+            tool_name="understand_file",
+            build_target=_build_target,
         )
 
     def _collect_understand_file_targets(
@@ -1612,64 +1801,68 @@ class SuitMcpService:
         enable_deep_symbol_navigation: bool,
     ) -> tuple[tuple[BatchChangeImpactTargetView, ...], tuple[IncompleteBatchTargetView, ...]]:
         def _build(repository_rel_path: str) -> BatchChangeImpactTargetView:
-            try:
-                impact = repository.analyze_change(
-                    ChangeTarget(repository_rel_path=repository_rel_path),
-                    reference_preview_limit=reference_preview_limit,
-                    dependent_preview_limit=dependent_preview_limit,
-                    test_preview_limit=test_preview_limit,
-                    runner_preview_limit=runner_preview_limit,
-                    include_reference_locations=include_reference_locations,
-                    include_implementation_locations=include_implementation_locations,
-                    evidence_tier=evidence_tier,
-                )
-            except ValueError as exc:
-                raise McpValidationError(
-                    explain_file_target_error(
-                        repository,
-                        repository_rel_path,
-                        str(exc),
-                        tool_name="what_changes_if_i_edit_this",
+            def _build_target() -> BatchChangeImpactTargetView:
+                try:
+                    impact = repository.analyze_change(
+                        ChangeTarget(repository_rel_path=repository_rel_path),
+                        reference_preview_limit=reference_preview_limit,
+                        dependent_preview_limit=dependent_preview_limit,
+                        test_preview_limit=test_preview_limit,
+                        runner_preview_limit=runner_preview_limit,
+                        include_reference_locations=include_reference_locations,
+                        include_implementation_locations=include_implementation_locations,
+                        evidence_tier=evidence_tier,
                     )
-                ) from exc
-            except (CoordinatorRuntimeNotReadyError, TypeScriptToolTimeoutError, SemanticQueryTimeoutError) as exc:
-                raise self._runtime_not_ready_error(tool_name="what_changes_if_i_edit_this", exc=exc) from exc
-            artifact_surface_summary = self._artifact_surface_summary_view(repository, repository_rel_path)
-            semantic_deadline = self._semantic_enrichment_deadline(
-                evidence_tier=evidence_tier,
-                repository=repository,
-                repository_rel_path=repository_rel_path,
-            )
-            return BatchChangeImpactTargetView(
-                repository_rel_path=repository_rel_path,
-                impact=self._change_impact_presenter.change_impact_view(impact),
-                implementation_flow_summary=(
-                    None
-                    if not enable_deep_symbol_navigation or artifact_surface_summary is not None
-                    else self._run_semantic_enrichment_stage(
-                        repository=repository,
-                        repository_rel_path=repository_rel_path,
-                        deadline=semantic_deadline,
-                        stage_name="implementation_flow_summary",
-                        build=lambda: self._implementation_flow_summary_view(
+                except ValueError as exc:
+                    raise McpValidationError(
+                        explain_file_target_error(
                             repository,
                             repository_rel_path,
-                            detail_level=detail_level,
-                        ),
-                    )
-                ),
-                frontend_proof_summary=(
-                    None
-                    if artifact_surface_summary is not None
-                    else self._run_semantic_enrichment_stage(
-                        repository=repository,
-                        repository_rel_path=repository_rel_path,
-                        deadline=semantic_deadline,
-                        stage_name="frontend_proof_summary",
-                        build=lambda: self._frontend_proof_summary_view(repository, repository_rel_path),
-                    )
-                ),
-                artifact_surface_summary=artifact_surface_summary,
+                            str(exc),
+                            tool_name="what_changes_if_i_edit_this",
+                        )
+                    ) from exc
+                artifact_surface_summary = self._artifact_surface_summary_view(repository, repository_rel_path)
+                semantic_deadline = self._semantic_enrichment_deadline(
+                    evidence_tier=evidence_tier,
+                    repository=repository,
+                    repository_rel_path=repository_rel_path,
+                )
+                return BatchChangeImpactTargetView(
+                    repository_rel_path=repository_rel_path,
+                    impact=self._change_impact_presenter.change_impact_view(impact),
+                    implementation_flow_summary=(
+                        None
+                        if not enable_deep_symbol_navigation or artifact_surface_summary is not None
+                        else self._run_semantic_enrichment_stage(
+                            repository=repository,
+                            repository_rel_path=repository_rel_path,
+                            deadline=semantic_deadline,
+                            stage_name="implementation_flow_summary",
+                            build=lambda: self._implementation_flow_summary_view(
+                                repository,
+                                repository_rel_path,
+                                detail_level=detail_level,
+                            ),
+                        )
+                    ),
+                    frontend_proof_summary=(
+                        None
+                        if artifact_surface_summary is not None
+                        else self._run_semantic_enrichment_stage(
+                            repository=repository,
+                            repository_rel_path=repository_rel_path,
+                            deadline=semantic_deadline,
+                            stage_name="frontend_proof_summary",
+                            build=lambda: self._frontend_proof_summary_view(repository, repository_rel_path),
+                        )
+                    ),
+                    artifact_surface_summary=artifact_surface_summary,
+                )
+
+            return self._with_semantic_runtime_retries(
+                tool_name="what_changes_if_i_edit_this",
+                build_target=_build_target,
             )
 
         return self._collect_batch_results(
@@ -2031,15 +2224,10 @@ class SuitMcpService:
         repository: Repository,
         repository_rel_path: str,
     ) -> float | None:
-        if evidence_tier != CodeEvidenceTier.SEMANTIC:
-            return None
-        return time.monotonic() + self._semantic_enrichment_budget_seconds(repository, repository_rel_path)
+        return None
 
     def _semantic_enrichment_budget_seconds(self, repository: Repository, repository_rel_path: str) -> float:
-        lowered = repository_rel_path.lower()
-        if lowered.endswith((".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs")):
-            return self._SEMANTIC_ENRICHMENT_BUDGET_SECONDS
-        return max(self._SEMANTIC_ENRICHMENT_BUDGET_SECONDS, self._HOT_ENTRYPOINT_QUERY_BUDGET_SECONDS)
+        return 0.0
 
     def _run_semantic_enrichment_stage(
         self,
@@ -2079,7 +2267,7 @@ class SuitMcpService:
             return
         raise SemanticQueryTimeoutError(
             server_name=self._semantic_server_name_for_path(repository_rel_path),
-            attachment_root=str(repository.root),
+            attachment_root=self._semantic_attachment_root_for_path(repository, repository_rel_path),
             state="degraded",
         ) from TimeoutError(f"semantic enrichment stage `{stage_name}` exceeded budget")
 
@@ -2091,6 +2279,13 @@ class SuitMcpService:
         if lowered.endswith(".go"):
             return "gopls"
         return "typescript-language-server"
+
+    @staticmethod
+    def _semantic_attachment_root_for_path(repository: Repository, repository_rel_path: str) -> str:
+        providers = repository.get_providers_for_file_role(repository_rel_path, ProviderRole.CODE)
+        if not providers:
+            return str(repository.root)
+        return str(providers[0].attachment.attachment_root)
 
     @staticmethod
     def _implementation_flow_paths(summary) -> set[str]:
@@ -2323,111 +2518,24 @@ class SuitMcpService:
 
     def _compact_file_understanding_view(
         self,
+        repository: Repository,
         targets: tuple[FileUnderstandingTargetView, ...],
         *,
         target_count: int | None = None,
         incomplete_targets: tuple[IncompleteBatchTargetView, ...] = (),
     ) -> FileUnderstandingCompactView:
-        flow_summary_enabled = len(targets) <= 3
         multi_target = len(targets) > 1
-        ranked_targets = (
-            self._owner_round_robin_targets(targets, lambda item: item.file_owner.owner.id)
-            if multi_target
-            else targets
-        )
-        ui_heavy = any(self._is_ui_heavy_file_target(target) for target in targets)
-        render_limit = 2 if ui_heavy else 3
-        dependent_limit = 2 if ui_heavy else 3
-        dependency_limit = 1 if ui_heavy else 3
-        local_flow_limit = 1 if ui_heavy else 3
-        invariant_limit = 1 if ui_heavy else 3
-        related_test_limit = 2 if ui_heavy else 3
-        if multi_target:
-            render_limit = min(render_limit, 2)
-            dependent_limit = min(dependent_limit, 2)
-            dependency_limit = min(dependency_limit, 1)
-            local_flow_limit = min(local_flow_limit, 1)
-            invariant_limit = min(invariant_limit, 1)
-            related_test_limit = 1
-        aggregate_reference_site_count, aggregate_reference_sites_preview = self._aggregate_ranked_views(
-            tuple(target.reference_sites_preview for target in ranked_targets),
-            key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
-            rank_key=self._location_rank_key,
-            limit=3,
-        )
-        aggregate_render_child_count, aggregate_render_children_preview = self._aggregate_ranked_views(
-            tuple(target.render_children_preview for target in ranked_targets),
-            key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
-            rank_key=self._render_edge_rank_key,
-            limit=render_limit,
-        )
-        aggregate_render_parent_count, aggregate_render_parents_preview = self._aggregate_ranked_views(
-            tuple(target.render_parents_preview for target in ranked_targets),
-            key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
-            rank_key=self._render_edge_rank_key,
-            limit=render_limit,
-        )
-        aggregate_blocked_paths = self._render_paths(aggregate_render_children_preview, aggregate_render_parents_preview)
-        aggregate_blocked_paths.update(self._location_paths(aggregate_reference_sites_preview))
-        aggregate_dependency_file_count, aggregate_dependency_candidates = self._aggregate_ranked_views(
-            tuple(target.dependency_files_preview for target in ranked_targets),
-            key=lambda item: item.path,
-            rank_key=self._file_relationship_rank_key,
-            limit=10 if ui_heavy else 3,
-        )
-        aggregate_dependency_files_preview = self._filter_relationship_paths(
-            aggregate_dependency_candidates,
-            blocked_paths=aggregate_blocked_paths,
-            limit=dependency_limit,
-        )
-        aggregate_dependent_file_count, aggregate_dependent_candidates = self._aggregate_ranked_views(
-            tuple(target.dependent_files_preview for target in ranked_targets),
-            key=lambda item: item.path,
-            rank_key=self._file_relationship_rank_key,
-            limit=10 if ui_heavy else 3,
-        )
-        aggregate_dependent_files_preview = self._filter_relationship_paths(
-            aggregate_dependent_candidates,
-            blocked_paths=aggregate_blocked_paths,
-            limit=dependent_limit,
-        )
-        aggregate_invariant_finding_count, aggregate_invariant_findings_preview = self._aggregate_ranked_views(
-            tuple(self._compact_invariant_findings(target.invariant_findings_preview) for target in ranked_targets),
-            key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
-            rank_key=self._invariant_rank_key,
-            limit=invariant_limit,
-        )
-        aggregate_local_flow_edge_count, aggregate_local_flow_edges_preview = self._aggregate_ranked_views(
-            tuple(target.local_flow_edges_preview for target in ranked_targets),
-            key=lambda item: (item.path, item.line_start, item.column_start, item.edge_kind, item.source_label, item.target_label),
-            rank_key=self._static_flow_rank_key,
-            limit=local_flow_limit,
-        )
-        _, aggregate_related_tests = self._aggregate_ranked_views(
-            tuple(target.related_tests for target in ranked_targets),
-            key=lambda item: item.id,
-            rank_key=self._related_test_rank_key,
-            limit=related_test_limit,
-        )
         compact_targets = tuple(
             self._compact_file_target_view(
+                repository,
                 target,
-                related_test_limit=related_test_limit,
                 multi_target=multi_target,
-                enable_implementation_flow=flow_summary_enabled,
+                has_partial_batch=bool(incomplete_targets),
             )
-            for target in ranked_targets
-        )
-        suggested_follow_ups = (
-            tuple()
-            if compact_targets and all(target.structured_artifact is not None for target in compact_targets)
-            else (
-                "list_symbols_in_file",
-                "find_symbols",
-                "find_references",
-                "what_changes_if_i_edit_this",
-                "what_should_i_run",
-                "can_i_do_this",
+            for target in (
+                self._owner_round_robin_targets(targets, lambda item: item.file_owner.owner.id)
+                if multi_target
+                else targets
             )
         )
         return FileUnderstandingCompactView(
@@ -2436,95 +2544,266 @@ class SuitMcpService:
             completed_target_count=len(compact_targets),
             targets=compact_targets,
             incomplete_targets=incomplete_targets,
-            owner_ids=tuple(sorted({item.file_owner.owner.id for item in compact_targets})),
-            aggregate_reference_site_count=aggregate_reference_site_count,
-            aggregate_reference_sites_preview=aggregate_reference_sites_preview,
-            aggregate_dependency_file_count=aggregate_dependency_file_count,
-            aggregate_dependency_files_preview=aggregate_dependency_files_preview,
-            aggregate_dependent_file_count=aggregate_dependent_file_count,
-            aggregate_dependent_files_preview=aggregate_dependent_files_preview,
-            aggregate_render_child_count=aggregate_render_child_count,
-            aggregate_render_children_preview=aggregate_render_children_preview,
-            aggregate_render_parent_count=aggregate_render_parent_count,
-            aggregate_render_parents_preview=aggregate_render_parents_preview,
-            aggregate_invariant_finding_count=aggregate_invariant_finding_count,
-            aggregate_invariant_findings_preview=aggregate_invariant_findings_preview,
-            aggregate_local_flow_edge_count=aggregate_local_flow_edge_count,
-            aggregate_local_flow_edges_preview=aggregate_local_flow_edges_preview,
-            aggregate_related_tests=aggregate_related_tests,
-            suggested_follow_ups=suggested_follow_ups,
         )
 
     def _compact_file_target_view(
         self,
+        repository: Repository,
         target: FileUnderstandingTargetView,
         *,
-        related_test_limit: int,
         multi_target: bool,
-        enable_implementation_flow: bool,
+        has_partial_batch: bool,
     ) -> FileUnderstandingCompactTargetView:
-        ui_heavy = self._is_ui_heavy_file_target(target)
-        implementation_flow_summary = target.implementation_flow_summary if enable_implementation_flow else None
-        limits = self._compact_file_target_limits(
-            ui_heavy=ui_heavy,
-            multi_target=multi_target,
-            has_flow_summary=implementation_flow_summary is not None,
-        )
-        related_test_limit = min(related_test_limit, limits["related_tests"])
-        render_children_preview = self._filter_render_edges_for_summary(
-            target.render_children_preview,
-            implementation_flow_summary,
-            limit=limits["render"],
-        )
-        render_parents_preview = self._filter_render_edges_for_summary(
-            target.render_parents_preview,
-            implementation_flow_summary,
-            limit=limits["render"],
-        )
-        blocked_paths = self._render_paths(render_children_preview, render_parents_preview)
-        blocked_paths.update(self._location_paths(target.reference_sites_preview[: limits["reference"]]))
-        blocked_paths.update(self._implementation_flow_paths(implementation_flow_summary))
-        dependency_files_preview = self._filter_relationship_paths(
-            target.dependency_files_preview,
-            blocked_paths=blocked_paths,
-            limit=limits["dependency"],
-        )
-        dependent_files_preview = self._filter_relationship_paths(
+        if target.structured_artifact is not None:
+            return FileUnderstandingCompactTargetView(
+                detail_level="compact",
+                repository_rel_path=target.repository_rel_path,
+                file_owner=target.file_owner,
+                artifact_surface_summary=target.artifact_surface_summary,
+                structured_artifact=target.structured_artifact,
+            )
+        top_dependents = self._filter_relationship_paths(
             target.dependent_files_preview,
-            blocked_paths=blocked_paths,
-            limit=limits["dependent"],
+            blocked_paths=set(),
+            limit=2 if multi_target else 3,
         )
-        invariant_findings = self._compact_invariant_findings(target.invariant_findings_preview)[: limits["invariant"]]
+        top_validations = self._top_validations_for_path(
+            repository,
+            target.repository_rel_path,
+            tool_name="understand_file",
+            limit=2 if multi_target else 3,
+        )
+        blocking_invariants = self._compact_invariant_findings(target.invariant_findings_preview)[:2]
+        public_surfaces = self._compact_public_boundaries_for_path(
+            repository,
+            repository_rel_path=target.repository_rel_path,
+            language=target.file_owner.file.language,
+            top_validations=top_validations,
+            artifact_surface_summary=target.artifact_surface_summary,
+        )
+        top_risks = self._compact_risk_views(
+            top_validations=top_validations,
+            public_boundaries=public_surfaces,
+            blocking_invariants=blocking_invariants,
+            has_partial_batch=has_partial_batch,
+        )
         return FileUnderstandingCompactTargetView(
             detail_level="compact",
             repository_rel_path=target.repository_rel_path,
             file_owner=target.file_owner,
-            reference_site_count=target.reference_site_count,
-            reference_sites_preview=target.reference_sites_preview[: limits["reference"]],
-            dependency_file_count=target.dependency_file_count,
-            dependency_files_preview=dependency_files_preview,
-            dependent_file_count=target.dependent_file_count,
-            dependent_files_preview=dependent_files_preview,
-            render_child_count=target.render_child_count,
-            render_children_preview=render_children_preview,
-            render_parent_count=target.render_parent_count,
-            render_parents_preview=render_parents_preview,
-            invariant_finding_count=len(self._compact_invariant_findings(target.invariant_findings_preview)),
-            invariant_findings_preview=invariant_findings,
-            local_flow_edge_count=target.local_flow_edge_count,
-            local_flow_edges_preview=self._filter_local_flow_edges_for_summary(
-                target.local_flow_edges_preview,
-                implementation_flow_summary,
-                limit=limits["local_flow"],
+            top_dependents=top_dependents,
+            top_validations=top_validations,
+            public_surfaces=public_surfaces,
+            blocking_invariants=blocking_invariants,
+            top_risks=top_risks,
+            decision_summary=self._file_decision_summary(
+                target,
+                top_dependents=top_dependents,
+                top_validations=top_validations,
+                public_surfaces=public_surfaces,
+                blocking_invariants=blocking_invariants,
+                top_risks=top_risks,
             ),
-            related_test_count=len(target.related_tests),
-            related_tests=target.related_tests[:related_test_limit],
-            hot_entrypoints_preview=target.hot_entrypoints_preview[: (1 if multi_target else 3)],
-            implementation_flow_summary=implementation_flow_summary,
-            frontend_proof_summary=target.frontend_proof_summary,
             artifact_surface_summary=target.artifact_surface_summary,
-            structured_artifact=target.structured_artifact,
         )
+
+    def _top_validations_for_path(
+        self,
+        repository: Repository,
+        repository_rel_path: str,
+        *,
+        tool_name: str,
+        limit: int,
+    ) -> tuple[MinimumVerifiedCompactItemView, ...]:
+        target = self._minimum_verified_batch_target_view(
+            repository,
+            repository_rel_path,
+            tool_name=tool_name,
+        )
+        return target.change_set.compact_summary.required_validation[:limit]
+
+    def _compact_public_boundaries_for_path(
+        self,
+        repository: Repository,
+        *,
+        repository_rel_path: str,
+        language: str | None,
+        top_validations: tuple[MinimumVerifiedCompactItemView, ...],
+        artifact_surface_summary: ArtifactSurfaceSummaryView | None,
+    ) -> tuple[CompactSurfaceBoundaryView, ...]:
+        boundaries: list[CompactSurfaceBoundaryView] = []
+        if artifact_surface_summary is not None:
+            boundaries.append(
+                CompactSurfaceBoundaryView(
+                    boundary_kind="public_runtime_asset",
+                    boundary_id=artifact_surface_summary.artifact_root,
+                    summary=f"Public runtime asset under `{artifact_surface_summary.artifact_root}`.",
+                )
+            )
+        for item in top_validations:
+            if item.item_kind == "build_target":
+                boundaries.append(
+                    CompactSurfaceBoundaryView(
+                        boundary_kind="build_entry_surface",
+                        boundary_id=item.item_id,
+                        summary=item.summary,
+                    )
+                )
+            elif item.item_kind == "runner_action":
+                boundaries.append(
+                    CompactSurfaceBoundaryView(
+                        boundary_kind="runner_entry_surface",
+                        boundary_id=item.item_id,
+                        summary=item.summary,
+                    )
+                )
+        if artifact_surface_summary is None:
+            try:
+                symbols = repository.code.list_symbols_in_file(repository_rel_path)
+            except ValueError:
+                symbols = tuple()
+            for symbol in symbols:
+                if not self._is_public_symbol(symbol, language):
+                    continue
+                boundaries.append(
+                    CompactSurfaceBoundaryView(
+                        boundary_kind="exported_symbol",
+                        boundary_id=symbol.id,
+                        summary=f"Public symbol `{symbol.name}` ({symbol.entity_kind}) in `{repository_rel_path}`.",
+                    )
+                )
+                if len(boundaries) >= 3:
+                    break
+        return self._dedupe_views(
+            tuple(boundaries),
+            key=lambda item: (item.boundary_kind, item.boundary_id),
+        )[:3]
+
+    @staticmethod
+    def _is_public_symbol(symbol, language: str | None) -> bool:
+        name = getattr(symbol, "name", "").strip()
+        if not name:
+            return False
+        normalized_language = (language or "").strip().lower()
+        signature = (getattr(symbol, "signature", None) or "").strip()
+        if normalized_language == "go":
+            return name[:1].isupper()
+        if normalized_language == "python":
+            return not name.startswith("_")
+        if normalized_language in {"javascript", "typescript", "jsx", "tsx"}:
+            return "export " in signature
+        return False
+
+    @staticmethod
+    def _compact_risk_views(
+        *,
+        top_validations: tuple[MinimumVerifiedCompactItemView, ...],
+        public_boundaries: tuple[CompactSurfaceBoundaryView, ...],
+        blocking_invariants: tuple[InvariantFindingView, ...],
+        has_partial_batch: bool,
+    ) -> tuple[CompactRiskView, ...]:
+        risks: list[CompactRiskView] = []
+        if not top_validations:
+            risks.append(
+                CompactRiskView(
+                    risk_code="no_deterministic_validation_surface",
+                    summary="No deterministic validation surface was identified for this target.",
+                )
+            )
+        elif all(item.item_kind == "build_target" for item in top_validations):
+            risks.append(
+                CompactRiskView(
+                    risk_code="build_only_validation",
+                    summary="Current deterministic proof bottoms out at build-only validation.",
+                )
+            )
+        if blocking_invariants:
+            risks.append(
+                CompactRiskView(
+                    risk_code="blocking_invariant_present",
+                    summary="Blocking invariants were detected and may constrain safe edits.",
+                )
+            )
+        if public_boundaries:
+            risks.append(
+                CompactRiskView(
+                    risk_code="public_surface_touched",
+                    summary="This target touches a public or entry boundary with wider blast radius.",
+                )
+            )
+        if has_partial_batch:
+            risks.append(
+                CompactRiskView(
+                    risk_code="grouped_partial_result",
+                    summary="Grouped compact results are partial because at least one sibling target did not complete.",
+                )
+            )
+        return tuple(risks)
+
+    def _file_decision_summary(
+        self,
+        target: FileUnderstandingTargetView,
+        *,
+        top_dependents: tuple[FileRelationshipView, ...],
+        top_validations: tuple[MinimumVerifiedCompactItemView, ...],
+        public_surfaces: tuple[CompactSurfaceBoundaryView, ...],
+        blocking_invariants: tuple[InvariantFindingView, ...],
+        top_risks: tuple[CompactRiskView, ...],
+    ) -> tuple[str, ...]:
+        statements = [
+            f"Owned by {target.file_owner.owner.kind} `{target.file_owner.owner.name}`.",
+            (
+                f"{len(top_dependents)} closest dependent files were kept in the compact planning surface."
+                if top_dependents
+                else "No close dependent files were surfaced in the compact planning surface."
+            ),
+            self._validation_summary_statement(top_validations),
+        ]
+        if public_surfaces:
+            statements.append(f"{len(public_surfaces)} public or entry surfaces are directly touched.")
+        if blocking_invariants:
+            statements.append(f"{len(blocking_invariants)} blocking invariants were retained for planning.")
+        elif top_risks:
+            statements.append(top_risks[0].summary)
+        return tuple(statements[:5])
+
+    def _change_decision_summary(
+        self,
+        target: BatchChangeImpactTargetView,
+        *,
+        top_impacted_files: tuple[FileRelationshipView, ...],
+        top_validations: tuple[MinimumVerifiedCompactItemView, ...],
+        api_or_public_boundaries: tuple[CompactSurfaceBoundaryView, ...],
+        top_risks: tuple[CompactRiskView, ...],
+    ) -> tuple[str, ...]:
+        owner_label = target.impact.primary_component.name if target.impact.primary_component else target.impact.owner.name
+        statements = [
+            f"Primary owner surface is `{owner_label}`.",
+            (
+                f"{len(top_impacted_files)} highest-signal impacted files were retained."
+                if top_impacted_files
+                else "No close impacted files were retained in compact mode."
+            ),
+            self._validation_summary_statement(top_validations),
+        ]
+        if api_or_public_boundaries:
+            statements.append(f"{len(api_or_public_boundaries)} API or public boundaries are part of the blast radius.")
+        if top_risks:
+            statements.append(top_risks[0].summary)
+        return tuple(statements[:5])
+
+    @staticmethod
+    def _validation_summary_statement(top_validations: tuple[MinimumVerifiedCompactItemView, ...]) -> str:
+        if not top_validations:
+            return "No deterministic validation surface was identified."
+        if len(top_validations) == 1:
+            return f"Closest deterministic validation: {top_validations[0].summary}"
+        return f"{len(top_validations)} deterministic validation surfaces were retained."
+
+    @staticmethod
+    def _change_target_language(target: BatchChangeImpactTargetView) -> str | None:
+        component = target.impact.primary_component
+        return component.language if component is not None else None
 
     def _standard_file_understanding_view(
         self,
@@ -2655,101 +2934,25 @@ class SuitMcpService:
 
     def _compact_change_impact_view(
         self,
+        repository: Repository,
         targets: tuple[BatchChangeImpactTargetView, ...],
         *,
         target_count: int | None = None,
         incomplete_targets: tuple[IncompleteBatchTargetView, ...] = (),
     ) -> BatchChangeImpactCompactView:
-        flow_summary_enabled = len(targets) <= 3
         multi_target = len(targets) > 1
-        ranked_targets = (
-            self._owner_round_robin_targets(targets, lambda item: item.impact.owner.id)
-            if multi_target
-            else targets
-        )
-        ui_heavy = any(self._is_ui_heavy_change_target(target) for target in targets)
-        render_limit = 2 if ui_heavy else 3
-        dependent_limit = 2 if ui_heavy else 3
-        local_flow_limit = 1 if ui_heavy else 3
-        invariant_limit = 1 if ui_heavy else 3
-        related_test_limit = 2 if multi_target else 3
-        component_limit = 2 if multi_target else 3
-        quality_gate_limit = 2 if multi_target else 3
-        runner_limit = 1 if multi_target else 3
-        _, reference_sites = self._aggregate_ranked_views(
-            tuple(target.impact.reference_locations for target in ranked_targets),
-            key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
-            rank_key=self._location_rank_key,
-            limit=3,
-        )
-        _, render_children = self._aggregate_ranked_views(
-            tuple(target.impact.render_children for target in ranked_targets),
-            key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
-            rank_key=self._render_edge_rank_key,
-            limit=render_limit,
-        )
-        _, render_parents = self._aggregate_ranked_views(
-            tuple(target.impact.render_parents for target in ranked_targets),
-            key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
-            rank_key=self._render_edge_rank_key,
-            limit=render_limit,
-        )
-        blocked_paths = self._render_paths(render_children, render_parents)
-        blocked_paths.update(self._location_paths(reference_sites))
-        _, dependent_file_candidates = self._aggregate_ranked_views(
-            tuple(target.impact.dependent_files for target in ranked_targets),
-            key=lambda item: item.path,
-            rank_key=self._file_relationship_rank_key,
-            limit=10 if ui_heavy else 3,
-        )
-        dependent_files = self._filter_relationship_paths(
-            dependent_file_candidates,
-            blocked_paths=blocked_paths,
-            limit=dependent_limit,
-        )
-        _, invariant_findings = self._aggregate_ranked_views(
-            tuple(self._compact_invariant_findings(target.impact.invariant_findings) for target in ranked_targets),
-            key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
-            rank_key=self._invariant_rank_key,
-            limit=invariant_limit,
-        )
-        _, local_flow_edges = self._aggregate_ranked_views(
-            tuple(target.impact.local_flow_edges for target in ranked_targets),
-            key=lambda item: (item.path, item.line_start, item.column_start, item.edge_kind, item.source_label, item.target_label),
-            rank_key=self._static_flow_rank_key,
-            limit=local_flow_limit,
-        )
-        _, dependent_components = self._aggregate_ranked_views(
-            tuple(target.impact.dependent_components for target in ranked_targets),
-            key=lambda item: item.id,
-            rank_key=self._component_rank_key,
-            limit=component_limit,
-        )
-        _, related_tests = self._aggregate_ranked_views(
-            tuple(target.impact.related_tests for target in ranked_targets),
-            key=lambda item: item.test.id,
-            rank_key=self._test_impact_rank_key,
-            limit=related_test_limit,
-        )
-        _, related_runners = self._aggregate_ranked_views(
-            tuple(target.impact.related_runners for target in ranked_targets),
-            key=lambda item: item.runner.id,
-            rank_key=self._runner_impact_rank_key,
-            limit=runner_limit,
-        )
-        _, quality_gates = self._aggregate_ranked_views(
-            tuple(target.impact.quality_gates for target in ranked_targets),
-            key=lambda item: (item.provider_id, item.reason, item.applies),
-            rank_key=self._quality_gate_rank_key,
-            limit=quality_gate_limit,
-        )
         compact_targets = tuple(
             self._compact_change_target_view(
+                repository,
                 target,
                 multi_target=multi_target,
-                enable_implementation_flow=flow_summary_enabled,
+                has_partial_batch=bool(incomplete_targets),
             )
-            for target in ranked_targets
+            for target in (
+                self._owner_round_robin_targets(targets, lambda item: item.impact.owner.id)
+                if multi_target
+                else targets
+            )
         )
         return BatchChangeImpactCompactView(
             detail_level="compact",
@@ -2757,73 +2960,56 @@ class SuitMcpService:
             completed_target_count=len(compact_targets),
             targets=compact_targets,
             incomplete_targets=incomplete_targets,
-            owner_ids=tuple(sorted({item.owner.id for item in compact_targets})),
-            reference_sites=reference_sites,
-            dependent_files=dependent_files,
-            render_children=render_children,
-            render_parents=render_parents,
-            invariant_findings=invariant_findings,
-            local_flow_edges=local_flow_edges,
-            dependent_components=dependent_components,
-            related_tests=related_tests,
-            related_runners=related_runners,
-            quality_gates=quality_gates,
         )
 
     def _compact_change_target_view(
         self,
+        repository: Repository,
         target: BatchChangeImpactTargetView,
         *,
         multi_target: bool,
-        enable_implementation_flow: bool,
+        has_partial_batch: bool,
     ) -> BatchChangeImpactCompactTargetView:
-        ui_heavy = self._is_ui_heavy_change_target(target)
-        implementation_flow_summary = target.implementation_flow_summary if enable_implementation_flow else None
-        limits = self._compact_change_target_limits(
-            ui_heavy=ui_heavy,
-            multi_target=multi_target,
-            has_flow_summary=implementation_flow_summary is not None,
-        )
-        reference_sites = target.impact.reference_locations[: limits["reference"]]
-        render_children = self._filter_render_edges_for_summary(
-            target.impact.render_children,
-            implementation_flow_summary,
-            limit=limits["render"],
-        )
-        render_parents = self._filter_render_edges_for_summary(
-            target.impact.render_parents,
-            implementation_flow_summary,
-            limit=limits["render"],
-        )
-        blocked_paths = self._render_paths(render_children, render_parents)
-        blocked_paths.update(self._location_paths(reference_sites))
-        blocked_paths.update(self._implementation_flow_paths(implementation_flow_summary))
-        dependent_files = self._filter_relationship_paths(
+        top_impacted_files = self._filter_relationship_paths(
             target.impact.dependent_files,
-            blocked_paths=blocked_paths,
-            limit=limits["dependent"],
+            blocked_paths=set(),
+            limit=2 if multi_target else 3,
+        )
+        top_validations = self._top_validations_for_path(
+            repository,
+            target.repository_rel_path,
+            tool_name="what_changes_if_i_edit_this",
+            limit=2 if multi_target else 3,
+        )
+        api_or_public_boundaries = self._compact_public_boundaries_for_path(
+            repository,
+            repository_rel_path=target.repository_rel_path,
+            language=self._change_target_language(target),
+            top_validations=top_validations,
+            artifact_surface_summary=target.artifact_surface_summary,
+        )
+        top_risks = self._compact_risk_views(
+            top_validations=top_validations,
+            public_boundaries=api_or_public_boundaries,
+            blocking_invariants=self._compact_invariant_findings(target.impact.invariant_findings)[:2],
+            has_partial_batch=has_partial_batch,
         )
         return BatchChangeImpactCompactTargetView(
             detail_level="compact",
             repository_rel_path=target.repository_rel_path,
             owner=target.impact.owner,
             primary_component=target.impact.primary_component,
-            reference_sites=reference_sites,
-            dependent_files=dependent_files,
-            render_children=render_children,
-            render_parents=render_parents,
-            invariant_findings=self._compact_invariant_findings(target.impact.invariant_findings)[: limits["invariant"]],
-            local_flow_edges=self._filter_local_flow_edges_for_summary(
-                target.impact.local_flow_edges,
-                implementation_flow_summary,
-                limit=limits["local_flow"],
+            top_impacted_files=top_impacted_files,
+            top_validations=top_validations,
+            api_or_public_boundaries=api_or_public_boundaries,
+            top_risks=top_risks,
+            decision_summary=self._change_decision_summary(
+                target,
+                top_impacted_files=top_impacted_files,
+                top_validations=top_validations,
+                api_or_public_boundaries=api_or_public_boundaries,
+                top_risks=top_risks,
             ),
-            dependent_components=target.impact.dependent_components[: limits["components"]],
-            related_tests=target.impact.related_tests[: limits["related_tests"]],
-            related_runners=target.impact.related_runners[: limits["runners"]],
-            quality_gates=target.impact.quality_gates[: limits["quality_gates"]],
-            implementation_flow_summary=implementation_flow_summary,
-            frontend_proof_summary=target.frontend_proof_summary,
             artifact_surface_summary=target.artifact_surface_summary,
         )
 
@@ -3146,11 +3332,15 @@ class SuitMcpService:
         self,
         repository_path: str,
         callback: Callable[[Repository], T],
+        *,
+        tool_name: str,
     ) -> T:
         try:
-            workspace = Workspace(Path(repository_path), materialize_suit_dir=False)
-            repository = workspace.repositories[0]
-            return callback(repository)
+            repository = self._read_only_registry.open_repository(repository_path).repository
+            return self._with_semantic_runtime_retries(
+                tool_name=tool_name,
+                build_target=lambda: callback(repository),
+            )
         except (McpNotFoundError, McpValidationError, McpUnsupportedRepositoryError, McpRetryableError):
             raise
         except ValueError as exc:
@@ -3164,26 +3354,92 @@ class SuitMcpService:
     @staticmethod
     def _merge_view_provenance(*groups) -> tuple:
         merged = []
-        seen: set[str] = set()
+        seen: set[tuple[object, ...]] = set()
         for group in groups:
             for entry in group:
-                key = entry.model_dump_json()
+                key = (
+                    entry.confidence_mode,
+                    entry.source_kind,
+                    entry.source_tool,
+                    entry.evidence_summary,
+                    entry.evidence_paths,
+                )
                 if key in seen:
                     continue
                 seen.add(key)
                 merged.append(entry)
         return tuple(merged)
 
+    def _with_semantic_runtime_retries(
+        self,
+        *,
+        tool_name: str,
+        build_target: Callable[[], T],
+    ) -> T:
+        started_at = time.monotonic()
+        total_sleep_seconds = 0.0
+        last_retryable_exc = None
+        max_attempts = self._SEMANTIC_RUNTIME_MAX_ATTEMPTS
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return build_target()
+            except (CoordinatorRuntimeNotReadyError, TypeScriptToolTimeoutError, SemanticQueryTimeoutError) as exc:
+                last_retryable_exc = exc
+                if attempt >= max_attempts:
+                    break
+                elapsed_seconds = time.monotonic() - started_at
+                remaining_sleep_budget = max(
+                    0.0,
+                    self._SEMANTIC_RUNTIME_MAX_TOTAL_RETRY_SLEEP_SECONDS - total_sleep_seconds,
+                )
+                remaining_wall_budget = max(
+                    0.0,
+                    self._SEMANTIC_RUNTIME_MAX_TOTAL_WALL_CLOCK_SECONDS - elapsed_seconds,
+                )
+                if remaining_sleep_budget <= 0.0 or remaining_wall_budget <= 0.0:
+                    break
+                requested_sleep_seconds = float(max(0, getattr(exc, "retry_after_seconds", 0) or 0))
+                sleep_seconds = min(
+                    requested_sleep_seconds,
+                    remaining_sleep_budget,
+                    remaining_wall_budget,
+                )
+                if sleep_seconds <= 0.0:
+                    break
+                time.sleep(sleep_seconds)
+                total_sleep_seconds += sleep_seconds
+        if last_retryable_exc is None:
+            raise RuntimeError(f"{tool_name} semantic retry wrapper exited without a retryable failure")
+        raise self._runtime_not_ready_error(
+            tool_name=tool_name,
+            exc=last_retryable_exc,
+            attempted_retries=max_attempts,
+            max_attempts=max_attempts,
+            retry_exhausted=True,
+        ) from last_retryable_exc
+
     @staticmethod
-    def _runtime_not_ready_error(*, tool_name: str, exc) -> McpRetryableError:
+    def _runtime_not_ready_error(
+        *,
+        tool_name: str,
+        exc,
+        attempted_retries: int,
+        max_attempts: int,
+        retry_exhausted: bool,
+    ) -> McpRetryableError:
         server_name = getattr(getattr(exc, "server_family", None), "value", None) or getattr(exc, "server_name", "runtime")
         state = getattr(getattr(exc, "state", None), "value", None) or getattr(exc, "state", "degraded")
+        retry_after_seconds = exc.retry_after_seconds
         return McpRetryableError(
             "runtime_not_ready: "
             f"tool={tool_name} "
             f"server={server_name} "
             f"attachment_root={exc.attachment_root} "
             f"state={state} "
-            f"retry_after_seconds={exc.retry_after_seconds}; "
-            "retry the same request after the suggested delay"
+            f"retry_after_seconds={retry_after_seconds} "
+            f"attempted_retries={attempted_retries} "
+            f"max_attempts={max_attempts} "
+            f"retry_exhausted={'true' if retry_exhausted else 'false'}; "
+            "SuitCode retried internally and the runtime is still not ready. "
+            "Narrow to 1 target or use detail_level=compact."
         )

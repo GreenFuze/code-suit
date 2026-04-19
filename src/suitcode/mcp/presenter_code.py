@@ -31,7 +31,7 @@ class CodePresenter:
             column_start=entity.column_start,
             column_end=entity.column_end,
             signature=entity.signature,
-            provenance=provenance_views(entity.provenance),
+            provenance=provenance_views(entity.provenance, owner_path=entity.repository_rel_path),
         )
 
     def symbol_lookup_view(self, hit: SymbolLookupHit) -> SymbolView:
@@ -54,7 +54,7 @@ class CodePresenter:
             ),
             definition_anchor=self.location_view(hit.definition_anchor) if hit.definition_anchor is not None else None,
             context_source=hit.context_source,
-            provenance=provenance_views(hit.provenance),
+            provenance=provenance_views(hit.provenance, owner_path=symbol.repository_rel_path),
         )
 
     def location_view(self, location: CodeLocation) -> LocationView:
@@ -65,5 +65,5 @@ class CodePresenter:
             column_start=location.column_start,
             column_end=location.column_end,
             symbol_id=location.symbol_id,
-            provenance=provenance_views(location.provenance),
+            provenance=provenance_views(location.provenance, owner_path=location.repository_rel_path),
         )

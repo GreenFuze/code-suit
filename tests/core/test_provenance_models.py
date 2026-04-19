@@ -10,6 +10,7 @@ from suitcode.core.models.graph_types import TestFramework as CoreTestFramework
 from suitcode.core.provenance import ConfidenceMode, ProvenanceEntry, SourceKind
 from suitcode.core.provenance_summary import (
     is_authoritative_provenance,
+    merge_unique_provenance,
     merge_provenance_paths,
     preferred_source_kind,
     preferred_source_tool,
@@ -61,6 +62,22 @@ def test_provenance_summary_helpers_merge_and_prioritize_sources() -> None:
     assert is_authoritative_provenance(entries) is True
     assert preferred_source_kind(entries) == SourceKind.LSP
     assert preferred_source_tool(entries) == "basedpyright"
+
+
+def test_merge_unique_provenance_dedupes_entries_without_hashing() -> None:
+    entry_a = lsp_provenance(
+        source_tool="typescript-language-server",
+        evidence_summary="document symbols",
+        evidence_paths=("src/App.tsx",),
+    )
+    entry_b = manifest_provenance(
+        evidence_summary="package manifest",
+        evidence_paths=("package.json",),
+    )
+
+    merged = merge_unique_provenance((entry_a, entry_b), (entry_a,), (entry_b, entry_a))
+
+    assert merged == (entry_a, entry_b)
 
 
 def test_summarize_related_provenance_fails_on_empty_input() -> None:

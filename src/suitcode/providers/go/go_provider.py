@@ -101,6 +101,7 @@ class GoProvider(
         self._symbol_translator = GoSymbolTranslator()
         self._location_translator = GoLocationTranslator()
         self._analysis_cache = None
+        self._external_package_analysis_cache: tuple | None = None
         self._component_id_index: dict[str, GoPackageAnalysis] | None = None
         self._dependency_edges_cache: tuple[ComponentDependencyEdge, ...] | None = None
         self._test_execution_service: TestExecutionService | None = None
@@ -124,7 +125,7 @@ class GoProvider(
         return self._translate_sorted(self._analysis().package_managers, self._to_package_manager, key=lambda item: item.id)
 
     def get_external_packages(self) -> tuple[ExternalPackage, ...]:
-        return self._translate_sorted(self._analysis().external_packages, self._to_external_package, key=lambda item: item.id)
+        return self._translate_sorted(self._external_package_analyses(), self._to_external_package, key=lambda item: item.id)
 
     def get_files(self) -> tuple[FileInfo, ...]:
         return self._translate_sorted(self._analysis().files, self._to_file_info, key=lambda item: item.id)
@@ -419,7 +420,7 @@ class GoProvider(
         if self._dependency_edges_cache is None:
             local_component_ids = {analysis.import_path: self._component_id(analysis.import_path) for analysis in self._get_components()}
             external_packages = {
-                (item.manager_id, item.package_name): item.external_package_id for item in self._analysis().external_packages
+                (item.manager_id, item.package_name): item.external_package_id for item in self._external_package_analyses()
             }
             edges: list[ComponentDependencyEdge] = []
             for component in self._get_components():
@@ -498,6 +499,42 @@ class GoProvider(
             )
             self._tests_cache = tuple(sorted(tests, key=lambda item: item.test_id))
             return self._tests_cache
+
+    def _external_package_analyses(self) -> tuple:
+        cached = self._external_package_analysis_cache
+        if cached is not None:
+            return cached
+        analyses = self._analysis().modules
+        by_module_rel_path = {
+            analysis.module_root_rel_path: analysis.package_manager.node_id
+            for analysis in analyses
+        }
+        external_packages = []
+        for module_root in self._module_roots:
+            module_root_rel_path = module_root.relative_to(self.attachment_root).as_posix()
+            if module_root_rel_path == ".":
+                module_root_rel_path = ""
+            rebased_manager_id = by_module_rel_path[self._rebase_rel_path(module_root_rel_path)]
+            external_packages.extend(
+                replace(
+                    item,
+                    external_package_id=self._external_package_id(rebased_manager_id, item.package_name),
+                    manager_id=rebased_manager_id,
+                    evidence_paths=self._rebase_paths(item.evidence_paths),
+                )
+                for item in self._analyzer.load_external_packages(
+                    module_root,
+                    manager_id=self._package_manager_id(module_root_rel_path),
+                )
+            )
+        deduped = {
+            (item.external_package_id, item.package_name, item.version_spec, item.manager_id): item
+            for item in external_packages
+        }
+        self._external_package_analysis_cache = tuple(
+            sorted(deduped.values(), key=lambda item: item.external_package_id)
+        )
+        return self._external_package_analysis_cache
 
     def _to_discovered_test_definition(self, test_analysis: object) -> DiscoveredTestDefinition:
         item = test_analysis

@@ -17,7 +17,7 @@ from suitcode.core.models import EntityInfo, FileInfo
 from suitcode.core.models.ids import normalize_repository_relative_path
 from suitcode.core.provenance import ProvenanceEntry, SourceKind
 from suitcode.core.provenance_builders import derived_summary_provenance
-from suitcode.core.provenance_summary import merge_provenance_paths, preferred_source_tool
+from suitcode.core.provenance_summary import merge_provenance_paths, merge_unique_provenance, preferred_source_tool
 from suitcode.providers.code_provider_base import CodeProviderBase
 from suitcode.providers.provider_roles import ProviderRole
 from suitcode.providers.runtime_capability_models import (
@@ -164,9 +164,7 @@ class CodeIntelligence:
                 if existing is None:
                     merged[key] = item
                     continue
-                merged[key] = item.model_copy(
-                    update={"provenance": tuple(dict.fromkeys((*existing.provenance, *item.provenance)))}
-                )
+                merged[key] = item.model_copy(update={"provenance": merge_unique_provenance(existing.provenance, item.provenance)})
         return tuple(
             sorted(
                 merged.values(),
@@ -196,9 +194,7 @@ class CodeIntelligence:
                 if existing is None:
                     merged[key] = item
                     continue
-                merged[key] = item.model_copy(
-                    update={"provenance": tuple(dict.fromkeys((*existing.provenance, *item.provenance)))}
-                )
+                merged[key] = item.model_copy(update={"provenance": merge_unique_provenance(existing.provenance, item.provenance)})
         return tuple(
             sorted(
                 merged.values(),
@@ -242,11 +238,7 @@ class CodeIntelligence:
                     merged[key] = item
                     continue
                 merged[key] = item.model_copy(
-                    update={
-                        "provenance": tuple(
-                            dict.fromkeys((*existing.provenance, *item.provenance))
-                        )
-                    }
+                    update={"provenance": merge_unique_provenance(existing.provenance, item.provenance)}
                 )
         return tuple(
             sorted(
@@ -295,7 +287,7 @@ class CodeIntelligence:
                     update={
                         "producer_site_count": len(merged_sites),
                         "producer_sites_preview": tuple(merged_sites),
-                        "provenance": tuple(dict.fromkeys((*existing.provenance, *item.provenance))),
+                        "provenance": merge_unique_provenance(existing.provenance, item.provenance),
                     }
                 )
         return tuple(
@@ -332,9 +324,7 @@ class CodeIntelligence:
                 if existing is None:
                     merged[key] = item
                     continue
-                merged[key] = item.model_copy(
-                    update={"provenance": tuple(dict.fromkeys((*existing.provenance, *item.provenance)))}
-                )
+                merged[key] = item.model_copy(update={"provenance": merge_unique_provenance(existing.provenance, item.provenance)})
         return tuple(
             sorted(
                 merged.values(),
@@ -375,11 +365,7 @@ class CodeIntelligence:
                     merged[key] = item
                     continue
                 merged[key] = item.model_copy(
-                    update={
-                        "provenance": tuple(
-                            dict.fromkeys((*existing.provenance, *item.provenance))
-                        )
-                    }
+                    update={"provenance": merge_unique_provenance(existing.provenance, item.provenance)}
                 )
         if not merged:
             for item in self._architecture_projected_file_relationships(normalized_path, relationship_kind):
@@ -798,12 +784,7 @@ class CodeIntelligence:
 
     @staticmethod
     def _merge_provenance(*groups: tuple[ProvenanceEntry, ...]) -> tuple[ProvenanceEntry, ...]:
-        merged: list[ProvenanceEntry] = []
-        for group in groups:
-            for entry in group:
-                if entry not in merged:
-                    merged.append(entry)
-        return tuple(merged)
+        return merge_unique_provenance(*groups)
 
     @staticmethod
     def _projected_relationship(
