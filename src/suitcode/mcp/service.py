@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from concurrent.futures import Future, ThreadPoolExecutor, wait
+from contextlib import contextmanager
+from contextvars import copy_context
 from pathlib import Path
 import time
 from typing import Callable, TypeVar
@@ -98,6 +100,7 @@ from suitcode.mcp.models import (
 from suitcode.mcp.pagination import PaginationPolicy
 from suitcode.mcp.service_runtime import build_mcp_service_runtime
 from suitcode.mcp.state import ReadOnlyRepositoryRegistry, WorkspaceRegistry
+from suitcode.mcp.timing import current_request_timing, request_timing_collector
 from suitcode.providers.provider_roles import ProviderRole
 from suitcode.providers.npm.tool_runner import TypeScriptToolTimeoutError
 from suitcode.runtime.client import ProjectCoordinatorClient
@@ -116,6 +119,15 @@ class SuitMcpService:
     _SEMANTIC_RUNTIME_MAX_ATTEMPTS = 3
     _SEMANTIC_RUNTIME_MAX_TOTAL_RETRY_SLEEP_SECONDS = 30.0
     _SEMANTIC_RUNTIME_MAX_TOTAL_WALL_CLOCK_SECONDS = 45.0
+    _AGENT_VISIBLE_TIMING_TOOLS = frozenset(
+        {
+            "understand_repository",
+            "understand_file",
+            "what_changes_if_i_edit_this",
+            "what_should_i_run",
+            "what_is_not_proven",
+        }
+    )
 
     def __init__(
         self,
@@ -228,19 +240,25 @@ class SuitMcpService:
         validate_preview_limit(preview_limit, "preview_limit", max_value=50, error_cls=McpValidationError)
 
         def _callback(repository: Repository) -> RepositoryUnderstandingView:
-            self._wait_for_repository_warmup(repository)
-            summary = self._repository_summary_presenter.summary_view(repository, preview_limit)
-            truth_coverage = self._intelligence_presenter.truth_coverage_summary_view(repository.get_truth_coverage())
-            return RepositoryUnderstandingView(
-                repository=summary,
-                truth_coverage=truth_coverage,
-                recommended_next_questions=(
-                    "who_owns_this",
-                    "what_changes_if_i_edit_this",
-                    "what_should_i_run",
-                    "can_i_do_this",
+            with self._timing_stage("project_warmup"):
+                self._wait_for_repository_warmup(repository)
+            with self._timing_stage("repository_summary"):
+                summary = self._repository_summary_presenter.summary_view(repository, preview_limit)
+            with self._timing_stage("truth_coverage"):
+                truth_coverage = self._intelligence_presenter.truth_coverage_summary_view(repository.get_truth_coverage())
+            return self._attach_agent_visible_timing(
+                "understand_repository",
+                RepositoryUnderstandingView(
+                    repository=summary,
+                    truth_coverage=truth_coverage,
+                    recommended_next_questions=(
+                        "who_owns_this",
+                        "what_changes_if_i_edit_this",
+                        "what_should_i_run",
+                        "can_i_do_this",
+                    ),
+                    provenance=self._merge_view_provenance(summary.provenance, truth_coverage.provenance),
                 ),
-                provenance=self._merge_view_provenance(summary.provenance, truth_coverage.provenance),
             )
 
         return self._with_read_only_repository(repository_path, _callback, tool_name="understand_repository")
@@ -249,6 +267,45 @@ class SuitMcpService:
         ProjectCoordinatorClient(repository.root).wait_for_project_warmup(
             timeout_seconds=None,
         )
+
+    @contextmanager
+    def _timing_stage(self, name: str):
+        collector = current_request_timing()
+        if collector is None:
+            yield
+            return
+        with collector.stage(name):
+            yield
+
+    @contextmanager
+    def _target_timing_stage(self, repository_rel_path: str, name: str):
+        collector = current_request_timing()
+        if collector is None:
+            yield
+            return
+        with collector.target_stage(repository_rel_path, name):
+            yield
+
+    def _mark_timing_target_status(self, repository_rel_path: str, status: str) -> None:
+        collector = current_request_timing()
+        if collector is None:
+            return
+        collector.mark_target_status(repository_rel_path, status)
+
+    @classmethod
+    def _should_attach_agent_visible_timing(cls, tool_name: str) -> bool:
+        return tool_name in cls._AGENT_VISIBLE_TIMING_TOOLS
+
+    def _attach_agent_visible_timing(self, tool_name: str, result):
+        collector = current_request_timing()
+        if collector is None or not self._should_attach_agent_visible_timing(tool_name):
+            return result
+        model_fields = getattr(type(result), "model_fields", {})
+        if "timing" not in model_fields:
+            return result
+        if getattr(result, "timing", None) is not None:
+            return result
+        return result.model_copy(update={"timing": collector.snapshot()})
 
     def understand_file(
         self,
@@ -287,117 +344,124 @@ class SuitMcpService:
                 else self._code_evidence_tier(validated_detail_level, target_count)
             )
             include_file_wide_references = enable_deep_symbol_navigation
-            targets, incomplete_targets = self._collect_understand_file_targets(
-                repository=repository,
-                repository_rel_paths=normalized_paths,
-                related_test_limit=self._detail_preview_limit(validated_detail_level, related_test_limit),
-                detail_level=validated_detail_level,
-                include_reference_sites=include_file_wide_references,
-                include_implementation_locations=enable_deep_symbol_navigation,
-                enable_implementation_flow=enable_deep_symbol_navigation,
-                enable_hot_entrypoints=enable_deep_symbol_navigation,
-                reference_site_limit=(
-                    None
-                    if enable_deep_symbol_navigation
-                    else self._detail_preview_limit(validated_detail_level, 20)
-                ),
-                evidence_tier=evidence_tier,
-            )
+            with self._timing_stage("target_collection"):
+                targets, incomplete_targets = self._collect_understand_file_targets(
+                    repository=repository,
+                    repository_rel_paths=normalized_paths,
+                    related_test_limit=self._detail_preview_limit(validated_detail_level, related_test_limit),
+                    detail_level=validated_detail_level,
+                    include_reference_sites=include_file_wide_references,
+                    include_implementation_locations=enable_deep_symbol_navigation,
+                    enable_implementation_flow=enable_deep_symbol_navigation,
+                    enable_hot_entrypoints=enable_deep_symbol_navigation,
+                    reference_site_limit=(
+                        None
+                        if enable_deep_symbol_navigation
+                        else self._detail_preview_limit(validated_detail_level, 20)
+                    ),
+                    evidence_tier=evidence_tier,
+                )
             if validated_detail_level == "compact":
-                return self._compact_file_understanding_view(
-                    repository,
-                    targets,
-                    target_count=target_count,
-                    incomplete_targets=incomplete_targets,
-                )
-            if validated_detail_level == "standard":
-                return self._standard_file_understanding_view(
-                    targets,
-                    target_count=target_count,
-                    incomplete_targets=incomplete_targets,
-                )
-            aggregate_reference_site_count, aggregate_reference_sites_preview = self._aggregate_ranked_views(
-                tuple(target.reference_sites_preview for target in targets),
-                key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
-                rank_key=self._location_rank_key,
-            )
-            aggregate_dependency_file_count, aggregate_dependency_files_preview = self._aggregate_ranked_views(
-                tuple(target.dependency_files_preview for target in targets),
-                key=lambda item: item.path,
-                rank_key=self._file_relationship_rank_key,
-            )
-            aggregate_dependent_file_count, aggregate_dependent_files_preview = self._aggregate_ranked_views(
-                tuple(target.dependent_files_preview for target in targets),
-                key=lambda item: item.path,
-                rank_key=self._file_relationship_rank_key,
-            )
-            aggregate_render_child_count, aggregate_render_children_preview = self._aggregate_ranked_views(
-                tuple(target.render_children_preview for target in targets),
-                key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
-                rank_key=self._render_edge_rank_key,
-            )
-            aggregate_render_parent_count, aggregate_render_parents_preview = self._aggregate_ranked_views(
-                tuple(target.render_parents_preview for target in targets),
-                key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
-                rank_key=self._render_edge_rank_key,
-            )
-            aggregate_invariant_finding_count, aggregate_invariant_findings_preview = self._aggregate_ranked_views(
-                tuple(target.invariant_findings_preview for target in targets),
-                key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
-                rank_key=self._invariant_rank_key,
-            )
-            aggregate_local_flow_edge_count, aggregate_local_flow_edges_preview = self._aggregate_ranked_views(
-                tuple(target.local_flow_edges_preview for target in targets),
-                key=lambda item: (item.path, item.line_start, item.column_start, item.edge_kind, item.source_label, item.target_label),
-                rank_key=self._static_flow_rank_key,
-            )
-            aggregate_implementation_location_count, aggregate_implementation_locations_preview = self._aggregate_ranked_views(
-                tuple(target.implementation_locations_preview for target in targets),
-                key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
-                rank_key=self._location_rank_key,
-            )
-            _, aggregate_related_tests = self._aggregate_ranked_views(
-                tuple(target.related_tests for target in targets),
-                key=lambda item: item.id,
-                rank_key=self._related_test_rank_key,
-            )
-            return FileUnderstandingView(
-                detail_level="full",
-                target_count=target_count,
-                completed_target_count=len(targets),
-                targets=targets,
-                incomplete_targets=incomplete_targets,
-                owner_ids=tuple(sorted({item.file_owner.owner.id for item in targets})),
-                aggregate_reference_site_count=aggregate_reference_site_count,
-                aggregate_reference_sites_preview=aggregate_reference_sites_preview,
-                aggregate_dependency_file_count=aggregate_dependency_file_count,
-                aggregate_dependency_files_preview=aggregate_dependency_files_preview,
-                aggregate_dependent_file_count=aggregate_dependent_file_count,
-                aggregate_dependent_files_preview=aggregate_dependent_files_preview,
-                aggregate_render_child_count=aggregate_render_child_count,
-                aggregate_render_children_preview=aggregate_render_children_preview,
-                aggregate_render_parent_count=aggregate_render_parent_count,
-                aggregate_render_parents_preview=aggregate_render_parents_preview,
-                aggregate_invariant_finding_count=aggregate_invariant_finding_count,
-                aggregate_invariant_findings_preview=aggregate_invariant_findings_preview,
-                aggregate_local_flow_edge_count=aggregate_local_flow_edge_count,
-                aggregate_local_flow_edges_preview=aggregate_local_flow_edges_preview,
-                aggregate_implementation_location_count=aggregate_implementation_location_count,
-                aggregate_implementation_locations_preview=aggregate_implementation_locations_preview,
-                aggregate_related_tests=aggregate_related_tests,
-                suggested_follow_ups=(
-                    tuple()
-                    if targets and all(target.structured_artifact is not None for target in targets)
-                    else (
-                        "what_changes_if_i_edit_this",
-                        "what_should_i_run",
-                        "can_i_do_this",
+                with self._timing_stage("batch_aggregation"):
+                    result = self._compact_file_understanding_view(
+                        repository,
+                        targets,
+                        target_count=target_count,
+                        incomplete_targets=incomplete_targets,
                     )
-                ),
-                provenance=self._merge_view_provenance(
-                    *(target.provenance for target in targets),
-                ),
-            )
+                return self._attach_agent_visible_timing("understand_file", result)
+            if validated_detail_level == "standard":
+                with self._timing_stage("batch_aggregation"):
+                    result = self._standard_file_understanding_view(
+                        targets,
+                        target_count=target_count,
+                        incomplete_targets=incomplete_targets,
+                    )
+                return self._attach_agent_visible_timing("understand_file", result)
+            with self._timing_stage("batch_aggregation"):
+                aggregate_reference_site_count, aggregate_reference_sites_preview = self._aggregate_ranked_views(
+                    tuple(target.reference_sites_preview for target in targets),
+                    key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+                    rank_key=self._location_rank_key,
+                )
+                aggregate_dependency_file_count, aggregate_dependency_files_preview = self._aggregate_ranked_views(
+                    tuple(target.dependency_files_preview for target in targets),
+                    key=lambda item: item.path,
+                    rank_key=self._file_relationship_rank_key,
+                )
+                aggregate_dependent_file_count, aggregate_dependent_files_preview = self._aggregate_ranked_views(
+                    tuple(target.dependent_files_preview for target in targets),
+                    key=lambda item: item.path,
+                    rank_key=self._file_relationship_rank_key,
+                )
+                aggregate_render_child_count, aggregate_render_children_preview = self._aggregate_ranked_views(
+                    tuple(target.render_children_preview for target in targets),
+                    key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
+                    rank_key=self._render_edge_rank_key,
+                )
+                aggregate_render_parent_count, aggregate_render_parents_preview = self._aggregate_ranked_views(
+                    tuple(target.render_parents_preview for target in targets),
+                    key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
+                    rank_key=self._render_edge_rank_key,
+                )
+                aggregate_invariant_finding_count, aggregate_invariant_findings_preview = self._aggregate_ranked_views(
+                    tuple(target.invariant_findings_preview for target in targets),
+                    key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
+                    rank_key=self._invariant_rank_key,
+                )
+                aggregate_local_flow_edge_count, aggregate_local_flow_edges_preview = self._aggregate_ranked_views(
+                    tuple(target.local_flow_edges_preview for target in targets),
+                    key=lambda item: (item.path, item.line_start, item.column_start, item.edge_kind, item.source_label, item.target_label),
+                    rank_key=self._static_flow_rank_key,
+                )
+                aggregate_implementation_location_count, aggregate_implementation_locations_preview = self._aggregate_ranked_views(
+                    tuple(target.implementation_locations_preview for target in targets),
+                    key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+                    rank_key=self._location_rank_key,
+                )
+                _, aggregate_related_tests = self._aggregate_ranked_views(
+                    tuple(target.related_tests for target in targets),
+                    key=lambda item: item.id,
+                    rank_key=self._related_test_rank_key,
+                )
+                result = FileUnderstandingView(
+                    detail_level="full",
+                    target_count=target_count,
+                    completed_target_count=len(targets),
+                    targets=targets,
+                    incomplete_targets=incomplete_targets,
+                    owner_ids=tuple(sorted({item.file_owner.owner.id for item in targets})),
+                    aggregate_reference_site_count=aggregate_reference_site_count,
+                    aggregate_reference_sites_preview=aggregate_reference_sites_preview,
+                    aggregate_dependency_file_count=aggregate_dependency_file_count,
+                    aggregate_dependency_files_preview=aggregate_dependency_files_preview,
+                    aggregate_dependent_file_count=aggregate_dependent_file_count,
+                    aggregate_dependent_files_preview=aggregate_dependent_files_preview,
+                    aggregate_render_child_count=aggregate_render_child_count,
+                    aggregate_render_children_preview=aggregate_render_children_preview,
+                    aggregate_render_parent_count=aggregate_render_parent_count,
+                    aggregate_render_parents_preview=aggregate_render_parents_preview,
+                    aggregate_invariant_finding_count=aggregate_invariant_finding_count,
+                    aggregate_invariant_findings_preview=aggregate_invariant_findings_preview,
+                    aggregate_local_flow_edge_count=aggregate_local_flow_edge_count,
+                    aggregate_local_flow_edges_preview=aggregate_local_flow_edges_preview,
+                    aggregate_implementation_location_count=aggregate_implementation_location_count,
+                    aggregate_implementation_locations_preview=aggregate_implementation_locations_preview,
+                    aggregate_related_tests=aggregate_related_tests,
+                    suggested_follow_ups=(
+                        tuple()
+                        if targets and all(target.structured_artifact is not None for target in targets)
+                        else (
+                            "what_changes_if_i_edit_this",
+                            "what_should_i_run",
+                            "can_i_do_this",
+                        )
+                    ),
+                    provenance=self._merge_view_provenance(
+                        *(target.provenance for target in targets),
+                    ),
+                )
+            return self._attach_agent_visible_timing("understand_file", result)
 
         return self._with_read_only_repository(repository_path, _callback, tool_name="understand_file")
 
@@ -490,119 +554,126 @@ class SuitMcpService:
                 else self._code_evidence_tier(validated_detail_level, target_count)
             )
             include_file_wide_references = enable_deep_symbol_navigation
-            frozen_targets, incomplete_targets = self._collect_change_impact_targets(
-                repository=repository,
-                repository_rel_paths=normalized_paths,
-                detail_level=validated_detail_level,
-                reference_preview_limit=self._detail_preview_limit(validated_detail_level, reference_preview_limit),
-                dependent_preview_limit=self._detail_preview_limit(validated_detail_level, dependent_preview_limit),
-                test_preview_limit=self._detail_preview_limit(validated_detail_level, test_preview_limit),
-                runner_preview_limit=self._detail_preview_limit(validated_detail_level, runner_preview_limit),
-                include_reference_locations=include_file_wide_references,
-                include_implementation_locations=enable_deep_symbol_navigation,
-                evidence_tier=evidence_tier,
-                enable_deep_symbol_navigation=enable_deep_symbol_navigation,
-            )
+            with self._timing_stage("target_collection"):
+                frozen_targets, incomplete_targets = self._collect_change_impact_targets(
+                    repository=repository,
+                    repository_rel_paths=normalized_paths,
+                    detail_level=validated_detail_level,
+                    reference_preview_limit=self._detail_preview_limit(validated_detail_level, reference_preview_limit),
+                    dependent_preview_limit=self._detail_preview_limit(validated_detail_level, dependent_preview_limit),
+                    test_preview_limit=self._detail_preview_limit(validated_detail_level, test_preview_limit),
+                    runner_preview_limit=self._detail_preview_limit(validated_detail_level, runner_preview_limit),
+                    include_reference_locations=include_file_wide_references,
+                    include_implementation_locations=enable_deep_symbol_navigation,
+                    evidence_tier=evidence_tier,
+                    enable_deep_symbol_navigation=enable_deep_symbol_navigation,
+                )
             if validated_detail_level == "compact":
-                return self._compact_change_impact_view(
-                    repository,
-                    frozen_targets,
-                    target_count=target_count,
-                    incomplete_targets=incomplete_targets,
-                )
+                with self._timing_stage("batch_aggregation"):
+                    result = self._compact_change_impact_view(
+                        repository,
+                        frozen_targets,
+                        target_count=target_count,
+                        incomplete_targets=incomplete_targets,
+                    )
+                return self._attach_agent_visible_timing("what_changes_if_i_edit_this", result)
             if validated_detail_level == "standard":
-                return self._standard_change_impact_view(
-                    frozen_targets,
-                    target_count=target_count,
-                    incomplete_targets=incomplete_targets,
+                with self._timing_stage("batch_aggregation"):
+                    result = self._standard_change_impact_view(
+                        frozen_targets,
+                        target_count=target_count,
+                        incomplete_targets=incomplete_targets,
+                    )
+                return self._attach_agent_visible_timing("what_changes_if_i_edit_this", result)
+            with self._timing_stage("batch_aggregation"):
+                _, reference_sites = self._aggregate_ranked_views(
+                    tuple(target.impact.reference_locations for target in frozen_targets),
+                    key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+                    rank_key=self._location_rank_key,
                 )
-            _, reference_sites = self._aggregate_ranked_views(
-                tuple(target.impact.reference_locations for target in frozen_targets),
-                key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
-                rank_key=self._location_rank_key,
-            )
-            _, dependent_files = self._aggregate_ranked_views(
-                tuple(target.impact.dependent_files for target in frozen_targets),
-                key=lambda item: item.path,
-                rank_key=self._file_relationship_rank_key,
-            )
-            _, render_children = self._aggregate_ranked_views(
-                tuple(target.impact.render_children for target in frozen_targets),
-                key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
-                rank_key=self._render_edge_rank_key,
-            )
-            _, render_parents = self._aggregate_ranked_views(
-                tuple(target.impact.render_parents for target in frozen_targets),
-                key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
-                rank_key=self._render_edge_rank_key,
-            )
-            _, invariant_findings = self._aggregate_ranked_views(
-                tuple(target.impact.invariant_findings for target in frozen_targets),
-                key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
-                rank_key=self._invariant_rank_key,
-            )
-            _, local_flow_edges = self._aggregate_ranked_views(
-                tuple(target.impact.local_flow_edges for target in frozen_targets),
-                key=lambda item: (item.path, item.line_start, item.column_start, item.edge_kind, item.source_label, item.target_label),
-                rank_key=self._static_flow_rank_key,
-            )
-            _, implementation_locations = self._aggregate_ranked_views(
-                tuple(target.impact.implementation_locations for target in frozen_targets),
-                key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
-                rank_key=self._location_rank_key,
-            )
-            _, implementation_components = self._aggregate_ranked_views(
-                tuple(target.impact.implementation_components for target in frozen_targets),
-                key=lambda item: item.id,
-                rank_key=self._component_rank_key,
-            )
-            _, dependent_components = self._aggregate_ranked_views(
-                tuple(target.impact.dependent_components for target in frozen_targets),
-                key=lambda item: item.id,
-                rank_key=self._component_rank_key,
-            )
-            _, reference_locations = self._aggregate_ranked_views(
-                tuple(target.impact.reference_locations for target in frozen_targets),
-                key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
-                rank_key=self._location_rank_key,
-            )
-            _, related_tests = self._aggregate_ranked_views(
-                tuple(target.impact.related_tests for target in frozen_targets),
-                key=lambda item: item.test.id,
-                rank_key=self._test_impact_rank_key,
-            )
-            _, related_runners = self._aggregate_ranked_views(
-                tuple(target.impact.related_runners for target in frozen_targets),
-                key=lambda item: item.runner.id,
-                rank_key=self._runner_impact_rank_key,
-            )
-            _, quality_gates = self._aggregate_ranked_views(
-                tuple(target.impact.quality_gates for target in frozen_targets),
-                key=lambda item: (item.provider_id, item.reason, item.applies),
-                rank_key=self._quality_gate_rank_key,
-            )
-            return BatchChangeImpactView(
-                detail_level="full",
-                target_count=target_count,
-                completed_target_count=len(frozen_targets),
-                targets=frozen_targets,
-                incomplete_targets=incomplete_targets,
-                owner_ids=tuple(sorted({item.impact.owner.id for item in frozen_targets})),
-                reference_sites=reference_sites,
-                dependent_files=dependent_files,
-                render_children=render_children,
-                render_parents=render_parents,
-                invariant_findings=invariant_findings,
-                local_flow_edges=local_flow_edges,
-                implementation_locations=implementation_locations,
-                implementation_components=implementation_components,
-                dependent_components=dependent_components,
-                reference_locations=reference_locations,
-                related_tests=related_tests,
-                related_runners=related_runners,
-                quality_gates=quality_gates,
-                provenance=self._merge_view_provenance(*(target.impact.provenance for target in frozen_targets)),
-            )
+                _, dependent_files = self._aggregate_ranked_views(
+                    tuple(target.impact.dependent_files for target in frozen_targets),
+                    key=lambda item: item.path,
+                    rank_key=self._file_relationship_rank_key,
+                )
+                _, render_children = self._aggregate_ranked_views(
+                    tuple(target.impact.render_children for target in frozen_targets),
+                    key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
+                    rank_key=self._render_edge_rank_key,
+                )
+                _, render_parents = self._aggregate_ranked_views(
+                    tuple(target.impact.render_parents for target in frozen_targets),
+                    key=lambda item: (item.path, item.line_start, item.column_start, item.prop_names, item.has_spread_props),
+                    rank_key=self._render_edge_rank_key,
+                )
+                _, invariant_findings = self._aggregate_ranked_views(
+                    tuple(target.impact.invariant_findings for target in frozen_targets),
+                    key=lambda item: (item.path, item.line_start, item.column_start, item.field_name, item.subject_label),
+                    rank_key=self._invariant_rank_key,
+                )
+                _, local_flow_edges = self._aggregate_ranked_views(
+                    tuple(target.impact.local_flow_edges for target in frozen_targets),
+                    key=lambda item: (item.path, item.line_start, item.column_start, item.edge_kind, item.source_label, item.target_label),
+                    rank_key=self._static_flow_rank_key,
+                )
+                _, implementation_locations = self._aggregate_ranked_views(
+                    tuple(target.impact.implementation_locations for target in frozen_targets),
+                    key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+                    rank_key=self._location_rank_key,
+                )
+                _, implementation_components = self._aggregate_ranked_views(
+                    tuple(target.impact.implementation_components for target in frozen_targets),
+                    key=lambda item: item.id,
+                    rank_key=self._component_rank_key,
+                )
+                _, dependent_components = self._aggregate_ranked_views(
+                    tuple(target.impact.dependent_components for target in frozen_targets),
+                    key=lambda item: item.id,
+                    rank_key=self._component_rank_key,
+                )
+                _, reference_locations = self._aggregate_ranked_views(
+                    tuple(target.impact.reference_locations for target in frozen_targets),
+                    key=lambda item: (item.path, item.line_start, item.column_start, item.line_end, item.column_end, item.symbol_id),
+                    rank_key=self._location_rank_key,
+                )
+                _, related_tests = self._aggregate_ranked_views(
+                    tuple(target.impact.related_tests for target in frozen_targets),
+                    key=lambda item: item.test.id,
+                    rank_key=self._test_impact_rank_key,
+                )
+                _, related_runners = self._aggregate_ranked_views(
+                    tuple(target.impact.related_runners for target in frozen_targets),
+                    key=lambda item: item.runner.id,
+                    rank_key=self._runner_impact_rank_key,
+                )
+                _, quality_gates = self._aggregate_ranked_views(
+                    tuple(target.impact.quality_gates for target in frozen_targets),
+                    key=lambda item: (item.provider_id, item.reason, item.applies),
+                    rank_key=self._quality_gate_rank_key,
+                )
+                result = BatchChangeImpactView(
+                    detail_level="full",
+                    target_count=target_count,
+                    completed_target_count=len(frozen_targets),
+                    targets=frozen_targets,
+                    incomplete_targets=incomplete_targets,
+                    owner_ids=tuple(sorted({item.impact.owner.id for item in frozen_targets})),
+                    reference_sites=reference_sites,
+                    dependent_files=dependent_files,
+                    render_children=render_children,
+                    render_parents=render_parents,
+                    invariant_findings=invariant_findings,
+                    local_flow_edges=local_flow_edges,
+                    implementation_locations=implementation_locations,
+                    implementation_components=implementation_components,
+                    dependent_components=dependent_components,
+                    reference_locations=reference_locations,
+                    related_tests=related_tests,
+                    related_runners=related_runners,
+                    quality_gates=quality_gates,
+                    provenance=self._merge_view_provenance(*(target.impact.provenance for target in frozen_targets)),
+                )
+            return self._attach_agent_visible_timing("what_changes_if_i_edit_this", result)
 
         return self._with_read_only_repository(repository_path, _callback, tool_name="what_changes_if_i_edit_this")
 
@@ -643,67 +714,70 @@ class SuitMcpService:
         def _callback(repository: Repository) -> BatchMinimumVerifiedChangeSetView:
             normalized_paths = self._validate_repository_rel_paths(repository_rel_paths, field_name="repository_rel_paths")
             targets: list[BatchMinimumVerifiedChangeSetTargetView] = []
-            for repository_rel_path in normalized_paths:
-                targets.append(
-                    self._minimum_verified_batch_target_view(
-                        repository,
-                        repository_rel_path,
-                        tool_name="what_should_i_run",
+            with self._timing_stage("target_collection"):
+                for repository_rel_path in normalized_paths:
+                    targets.append(
+                        self._minimum_verified_batch_target_view(
+                            repository,
+                            repository_rel_path,
+                            tool_name="what_should_i_run",
+                        )
                     )
-                )
             frozen_targets = tuple(targets)
-            tests = self._dedupe_views(
-                tuple(item for target in frozen_targets for item in target.change_set.tests),
-                key=lambda item: item.test_id,
-            )
-            build_targets = self._dedupe_views(
-                tuple(item for target in frozen_targets for item in target.change_set.build_targets),
-                key=lambda item: item.action_id,
-            )
-            runner_actions = self._dedupe_views(
-                tuple(item for target in frozen_targets for item in target.change_set.runner_actions),
-                key=lambda item: item.action_id,
-            )
-            quality_validation_operations = self._dedupe_views(
-                tuple(item for target in frozen_targets for item in target.change_set.quality_validation_operations),
-                key=lambda item: item.id,
-            )
-            quality_hygiene_operations = self._dedupe_views(
-                tuple(item for target in frozen_targets for item in target.change_set.quality_hygiene_operations),
-                key=lambda item: item.id,
-            )
-            excluded_items = self._dedupe_views(
-                tuple(item for target in frozen_targets for item in target.change_set.excluded_items),
-                key=lambda item: (item.item_kind, item.item_id, item.reason_code),
-            )
-            tests, excluded_items = self._narrow_batch_minimum_verified_tests(
-                tests=tests,
-                build_targets=build_targets,
-                excluded_items=excluded_items,
-            )
-            excluded_items = self._filter_batch_minimum_verified_exclusions(excluded_items)
-            compact_summary = self._batch_minimum_verified_compact_summary(
-                targets=frozen_targets,
-                tests=tests,
-                build_targets=build_targets,
-                runner_actions=runner_actions,
-                quality_validation_operations=quality_validation_operations,
-                quality_hygiene_operations=quality_hygiene_operations,
-                excluded_items=excluded_items,
-            )
-            return BatchMinimumVerifiedChangeSetView(
-                compact_summary=compact_summary,
-                target_count=len(frozen_targets),
-                targets=frozen_targets,
-                owner_ids=tuple(sorted({item.change_set.owner.id for item in frozen_targets})),
-                tests=tests,
-                build_targets=build_targets,
-                runner_actions=runner_actions,
-                quality_validation_operations=quality_validation_operations,
-                quality_hygiene_operations=quality_hygiene_operations,
-                excluded_items=excluded_items,
-                provenance=self._merge_view_provenance(*(target.change_set.provenance for target in frozen_targets)),
-            )
+            with self._timing_stage("validation_shaping"):
+                tests = self._dedupe_views(
+                    tuple(item for target in frozen_targets for item in target.change_set.tests),
+                    key=lambda item: item.test_id,
+                )
+                build_targets = self._dedupe_views(
+                    tuple(item for target in frozen_targets for item in target.change_set.build_targets),
+                    key=lambda item: item.action_id,
+                )
+                runner_actions = self._dedupe_views(
+                    tuple(item for target in frozen_targets for item in target.change_set.runner_actions),
+                    key=lambda item: item.action_id,
+                )
+                quality_validation_operations = self._dedupe_views(
+                    tuple(item for target in frozen_targets for item in target.change_set.quality_validation_operations),
+                    key=lambda item: item.id,
+                )
+                quality_hygiene_operations = self._dedupe_views(
+                    tuple(item for target in frozen_targets for item in target.change_set.quality_hygiene_operations),
+                    key=lambda item: item.id,
+                )
+                excluded_items = self._dedupe_views(
+                    tuple(item for target in frozen_targets for item in target.change_set.excluded_items),
+                    key=lambda item: (item.item_kind, item.item_id, item.reason_code),
+                )
+                tests, excluded_items = self._narrow_batch_minimum_verified_tests(
+                    tests=tests,
+                    build_targets=build_targets,
+                    excluded_items=excluded_items,
+                )
+                excluded_items = self._filter_batch_minimum_verified_exclusions(excluded_items)
+                compact_summary = self._batch_minimum_verified_compact_summary(
+                    targets=frozen_targets,
+                    tests=tests,
+                    build_targets=build_targets,
+                    runner_actions=runner_actions,
+                    quality_validation_operations=quality_validation_operations,
+                    quality_hygiene_operations=quality_hygiene_operations,
+                    excluded_items=excluded_items,
+                )
+                result = BatchMinimumVerifiedChangeSetView(
+                    compact_summary=compact_summary,
+                    target_count=len(frozen_targets),
+                    targets=frozen_targets,
+                    owner_ids=tuple(sorted({item.change_set.owner.id for item in frozen_targets})),
+                    tests=tests,
+                    build_targets=build_targets,
+                    runner_actions=runner_actions,
+                    quality_validation_operations=quality_validation_operations,
+                    quality_hygiene_operations=quality_hygiene_operations,
+                    excluded_items=excluded_items,
+                    provenance=self._merge_view_provenance(*(target.change_set.provenance for target in frozen_targets)),
+                )
+            return self._attach_agent_visible_timing("what_should_i_run", result)
 
         return self._with_read_only_repository(repository_path, _callback, tool_name="what_should_i_run")
 
@@ -714,41 +788,44 @@ class SuitMcpService:
     ) -> BatchProofGapView:
         def _callback(repository: Repository) -> BatchProofGapView:
             normalized_paths = self._validate_repository_rel_paths(repository_rel_paths, field_name="repository_rel_paths")
-            targets = tuple(
-                self._proof_gap_target_view(repository, repository_rel_path)
-                for repository_rel_path in normalized_paths
-            )
-            targets_with_gaps = tuple(target for target in targets if target.gap_items)
-            shared_gap_codes = tuple(
-                sorted(
-                    set.intersection(*(set(item.gap_code for item in target.gap_items) for target in targets_with_gaps))
+            with self._timing_stage("target_collection"):
+                targets = tuple(
+                    self._proof_gap_target_view(repository, repository_rel_path)
+                    for repository_rel_path in normalized_paths
                 )
-            ) if len(targets_with_gaps) > 1 else (
-                tuple(sorted({item.gap_code for item in targets_with_gaps[0].gap_items}))
-                if targets_with_gaps
-                else tuple()
-            )
-            nearby_validation_surfaces = self._dedupe_views(
-                tuple(item for target in targets for item in target.nearest_validation_artifacts),
-                key=lambda item: (item.item_kind, item.item_id),
-            )
-            ranked_targets = tuple(
-                item.repository_rel_path
-                for item in sorted(
-                    targets_with_gaps,
-                    key=lambda target: (
-                        -self._proof_gap_priority(target.gap_items),
-                        target.repository_rel_path,
-                    ),
-                )[:3]
-            )
-            return BatchProofGapView(
-                target_count=len(targets),
-                targets=targets,
-                highest_priority_targets=ranked_targets,
-                shared_gap_codes=shared_gap_codes,
-                nearby_validation_surfaces=nearby_validation_surfaces,
-            )
+            with self._timing_stage("batch_aggregation"):
+                targets_with_gaps = tuple(target for target in targets if target.gap_items)
+                shared_gap_codes = tuple(
+                    sorted(
+                        set.intersection(*(set(item.gap_code for item in target.gap_items) for target in targets_with_gaps))
+                    )
+                ) if len(targets_with_gaps) > 1 else (
+                    tuple(sorted({item.gap_code for item in targets_with_gaps[0].gap_items}))
+                    if targets_with_gaps
+                    else tuple()
+                )
+                nearby_validation_surfaces = self._dedupe_views(
+                    tuple(item for target in targets for item in target.nearest_validation_artifacts),
+                    key=lambda item: (item.item_kind, item.item_id),
+                )
+                ranked_targets = tuple(
+                    item.repository_rel_path
+                    for item in sorted(
+                        targets_with_gaps,
+                        key=lambda target: (
+                            -self._proof_gap_priority(target.gap_items),
+                            target.repository_rel_path,
+                        ),
+                    )[:3]
+                )
+                result = BatchProofGapView(
+                    target_count=len(targets),
+                    targets=targets,
+                    highest_priority_targets=ranked_targets,
+                    shared_gap_codes=shared_gap_codes,
+                    nearby_validation_surfaces=nearby_validation_surfaces,
+                )
+            return self._attach_agent_visible_timing("what_is_not_proven", result)
 
         return self._with_read_only_repository(repository_path, _callback, tool_name="what_is_not_proven")
 
@@ -760,7 +837,8 @@ class SuitMcpService:
         tool_name: str,
     ) -> BatchMinimumVerifiedChangeSetTargetView:
         try:
-            change_set = repository.get_minimum_verified_change_set(ChangeTarget(repository_rel_path=repository_rel_path))
+            with self._target_timing_stage(repository_rel_path, "minimum_verified_change_set"):
+                change_set = repository.get_minimum_verified_change_set(ChangeTarget(repository_rel_path=repository_rel_path))
         except ValueError as exc:
             raise McpValidationError(
                 explain_file_target_error(
@@ -833,73 +911,77 @@ class SuitMcpService:
             repository_rel_path,
             tool_name="what_is_not_proven",
         )
-        change_set = minimum.change_set
-        validation_surfaces = change_set.compact_summary.required_validation
-        nearest_validation_artifacts = validation_surfaces[:3]
-        validation_is_build_only = bool(validation_surfaces) and all(
-            item.item_kind == "build_target" for item in validation_surfaces
-        )
-        has_focused_test_surface = bool(change_set.tests)
-        has_runner_surface = bool(change_set.runner_actions)
-        artifact_surface_summary = self._artifact_surface_summary_view(repository, repository_rel_path)
-        gap_items: list[ProofGapItemView] = []
-        if not validation_surfaces:
-            gap_items.append(
-                ProofGapItemView(
-                    gap_code="no_deterministic_validation_surface",
-                    summary="No deterministic validation surface was identified for this target.",
+        with self._target_timing_stage(repository_rel_path, "proof_gap_derivation"):
+            change_set = minimum.change_set
+            validation_surfaces = change_set.compact_summary.required_validation
+            nearest_validation_artifacts = validation_surfaces[:3]
+            validation_is_build_only = bool(validation_surfaces) and all(
+                item.item_kind == "build_target" for item in validation_surfaces
+            )
+            has_focused_test_surface = bool(change_set.tests)
+            has_runner_surface = bool(change_set.runner_actions)
+            artifact_surface_summary = self._artifact_surface_summary_view(repository, repository_rel_path)
+            gap_items: list[ProofGapItemView] = []
+            if not validation_surfaces:
+                gap_items.append(
+                    ProofGapItemView(
+                        gap_code="no_deterministic_validation_surface",
+                        summary="No deterministic validation surface was identified for this target.",
+                    )
+                )
+            if artifact_surface_summary is not None and not validation_surfaces:
+                gap_items.append(
+                    ProofGapItemView(
+                        gap_code="artifact_member_without_validation_surface",
+                        summary="This artifact member has no deterministic validation surface beyond ownership.",
+                    )
+                )
+            if validation_is_build_only and self._is_frontend_npm_file_target(repository, repository_rel_path):
+                gap_items.append(
+                    ProofGapItemView(
+                        gap_code="build_only_frontend_surface",
+                        summary="Frontend proof currently bottoms out at build-only validation.",
+                    )
+                )
+            if not has_focused_test_surface:
+                gap_items.append(
+                    ProofGapItemView(
+                        gap_code="no_focused_test_surface",
+                        summary="No focused deterministic test surface was identified.",
+                    )
+                )
+            if any(
+                item.reason_code == "no_narrower_direct_validation_surface_for_file_target"
+                for item in change_set.excluded_items
+            ):
+                gap_items.append(
+                    ProofGapItemView(
+                        gap_code="only_broad_owner_level_validation",
+                        summary="Only broader owner-level validation surfaces were found for this file target.",
+                    )
+                )
+            gap_items = list(
+                self._dedupe_views(
+                    tuple(gap_items),
+                    key=lambda item: item.gap_code,
                 )
             )
-        if artifact_surface_summary is not None and not validation_surfaces:
-            gap_items.append(
-                ProofGapItemView(
-                    gap_code="artifact_member_without_validation_surface",
-                    summary="This artifact member has no deterministic validation surface beyond ownership.",
-                )
-            )
-        if validation_is_build_only and self._is_frontend_npm_file_target(repository, repository_rel_path):
-            gap_items.append(
-                ProofGapItemView(
-                    gap_code="build_only_frontend_surface",
-                    summary="Frontend proof currently bottoms out at build-only validation.",
-                )
-            )
-        if not has_focused_test_surface:
-            gap_items.append(
-                ProofGapItemView(
-                    gap_code="no_focused_test_surface",
-                    summary="No focused deterministic test surface was identified.",
-                )
-            )
-        if any(item.reason_code == "no_narrower_direct_validation_surface_for_file_target" for item in change_set.excluded_items):
-            gap_items.append(
-                ProofGapItemView(
-                    gap_code="only_broad_owner_level_validation",
-                    summary="Only broader owner-level validation surfaces were found for this file target.",
-                )
-            )
-        gap_items = list(
-            self._dedupe_views(
-                tuple(gap_items),
-                key=lambda item: item.gap_code,
-            )
-        )
-        return ProofGapTargetView(
-            repository_rel_path=repository_rel_path,
-            owner=change_set.owner,
-            primary_component=change_set.primary_component,
-            current_validation_surfaces=validation_surfaces,
-            validation_is_build_only=validation_is_build_only,
-            has_focused_test_surface=has_focused_test_surface,
-            has_runner_surface=has_runner_surface,
-            gap_items=tuple(gap_items),
-            nearest_validation_artifacts=nearest_validation_artifacts,
-            gap_summary=self._proof_gap_summary(
+            return ProofGapTargetView(
                 repository_rel_path=repository_rel_path,
-                validation_surfaces=validation_surfaces,
+                owner=change_set.owner,
+                primary_component=change_set.primary_component,
+                current_validation_surfaces=validation_surfaces,
+                validation_is_build_only=validation_is_build_only,
+                has_focused_test_surface=has_focused_test_surface,
+                has_runner_surface=has_runner_surface,
                 gap_items=tuple(gap_items),
-            ),
-        )
+                nearest_validation_artifacts=nearest_validation_artifacts,
+                gap_summary=self._proof_gap_summary(
+                    repository_rel_path=repository_rel_path,
+                    validation_surfaces=validation_surfaces,
+                    gap_items=tuple(gap_items),
+                ),
+            )
 
     @staticmethod
     def _proof_gap_summary(
@@ -1599,15 +1681,16 @@ class SuitMcpService:
     ) -> FileUnderstandingTargetView:
         def _build_target() -> FileUnderstandingTargetView:
             try:
-                context = repository.describe_files(
-                    (repository_rel_path,),
-                    symbol_preview_limit=20,
-                    test_preview_limit=related_test_limit,
-                    include_reference_sites=include_reference_sites,
-                    include_implementation_locations=include_implementation_locations,
-                    reference_site_limit=reference_site_limit,
-                    evidence_tier=evidence_tier,
-                )[0]
+                with self._target_timing_stage(repository_rel_path, "describe_files"):
+                    context = repository.describe_files(
+                        (repository_rel_path,),
+                        symbol_preview_limit=20,
+                        test_preview_limit=related_test_limit,
+                        include_reference_sites=include_reference_sites,
+                        include_implementation_locations=include_implementation_locations,
+                        reference_site_limit=reference_site_limit,
+                        evidence_tier=evidence_tier,
+                    )[0]
                 owner = self._ownership_presenter.file_owner_view(repository.get_file_owner(repository_rel_path))
                 reference_sites_preview = tuple(
                     self._code_presenter.location_view(item) for item in context.reference_sites_preview
@@ -1635,13 +1718,15 @@ class SuitMcpService:
                 implementation_locations_preview = tuple(
                     self._code_presenter.location_view(item) for item in context.implementation_locations_preview
                 )
-                related_tests = tuple(
-                    self._test_presenter.related_test_view(item)
-                    for item in repository.tests.get_related_tests(
-                        RelatedTestTarget(repository_rel_path=repository_rel_path)
-                    )[:related_test_limit]
-                )
-                structured_artifact = repository.describe_structured_artifact(repository_rel_path)
+                with self._target_timing_stage(repository_rel_path, "related_tests"):
+                    related_tests = tuple(
+                        self._test_presenter.related_test_view(item)
+                        for item in repository.tests.get_related_tests(
+                            RelatedTestTarget(repository_rel_path=repository_rel_path)
+                        )[:related_test_limit]
+                    )
+                with self._target_timing_stage(repository_rel_path, "structured_artifact"):
+                    structured_artifact = repository.describe_structured_artifact(repository_rel_path)
                 structured_artifact_view = (
                     self._shape_structured_artifact_view(
                         self._intelligence_presenter.structured_artifact_view(structured_artifact),
@@ -1650,7 +1735,8 @@ class SuitMcpService:
                     if structured_artifact is not None
                     else None
                 )
-                artifact_surface_summary = self._artifact_surface_summary_view(repository, repository_rel_path)
+                with self._target_timing_stage(repository_rel_path, "artifact_surface_summary"):
+                    artifact_surface_summary = self._artifact_surface_summary_view(repository, repository_rel_path)
                 semantic_deadline = self._semantic_enrichment_deadline(
                     evidence_tier=evidence_tier,
                     repository=repository,
@@ -1803,16 +1889,17 @@ class SuitMcpService:
         def _build(repository_rel_path: str) -> BatchChangeImpactTargetView:
             def _build_target() -> BatchChangeImpactTargetView:
                 try:
-                    impact = repository.analyze_change(
-                        ChangeTarget(repository_rel_path=repository_rel_path),
-                        reference_preview_limit=reference_preview_limit,
-                        dependent_preview_limit=dependent_preview_limit,
-                        test_preview_limit=test_preview_limit,
-                        runner_preview_limit=runner_preview_limit,
-                        include_reference_locations=include_reference_locations,
-                        include_implementation_locations=include_implementation_locations,
-                        evidence_tier=evidence_tier,
-                    )
+                    with self._target_timing_stage(repository_rel_path, "analyze_change"):
+                        impact = repository.analyze_change(
+                            ChangeTarget(repository_rel_path=repository_rel_path),
+                            reference_preview_limit=reference_preview_limit,
+                            dependent_preview_limit=dependent_preview_limit,
+                            test_preview_limit=test_preview_limit,
+                            runner_preview_limit=runner_preview_limit,
+                            include_reference_locations=include_reference_locations,
+                            include_implementation_locations=include_implementation_locations,
+                            evidence_tier=evidence_tier,
+                        )
                 except ValueError as exc:
                     raise McpValidationError(
                         explain_file_target_error(
@@ -1822,7 +1909,8 @@ class SuitMcpService:
                             tool_name="what_changes_if_i_edit_this",
                         )
                     ) from exc
-                artifact_surface_summary = self._artifact_surface_summary_view(repository, repository_rel_path)
+                with self._target_timing_stage(repository_rel_path, "artifact_surface_summary"):
+                    artifact_surface_summary = self._artifact_surface_summary_view(repository, repository_rel_path)
                 semantic_deadline = self._semantic_enrichment_deadline(
                     evidence_tier=evidence_tier,
                     repository=repository,
@@ -1895,7 +1983,8 @@ class SuitMcpService:
         future_to_path: dict[Future[T], str] = {}
         try:
             for repository_rel_path in repository_rel_paths:
-                future_to_path[executor.submit(build_target, repository_rel_path)] = repository_rel_path
+                context = copy_context()
+                future_to_path[executor.submit(context.run, build_target, repository_rel_path)] = repository_rel_path
             done, not_done = wait(
                 tuple(future_to_path),
                 timeout=self._BATCH_COMPACT_TARGET_TIMEOUT_SECONDS,
@@ -1907,6 +1996,7 @@ class SuitMcpService:
                 try:
                     completed_by_path[repository_rel_path] = future.result()
                 except Exception as exc:  # noqa: BLE001
+                    self._mark_timing_target_status(repository_rel_path, "incomplete")
                     incomplete_by_path[repository_rel_path] = self._incomplete_batch_target_view(
                         repository_rel_path,
                         reason_code="analysis_failed",
@@ -1914,6 +2004,7 @@ class SuitMcpService:
                     )
             for future in not_done:
                 repository_rel_path = future_to_path[future]
+                self._mark_timing_target_status(repository_rel_path, "incomplete")
                 incomplete_by_path[repository_rel_path] = self._incomplete_batch_target_view(
                     repository_rel_path,
                     reason_code="analysis_timeout",
@@ -2244,7 +2335,8 @@ class SuitMcpService:
             deadline=deadline,
             stage_name=stage_name,
         )
-        result = build()
+        with self._target_timing_stage(repository_rel_path, stage_name):
+            result = build()
         self._ensure_semantic_stage_within_budget(
             repository=repository,
             repository_rel_path=repository_rel_path,
@@ -3336,11 +3428,15 @@ class SuitMcpService:
         tool_name: str,
     ) -> T:
         try:
-            repository = self._read_only_registry.open_repository(repository_path).repository
-            return self._with_semantic_runtime_retries(
-                tool_name=tool_name,
-                build_target=lambda: callback(repository),
-            )
+            with request_timing_collector(tool_name) as collector:
+                with self._timing_stage("repository_acquire"):
+                    open_state = self._read_only_registry.open_repository(repository_path)
+                collector.set_repository_reused(open_state.reused)
+                repository = open_state.repository
+                return self._with_semantic_runtime_retries(
+                    tool_name=tool_name,
+                    build_target=lambda: callback(repository),
+                )
         except (McpNotFoundError, McpValidationError, McpUnsupportedRepositoryError, McpRetryableError):
             raise
         except ValueError as exc:

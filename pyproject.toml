@@ -21,6 +21,7 @@ suitcode-mcp = "suitcode.mcp.server:main"
 suitcode-mcp-core = "suitcode.mcp.server:main_core"
 suitcode-coordinator = "suitcode.runtime.main:main"
 suitcode-install = "suitcode.install:main"
+suitcode-token-economics = "suitcode.analytics.token_economics_cli:main"
 
 [project.optional-dependencies]
 cpp = []

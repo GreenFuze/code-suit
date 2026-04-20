@@ -3,8 +3,10 @@ from __future__ import annotations
 import shutil
 import time
 from pathlib import Path
+from typing import get_type_hints
 
 import pytest
+from pydantic import TypeAdapter
 from suitcode.core.build_service import BuildService
 from suitcode.core.code.evidence_tier import CodeEvidenceTier
 from suitcode.core.change_models import ChangeTarget
@@ -36,6 +38,8 @@ from suitcode.mcp.models import (
     LocationView,
     OwnerView,
     ProvenanceView,
+    StrictModel,
+    ToolTimingView,
     TruthCoverageByDomainView,
     TruthCoverageSummaryView,
 )
@@ -45,6 +49,10 @@ from suitcode.providers.npm.tool_runner import TypeScriptToolTimeoutError
 from suitcode.providers.shared.action_execution import ActionExecutionResult, ActionExecutionStatus
 from suitcode.runtime.errors import CoordinatorRuntimeNotReadyError, SemanticQueryTimeoutError
 from suitcode.runtime.models import ManagedServerState, ServerFamily
+
+
+class _TimingResult(StrictModel):
+    timing: ToolTimingView | None = None
 
 
 def _provenance_view(*paths: str) -> tuple[ProvenanceView, ...]:
@@ -57,6 +65,38 @@ def _provenance_view(*paths: str) -> tuple[ProvenanceView, ...]:
             evidence_paths=paths or ("src/index.ts",),
         ),
     )
+
+
+def test_read_only_repository_seam_attaches_agent_visible_timing() -> None:
+    class _FakeRegistry:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def open_repository(self, repository_path: str):
+            self.calls += 1
+            return type(
+                "OpenState",
+                (),
+                {
+                    "repository": object(),
+                    "reused": self.calls > 1,
+                },
+            )()
+
+    fake_registry = _FakeRegistry()
+    service = SuitMcpService(read_only_registry=fake_registry)
+
+    def _callback(_repository):
+        return service._attach_agent_visible_timing("understand_file", _TimingResult())  # noqa: SLF001
+
+    first = service._with_read_only_repository("repo", _callback, tool_name="understand_file")  # noqa: SLF001
+    second = service._with_read_only_repository("repo", _callback, tool_name="understand_file")  # noqa: SLF001
+
+    assert first.timing is not None
+    assert first.timing.repository_reused is False
+    assert second.timing is not None
+    assert second.timing.repository_reused is True
+    assert tuple(stage.name for stage in second.timing.stages) == ("repository_acquire",)
 
 
 def test_service_open_workspace_and_list_repositories(service: SuitMcpService, npm_repo_root: Path) -> None:
@@ -98,6 +138,10 @@ def test_service_core_tools_reuse_existing_repository_intelligence(
         str(npm_repo_root),
         ("packages/core/src/index.ts",),
     )
+    proof_gaps = service.what_is_not_proven(
+        str(npm_repo_root),
+        ("packages/core/src/index.ts",),
+    )
     availability = service.can_i_do_this(
         str(npm_repo_root),
         "packages/core/src/index.ts",
@@ -107,22 +151,37 @@ def test_service_core_tools_reuse_existing_repository_intelligence(
     assert understanding.repository.component_count >= 1
     assert understanding.truth_coverage.domains
     assert understanding.provenance
+    assert understanding.timing is not None
+    assert understanding.timing.repository_reused is False
+    assert any(stage.name == "repository_acquire" for stage in understanding.timing.stages)
     assert file_understanding.target_count == 1
     assert file_understanding.targets[0].file_owner.owner.id == "component:npm:@monorepo/core"
     assert file_understanding.targets[0].reference_site_count >= 1
     assert file_understanding.targets[0].reference_sites_preview
     assert file_understanding.aggregate_related_tests
     assert file_understanding.provenance
+    assert file_understanding.timing is not None
+    assert file_understanding.timing.repository_reused is True
+    assert file_understanding.timing.slow_targets
     assert impact.target_count == 1
     assert impact.targets[0].impact.target_kind == "file"
     assert impact.reference_sites
     assert impact.provenance
+    assert impact.timing is not None
+    assert impact.timing.repository_reused is True
+    assert impact.timing.slow_targets
     assert minimum.target_count == 1
     assert minimum.compact_summary.required_validation_count >= 1
     assert minimum.targets[0].change_set.owner.id == "component:npm:@monorepo/core"
+    assert minimum.timing is not None
+    assert minimum.timing.repository_reused is True
+    assert proof_gaps.target_count == 1
+    assert proof_gaps.timing is not None
+    assert proof_gaps.timing.repository_reused is True
     assert availability.supported is True
     assert "test" in availability.available_action_kinds
     assert availability.provenance
+    assert not hasattr(availability, "timing")
 
 
 def test_wait_for_repository_warmup_uses_project_coordinator_client(
@@ -222,6 +281,41 @@ def test_compact_detail_levels_materially_reduce_payload_size(service: SuitMcpSe
 
     assert len(compact_file.model_dump_json()) < len(standard_file.model_dump_json()) < len(full_file.model_dump_json())
     assert len(compact_impact.model_dump_json()) < len(standard_impact.model_dump_json()) < len(full_impact.model_dump_json())
+
+
+def test_standard_understand_file_serialized_payload_validates_against_declared_return_type(
+    service: SuitMcpService,
+    npm_repo_root: Path,
+) -> None:
+    result = service.understand_file(
+        str(npm_repo_root),
+        ("packages/core/src/index.ts",),
+        related_test_limit=5,
+        detail_level="standard",
+    )
+    payload = result.model_dump(mode="json")
+    adapter = TypeAdapter(get_type_hints(SuitMcpService.understand_file)["return"])
+
+    validated = adapter.validate_python(payload)
+
+    assert validated.detail_level == "standard"
+
+
+def test_standard_change_impact_serialized_payload_validates_against_declared_return_type(
+    service: SuitMcpService,
+    npm_repo_root: Path,
+) -> None:
+    result = service.what_changes_if_i_edit_this(
+        str(npm_repo_root),
+        ("packages/core/src/index.ts",),
+        detail_level="standard",
+    )
+    payload = result.model_dump(mode="json")
+    adapter = TypeAdapter(get_type_hints(SuitMcpService.what_changes_if_i_edit_this)["return"])
+
+    validated = adapter.validate_python(payload)
+
+    assert validated.detail_level == "standard"
 
 
 def test_read_only_by_path_tools_match_workspace_tools_without_registry_mutation(service: SuitMcpService, npm_repo_root: Path) -> None:

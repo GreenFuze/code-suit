@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from inspect import signature
 from pathlib import Path
-from time import perf_counter
+from time import perf_counter, time
 from typing import Callable
 
 from suitcode.analytics.recorder import ToolCallRecorder
@@ -30,6 +30,7 @@ class RecordedCallExecutor:
         arguments = dict(bound.arguments)
         repository_root = self._repository_root_resolver(tool_name, arguments)
         start = perf_counter()
+        started_at_epoch_seconds = time()
         try:
             result = callable_obj(*args, **kwargs)
         except Exception as exc:  # noqa: BLE001
@@ -40,6 +41,7 @@ class RecordedCallExecutor:
                 repository_root=repository_root,
                 error=exc,
                 duration_ms=duration_ms,
+                started_at_epoch_seconds=started_at_epoch_seconds,
             )
             raise
         duration_ms = int((perf_counter() - start) * 1000)
@@ -49,5 +51,6 @@ class RecordedCallExecutor:
             repository_root=repository_root,
             result=result,
             duration_ms=duration_ms,
+            started_at_epoch_seconds=started_at_epoch_seconds,
         )
         return result

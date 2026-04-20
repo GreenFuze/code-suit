@@ -86,6 +86,27 @@ class RepositorySupportView(StrictModel):
     detected_providers: tuple[DetectedProviderView, ...] = Field(default_factory=tuple)
 
 
+class ToolTimingStageView(StrictModel):
+    name: str
+    elapsed_ms: int
+
+
+class ToolTimingTargetView(StrictModel):
+    repository_rel_path: str
+    elapsed_ms: int
+    status: str
+    dominant_stage: str | None = None
+
+
+class ToolTimingView(StrictModel):
+    elapsed_ms: int
+    repository_reused: bool | None = None
+    stages: tuple[ToolTimingStageView, ...] = Field(default_factory=tuple)
+    slow_targets: tuple[ToolTimingTargetView, ...] = Field(default_factory=tuple)
+    truncated_stage_count: int = 0
+    truncated_target_count: int = 0
+
+
 class WorkspaceView(StrictModel):
     workspace_id: str
     repository_ids: tuple[str, ...]
@@ -281,8 +302,9 @@ class FileRelationshipView(StrictModel):
 
 class RenderEdgeView(StrictModel):
     path: str
-    line_start: int
-    column_start: int
+    span: str | None = None
+    line_start: int | None = None
+    column_start: int | None = None
     prop_names: tuple[str, ...]
     has_spread_props: bool
     provenance: tuple[ProvenanceView, ...]
@@ -302,8 +324,9 @@ class RenderEdgeView(StrictModel):
 
 class StaticAnalysisSiteView(StrictModel):
     path: str
-    line_start: int
-    column_start: int
+    span: str | None = None
+    line_start: int | None = None
+    column_start: int | None = None
     label: str
     provenance: tuple[ProvenanceView, ...]
 
@@ -321,8 +344,9 @@ class StaticAnalysisSiteView(StrictModel):
 
 class InvariantFindingView(StrictModel):
     path: str
-    line_start: int
-    column_start: int
+    span: str | None = None
+    line_start: int | None = None
+    column_start: int | None = None
     field_name: str
     access_kind: str
     subject_label: str
@@ -351,8 +375,9 @@ class InvariantFindingView(StrictModel):
 
 class StaticFlowEdgeView(StrictModel):
     path: str
-    line_start: int
-    column_start: int
+    span: str | None = None
+    line_start: int | None = None
+    column_start: int | None = None
     edge_kind: str
     source_label: str
     target_label: str
@@ -460,6 +485,7 @@ class SymbolView(StrictModel):
     name: str
     kind: str
     path: str
+    span: str | None = None
     line_start: int | None = None
     line_end: int | None = None
     column_start: int | None = None
@@ -498,9 +524,10 @@ class SymbolView(StrictModel):
 
 class LocationView(StrictModel):
     path: str
-    line_start: int
+    span: str | None = None
+    line_start: int | None = None
     line_end: int | None = None
-    column_start: int
+    column_start: int | None = None
     column_end: int | None = None
     symbol_id: str | None = None
     provenance: tuple[ProvenanceView, ...]
@@ -535,8 +562,8 @@ class ProvenanceView(StrictModel):
     confidence_mode: str
     source_kind: str
     source_tool: str | None = None
-    evidence_summary: str
-    evidence_paths: tuple[str, ...]
+    evidence_summary: str | None = None
+    evidence_paths: tuple[str, ...] = Field(default_factory=tuple)
     owner_path: str | None = Field(default=None, exclude=True)
 
     @model_serializer(mode="plain")
@@ -809,8 +836,9 @@ class FrontendProofSummaryView(StrictModel):
 
 class ImplementationFlowStepView(StrictModel):
     path: str
-    line_start: int
-    column_start: int
+    span: str | None = None
+    line_start: int | None = None
+    column_start: int | None = None
     step_kind: str
     source_label: str
     target_label: str | None = None
@@ -867,6 +895,7 @@ class HotEntrypointView(StrictModel):
     name: str
     kind: str
     path: str
+    span: str | None = None
     line_start: int | None = None
     external_reference_count: int
 
@@ -1115,6 +1144,7 @@ class RepositoryUnderstandingView(StrictModel):
     truth_coverage: TruthCoverageSummaryView
     recommended_next_questions: tuple[str, ...]
     provenance: tuple[ProvenanceView, ...]
+    timing: ToolTimingView | None = None
 
 
 class RepositorySummaryView(StrictModel):
@@ -1200,6 +1230,7 @@ class FileUnderstandingView(StrictModel):
     aggregate_related_tests: tuple[RelatedTestView, ...]
     suggested_follow_ups: tuple[str, ...]
     provenance: tuple[ProvenanceView, ...]
+    timing: ToolTimingView | None = None
 
 
 class FileUnderstandingCompactTargetView(StrictModel):
@@ -1222,6 +1253,7 @@ class FileUnderstandingCompactView(StrictModel):
     completed_target_count: int = 0
     targets: tuple[FileUnderstandingCompactTargetView, ...]
     incomplete_targets: tuple[IncompleteBatchTargetView, ...] = Field(default_factory=tuple)
+    timing: ToolTimingView | None = None
 
 
 class FileUnderstandingStandardTargetView(StrictModel):
@@ -1278,6 +1310,7 @@ class FileUnderstandingStandardView(StrictModel):
     aggregate_implementation_locations_preview: tuple[LocationView, ...]
     aggregate_related_tests: tuple[RelatedTestView, ...]
     suggested_follow_ups: tuple[str, ...]
+    timing: ToolTimingView | None = None
 
 
 class BatchChangeImpactTargetView(StrictModel):
@@ -1309,6 +1342,7 @@ class BatchChangeImpactView(StrictModel):
     related_runners: tuple[RunnerImpactView, ...]
     quality_gates: tuple[QualityGateView, ...]
     provenance: tuple[ProvenanceView, ...]
+    timing: ToolTimingView | None = None
 
 
 class BatchChangeImpactCompactTargetView(StrictModel):
@@ -1330,6 +1364,7 @@ class BatchChangeImpactCompactView(StrictModel):
     completed_target_count: int = 0
     targets: tuple[BatchChangeImpactCompactTargetView, ...]
     incomplete_targets: tuple[IncompleteBatchTargetView, ...] = Field(default_factory=tuple)
+    timing: ToolTimingView | None = None
 
 
 class BatchChangeImpactStandardTargetView(StrictModel):
@@ -1376,6 +1411,7 @@ class BatchChangeImpactStandardView(StrictModel):
     related_tests: tuple[TestImpactView, ...]
     related_runners: tuple[RunnerImpactView, ...]
     quality_gates: tuple[QualityGateView, ...]
+    timing: ToolTimingView | None = None
 
 
 class ProofGapTargetView(StrictModel):
@@ -1397,6 +1433,7 @@ class BatchProofGapView(StrictModel):
     highest_priority_targets: tuple[str, ...] = Field(default_factory=tuple)
     shared_gap_codes: tuple[str, ...] = Field(default_factory=tuple)
     nearby_validation_surfaces: tuple[MinimumVerifiedCompactItemView, ...] = Field(default_factory=tuple)
+    timing: ToolTimingView | None = None
 
 
 class BatchMinimumVerifiedChangeSetTargetView(StrictModel):
@@ -1416,6 +1453,7 @@ class BatchMinimumVerifiedChangeSetView(StrictModel):
     quality_hygiene_operations: tuple[MinimumVerifiedQualityOperationView, ...]
     excluded_items: tuple[ExcludedMinimumVerifiedItemView, ...]
     provenance: tuple[ProvenanceView, ...]
+    timing: ToolTimingView | None = None
 
 
 class ActionAvailabilityView(StrictModel):

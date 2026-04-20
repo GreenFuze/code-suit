@@ -309,19 +309,27 @@ def test_core_tools_return_structured_results(core_app, npm_repo_root) -> None:
 
     assert understanding["repository"]["provider_ids"]
     assert understanding["truth_coverage"]["domains"]
+    assert understanding["timing"]["elapsed_ms"] >= 0
+    assert understanding["timing"]["repository_reused"] is False
     assert file_understanding["detail_level"] == "compact"
     assert file_understanding["target_count"] == 1
     assert file_understanding["targets"][0]["file_owner"]["owner"]["id"]
     assert isinstance(file_understanding["targets"][0]["top_validations"], list)
+    assert file_understanding["timing"]["repository_reused"] is True
+    assert isinstance(file_understanding["timing"]["slow_targets"], list)
     assert impact["detail_level"] == "compact"
     assert impact["target_count"] == 1
     assert impact["targets"][0]["owner"]["id"]
     assert isinstance(impact["targets"][0]["top_impacted_files"], list)
+    assert impact["timing"]["repository_reused"] is True
     assert isinstance(minimum["tests"], list)
+    assert minimum["timing"]["repository_reused"] is True
     assert proof_gaps["target_count"] == 1
     assert isinstance(proof_gaps["targets"][0]["gap_items"], list)
+    assert proof_gaps["timing"]["repository_reused"] is True
     assert availability["supported"] is True
     assert "test" in availability["available_action_kinds"]
+    assert "timing" not in availability
 
 
 def test_core_tool_payloads_use_compressed_span_encoding(core_app, npm_repo_root) -> None:

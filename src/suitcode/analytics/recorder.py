@@ -10,6 +10,7 @@ from uuid import uuid4
 from suitcode.analytics.models import AnalyticsEvent, AnalyticsStatus
 from suitcode.analytics.redaction import fingerprint_arguments, redact_arguments
 from suitcode.analytics.storage import JsonlAnalyticsStore
+from suitcode.analytics.token_economics import TokenEconomicsRecorder
 
 
 class ToolCallRecorder:
@@ -23,6 +24,7 @@ class ToolCallRecorder:
         self._session_id = session_id or f"session:{uuid4().hex}"
         self._benchmark_run_id: str | None = None
         self._benchmark_task_id: str | None = None
+        self._token_economics = TokenEconomicsRecorder()
 
     @property
     def session_id(self) -> str:
@@ -60,6 +62,7 @@ class ToolCallRecorder:
         repository_root: Path | None,
         result: object,
         duration_ms: int,
+        started_at_epoch_seconds: float | None = None,
     ) -> AnalyticsEvent:
         arguments_redacted = redact_arguments(arguments)
         args_fingerprint = fingerprint_arguments(arguments_redacted)
@@ -84,6 +87,17 @@ class ToolCallRecorder:
             output_item_count=item_count,
         )
         self._store.append_event(event, repository_root=repository_root)
+        if started_at_epoch_seconds is not None:
+            self._token_economics.record_success(
+                repository_root=repository_root,
+                session_id=self._session_id,
+                task_id=self._benchmark_task_id,
+                tool_name=tool_name,
+                arguments=arguments,
+                result=result,
+                started_at=started_at_epoch_seconds,
+                duration_ms=duration_ms,
+            )
         return event
 
     def record_error(
@@ -94,6 +108,7 @@ class ToolCallRecorder:
         repository_root: Path | None,
         error: Exception,
         duration_ms: int,
+        started_at_epoch_seconds: float | None = None,
     ) -> AnalyticsEvent:
         arguments_redacted = redact_arguments(arguments)
         args_fingerprint = fingerprint_arguments(arguments_redacted)
@@ -115,6 +130,17 @@ class ToolCallRecorder:
             duration_ms=duration_ms,
         )
         self._store.append_event(event, repository_root=repository_root)
+        if started_at_epoch_seconds is not None:
+            self._token_economics.record_error(
+                repository_root=repository_root,
+                session_id=self._session_id,
+                task_id=self._benchmark_task_id,
+                tool_name=tool_name,
+                arguments=arguments,
+                error=error,
+                started_at=started_at_epoch_seconds,
+                duration_ms=duration_ms,
+            )
         return event
 
 
