@@ -4,7 +4,8 @@ import asyncio
 import json
 
 import pytest
-from suitcode.mcp.tool_catalog import CORE_TOOL_CATALOG, TOOL_CATALOG
+from suitcode.mcp.app import create_mcp_app
+from suitcode.mcp.tool_catalog import CORE_TOOL_CATALOG, INTERNAL_TOOL_CATALOG, TOOL_CATALOG
 
 
 async def _call_tool(app, name: str, arguments: dict):
@@ -32,7 +33,7 @@ def _payload_from_result(result):
 def test_app_registers_expected_tools(app) -> None:
     tools = asyncio.run(_list_tools(app))
     tool_names = {tool.name for tool in tools}
-    expected_names = {item.name for item in TOOL_CATALOG}
+    expected_names = {item.name for item in INTERNAL_TOOL_CATALOG}
 
     assert tool_names == expected_names
 
@@ -118,6 +119,19 @@ def test_app_registers_expected_tools(app) -> None:
     assert minimum_change_by_path.annotations is not None
     assert minimum_change_by_path.annotations.readOnlyHint is True
     assert "what should run after a change" in minimum_change_by_path.description.lower()
+
+
+def test_default_app_profile_registers_only_public_tools(monkeypatch) -> None:
+    from suitcode.mcp.service import SuitMcpService
+
+    monkeypatch.setattr(SuitMcpService, "_wait_for_repository_warmup", lambda self, repository: None)
+    app = create_mcp_app()
+
+    tools = asyncio.run(_list_tools(app))
+    tool_names = {tool.name for tool in tools}
+
+    assert tool_names == {item.name for item in TOOL_CATALOG}
+    assert "open_workspace" not in tool_names
 
 
 def test_open_workspace_tool_returns_structured_result(app, npm_repo_root) -> None:

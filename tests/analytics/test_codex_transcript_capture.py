@@ -57,3 +57,34 @@ def test_capture_builder_fails_fast_on_unknown_call_output(tmp_path: Path) -> No
 
     with pytest.raises(ValueError, match="unknown tool output call_id"):
         CodexTranscriptCaptureBuilder().build(artifact)
+
+
+def test_capture_builder_tolerates_multiple_session_meta_entries(tmp_path: Path) -> None:
+    repo_root = (tmp_path / "repo").resolve()
+    repo_root.mkdir()
+    parent_root = (tmp_path / "parent").resolve()
+    parent_root.mkdir()
+    artifact = tmp_path / "multi-session.jsonl"
+    artifact.write_text(
+        "\n".join(
+            (
+                '{"timestamp":"2026-03-08T10:00:00.000Z","type":"session_meta","payload":{"id":"codex-session-parent","timestamp":"2026-03-08T10:00:00.000Z","cwd":"'
+                + parent_root.as_posix()
+                + '"}}',
+                '{"timestamp":"2026-03-08T10:00:01.000Z","type":"session_meta","payload":{"id":"codex-session-child","timestamp":"2026-03-08T10:00:01.000Z","cwd":"'
+                + repo_root.as_posix()
+                + '"}}',
+                '{"timestamp":"2026-03-08T10:00:02.000Z","type":"response_item","payload":{"type":"function_call","name":"mcp__suitcode__understand_repository","call_id":"call-1","arguments":{"repository_path":"'
+                + repo_root.as_posix()
+                + '"}}}',
+                '{"timestamp":"2026-03-08T10:00:03.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-1","output":{"ok":true}}}',
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    capture = CodexTranscriptCaptureBuilder().build(artifact)
+
+    assert capture.session_id == "codex-session-child"
+    assert capture.repository_root == str(repo_root)
+    assert len(capture.segments) == 2

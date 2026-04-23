@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
 
 from suitcode.analytics.aggregation import AnalyticsAggregator
 from suitcode.analytics.recorder import ToolCallRecorder
@@ -34,7 +35,7 @@ from suitcode.mcp.quality_service import QualityMcpService
 from suitcode.mcp.runner_service import RunnerMcpService
 from suitcode.mcp.state import WorkspaceRegistry
 from suitcode.mcp.test_service import TestMcpService
-from suitcode.mcp.tool_catalog import TOOL_CATALOG
+from suitcode.mcp.tool_catalog import INTERNAL_TOOL_CATALOG
 from suitcode.mcp.workspace_service import WorkspaceMcpService
 
 
@@ -94,10 +95,13 @@ def build_mcp_service_runtime(
 
     analytics_settings = AnalyticsSettings.from_env()
     analytics_store = JsonlAnalyticsStore(analytics_settings)
-    analytics_recorder = ToolCallRecorder(analytics_store)
+    catalog_names = tuple(sorted(item.name for item in INTERNAL_TOOL_CATALOG))
+    catalog_fingerprint = sha256("|".join(catalog_names).encode("utf-8")).hexdigest()[:12]
+    public_tool_profile = f"catalog:{len(catalog_names)}:{catalog_fingerprint}"
+    analytics_recorder = ToolCallRecorder(analytics_store, public_tool_profile=public_tool_profile)
     analytics_aggregator = AnalyticsAggregator(
         analytics_store,
-        tool_catalog=tuple(sorted(item.name for item in TOOL_CATALOG)),
+        tool_catalog=tuple(sorted(item.name for item in INTERNAL_TOOL_CATALOG)),
         excluded_tools=(
             "get_analytics_summary",
             "get_tool_usage_analytics",

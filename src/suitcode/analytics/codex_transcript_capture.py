@@ -26,11 +26,11 @@ class CodexTranscriptCaptureBuilder:
         if not artifact_path.is_file():
             raise ValueError(f"Codex session artifact does not exist: `{artifact_path}`")
 
-        session_id: str | None = None
-        repository_root: str | None = None
+        session_id, repository_root = self._resolve_session_identity(artifact_path)
         sequence_index = 0
         segments: list[TranscriptSegment] = []
         call_index: dict[str, _CallInfo] = {}
+        saw_session_meta = False
 
         for line_number, event in iter_rollout_events(artifact_path):
             event_type = event.get("type")
@@ -38,18 +38,12 @@ class CodexTranscriptCaptureBuilder:
                 payload = event.get("payload")
                 if not isinstance(payload, dict):
                     raise ValueError(f"invalid session_meta payload in `{artifact_path}` at line {line_number}")
-                current_session_id = required_non_empty(payload.get("id"), "session id", artifact_path)
-                if session_id is None:
-                    session_id = current_session_id
-                elif session_id != current_session_id:
-                    raise ValueError(f"inconsistent session id in `{artifact_path}`")
-                cwd = optional_resolved_path(payload.get("cwd"), artifact_path)
-                repository_root = str(cwd) if cwd is not None else None
+                saw_session_meta = True
                 continue
 
             if event_type != "response_item":
                 continue
-            if session_id is None:
+            if not saw_session_meta:
                 raise ValueError(f"response_item found before session_meta in `{artifact_path}`")
             payload = event.get("payload")
             if not isinstance(payload, dict):
@@ -111,7 +105,7 @@ class CodexTranscriptCaptureBuilder:
                 sequence_index += len(reasoning_segments)
                 continue
 
-        if session_id is None:
+        if not saw_session_meta:
             raise ValueError(f"missing session_meta in `{artifact_path}`")
         return TranscriptCapture(
             session_id=session_id,
@@ -119,6 +113,28 @@ class CodexTranscriptCaptureBuilder:
             artifact_path=str(artifact_path),
             segments=tuple(segments),
         )
+
+    @staticmethod
+    def _resolve_session_identity(artifact_path: Path) -> tuple[str, str | None]:
+        session_metas: list[dict[str, object]] = []
+        for line_number, event in iter_rollout_events(artifact_path):
+            if event.get("type") != "session_meta":
+                continue
+            payload = event.get("payload")
+            if not isinstance(payload, dict):
+                raise ValueError(f"invalid session_meta payload in `{artifact_path}` at line {line_number}")
+            session_metas.append(payload)
+        if not session_metas:
+            raise ValueError(f"missing session_meta in `{artifact_path}`")
+        effective_meta = session_metas[-1]
+        session_id = required_non_empty(effective_meta.get("id"), "session id", artifact_path)
+        repository_root: str | None = None
+        for meta in reversed(session_metas):
+            cwd = optional_resolved_path(meta.get("cwd"), artifact_path)
+            if cwd is not None:
+                repository_root = str(cwd)
+                break
+        return session_id, repository_root
 
     @staticmethod
     def _timestamp_text(event: dict[str, object], *, artifact_path: Path, line_number: int) -> str:

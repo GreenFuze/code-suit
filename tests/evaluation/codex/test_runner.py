@@ -10,11 +10,13 @@ from suitcode.evaluation.codex.runner import CodexCliRunner, CodexRunStatus
 class _FakeCommandRunner:
     def __init__(self, sessions_root: Path, repository_root: Path) -> None:
         self.commands: list[list[str]] = []
+        self.envs: list[dict[str, str] | None] = []
         self._sessions_root = sessions_root
         self._repository_root = repository_root
 
     def __call__(self, command, *, input, text, capture_output, timeout, check, **kwargs):
         self.commands.append(command)
+        self.envs.append(kwargs.get("env"))
         output_last_message = Path(command[command.index("--output-last-message") + 1])
         output_last_message.parent.mkdir(parents=True, exist_ok=True)
         output_last_message.write_text('{"workspace_id":"workspace:demo","repository_id":"repo:demo","provider_ids":[],"component_count":0,"test_count":0,"quality_provider_count":0,"overall_truth_availability":"available"}', encoding="utf-8")
@@ -61,6 +63,27 @@ def test_runner_executes_codex_and_captures_artifacts(tmp_path: Path) -> None:
     assert "--full-auto" in command_runner.commands[0]
     assert "--config" in command_runner.commands[0]
     assert "mcp_servers.suitcode.enabled=false" in command_runner.commands[0]
+
+
+def test_runner_passes_environment_overrides(tmp_path: Path) -> None:
+    repository_root = (tmp_path / "repo").resolve()
+    repository_root.mkdir()
+    sessions_root = tmp_path / "sessions"
+    command_runner = _FakeCommandRunner(sessions_root, repository_root)
+    runner = CodexCliRunner(sessions_root=sessions_root, command_runner=command_runner)
+
+    runner.run(
+        repository_root=repository_root,
+        prompt_text="return json",
+        output_schema={"type": "object"},
+        output_directory=tmp_path / "run",
+        timeout_seconds=30,
+        env_overrides={"SUITCODE_TASK_ID": "task:test", "SUITCODE_STUDY_KIND": "controlled_task"},
+    )
+
+    assert command_runner.envs[0] is not None
+    assert command_runner.envs[0]["SUITCODE_TASK_ID"] == "task:test"
+    assert command_runner.envs[0]["SUITCODE_STUDY_KIND"] == "controlled_task"
 
 
 def test_runner_returns_cli_error_when_codex_missing(tmp_path: Path) -> None:

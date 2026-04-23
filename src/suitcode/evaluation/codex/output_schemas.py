@@ -78,6 +78,18 @@ class MinimumVerifiedOutputModel(StrictModel):
     quality_hygiene_operation_ids: tuple[str, ...] = Field(description="Copy quality hygiene operation IDs exactly from get_minimum_verified_change_set.")
 
 
+class ProofGapOutputModel(StrictModel):
+    owner_id: str = Field(description="Copy owner.id exactly from what_is_not_proven for the target.")
+    primary_component_id: str | None = Field(default=None, description="Copy primary_component.id exactly from what_is_not_proven, or null.")
+    validation_is_build_only: bool = Field(description="Copy validation_is_build_only exactly from what_is_not_proven.")
+    has_focused_test_surface: bool = Field(description="Copy has_focused_test_surface exactly from what_is_not_proven.")
+    has_runner_surface: bool = Field(description="Copy has_runner_surface exactly from what_is_not_proven.")
+    gap_codes: tuple[str, ...] = Field(description="Copy the sorted gap codes exactly from what_is_not_proven.")
+    nearest_validation_artifact_ids: tuple[str, ...] = Field(
+        description="Copy the sorted nearest validation artifact item_ids exactly from what_is_not_proven."
+    )
+
+
 class TruthCoverageOutputModel(StrictModel):
     overall_availability: AvailabilityLiteral = Field(
         description=(
@@ -138,6 +150,7 @@ _OUTPUT_MODELS = {
     CodexTaskFamily.ORIENTATION: OrientationOutputModel,
     CodexTaskFamily.CHANGE_ANALYSIS: ChangeAnalysisOutputModel,
     CodexTaskFamily.MINIMUM_VERIFIED_CHANGE_SET: MinimumVerifiedOutputModel,
+    CodexTaskFamily.PROOF_GAP: ProofGapOutputModel,
     CodexTaskFamily.TRUTH_COVERAGE: TruthCoverageOutputModel,
     CodexTaskFamily.TEST_EXECUTION: TestExecutionOutputModel,
     CodexTaskFamily.BUILD_EXECUTION: BuildExecutionOutputModel,

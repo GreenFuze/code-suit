@@ -4,10 +4,10 @@ from mcp.server.fastmcp import FastMCP
 
 from suitcode.mcp.instrumentation import McpToolInstrumentation
 from suitcode.mcp.service import SuitMcpService
-from suitcode.mcp.tool_catalog import TOOL_CATALOG, ToolBinding
+from suitcode.mcp.tool_catalog import PUBLIC_TOOL_CATALOG, ToolBinding
 
 
-def register_tools(app: FastMCP, service: SuitMcpService, *, catalog: tuple[ToolBinding, ...] = TOOL_CATALOG) -> None:
+def register_tools(app: FastMCP, service: SuitMcpService, *, catalog: tuple[ToolBinding, ...] = PUBLIC_TOOL_CATALOG) -> None:
     restore_tool = McpToolInstrumentation(service).install(app)
     try:
         for binding in catalog:

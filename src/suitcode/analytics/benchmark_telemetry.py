@@ -4,7 +4,7 @@ from collections import Counter
 from pathlib import Path
 
 from suitcode.analytics.high_value_tools import HIGH_VALUE_TOOLS
-from suitcode.analytics.models import AnalyticsEvent, BenchmarkArtifactReference, BenchmarkTaskResult
+from suitcode.analytics.models import AnalyticsEvent, AnalyticsStatus, BenchmarkArtifactReference, BenchmarkTaskResult
 from suitcode.analytics.benchmark_harness import BenchmarkTaskRun
 
 _ARTIFACT_KEY_TO_KIND = {
@@ -111,24 +111,25 @@ class BenchmarkTelemetryCollector:
         truth_coverage: object | None = None,
     ) -> BenchmarkTaskRun:
         task_id = _required_string(task, "task_id")
-        events = tuple(
+        all_events = tuple(
             item
             for item in store.load_events(repository_root=repository_root, include_global=True)
             if item.benchmark_run_id == run_id and item.benchmark_task_id == task_id
         )
-        if tool_calls > 0 and not events:
+        terminal_events = tuple(item for item in all_events if item.status.is_terminal)
+        if tool_calls > 0 and not terminal_events:
             raise ValueError(f"benchmark task `{task_id}` produced tool calls but no correlated analytics events")
-        event_session_ids = {item.session_id for item in events}
-        if events and event_session_ids != {session_id}:
+        event_session_ids = {item.session_id for item in terminal_events}
+        if terminal_events and event_session_ids != {session_id}:
             raise ValueError(f"benchmark task `{task_id}` correlated to unexpected analytics sessions")
-        event_repository_roots = {item.repository_root for item in events if item.repository_root is not None}
+        event_repository_roots = {item.repository_root for item in terminal_events if item.repository_root is not None}
         if any(item != str(repository_root) for item in event_repository_roots):
             raise ValueError(f"benchmark task `{task_id}` correlated to conflicting repository roots")
-        if tool_calls != len(events):
+        if tool_calls != len(terminal_events):
             raise ValueError(
-                f"benchmark task `{task_id}` recorded {tool_calls} tool calls but correlated {len(events)} analytics events"
+                f"benchmark task `{task_id}` recorded {tool_calls} tool calls but correlated {len(terminal_events)} analytics events"
             )
-        first_tool, first_index = self._first_high_value_tool(events)
+        first_tool, first_index = self._first_high_value_tool(terminal_events)
         confidence_mix, source_kind_mix = self._provenance_scanner.scan(*execution.outputs)
         artifact_references = self._artifact_references(
             task=task,
@@ -139,7 +140,7 @@ class BenchmarkTelemetryCollector:
             task_id=task_id,
             status=execution.status,
             tool_calls=tool_calls,
-            turn_count=len(events),
+            turn_count=len(terminal_events),
             duration_ms=duration_ms,
             session_id=session_id,
             workspace_id=workspace_id,
@@ -159,8 +160,9 @@ class BenchmarkTelemetryCollector:
         metadata = {
             "task": _json_ready(task),
             "result": result.model_dump(mode="json"),
-            "event_ids": [item.event_id for item in events],
-            "tool_names": [item.tool_name for item in events],
+            "event_ids": [item.event_id for item in terminal_events],
+            "tool_names": [item.tool_name for item in terminal_events],
+            "started_event_ids": [item.event_id for item in all_events if item.status == AnalyticsStatus.STARTED],
             "benchmark_run_id": run_id,
             "benchmark_task_id": task_id,
             "truth_coverage": _json_ready(truth_coverage),

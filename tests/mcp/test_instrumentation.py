@@ -5,8 +5,12 @@ from suitcode.mcp.instrumentation import McpToolInstrumentation
 
 class _FakeRecorder:
     def __init__(self) -> None:
+        self.started_calls: list[dict] = []
         self.success_calls: list[dict] = []
         self.error_calls: list[dict] = []
+
+    def record_started(self, **kwargs) -> None:
+        self.started_calls.append(kwargs)
 
     def record_success(self, **kwargs) -> None:
         self.success_calls.append(kwargs)
@@ -54,6 +58,7 @@ def test_mcp_instrumentation_records_success_and_error() -> None:
         raise RuntimeError("boom")
 
     assert app.registered["ok"](value=2) == {"value": 2}
+    assert len(service.analytics_recorder.started_calls) == 1
     assert len(service.analytics_recorder.success_calls) == 1
     assert service.analytics_recorder.success_calls[0]["tool_name"] == "ok"
 
@@ -61,6 +66,7 @@ def test_mcp_instrumentation_records_success_and_error() -> None:
         app.registered["boom"]()
     except RuntimeError:
         pass
+    assert len(service.analytics_recorder.started_calls) == 2
     assert len(service.analytics_recorder.error_calls) == 1
     assert service.analytics_recorder.error_calls[0]["tool_name"] == "boom"
 

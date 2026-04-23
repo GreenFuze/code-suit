@@ -88,3 +88,12 @@ def test_v7_output_schema_contains_new_family_properties() -> None:
     assert "requested_action_kind" in properties
     assert "available_action_kinds" in properties
     assert "reason_code" in properties
+
+
+def test_proof_gap_schema_contains_gap_fields() -> None:
+    schema = schema_for_family(CodexTaskFamily.PROOF_GAP)
+
+    properties = schema.get("properties", {})
+    assert "owner_id" in properties
+    assert "gap_codes" in properties
+    assert "nearest_validation_artifact_ids" in properties

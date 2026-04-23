@@ -110,3 +110,18 @@ def test_v7_adoption_task_file_contains_bug_fix_and_ci_debugging_tasks() -> None
         CodexTaskFamily.UNSUPPORTED_ACTION_REASONING,
     }
     assert {task.suite_role for task in tasks} == {"adoption_experiment"}
+
+
+def test_mga_controlled_task_file_is_protocol_compatible() -> None:
+    tasks = _load_tasks("benchmarks/codex/tasks/mga_controlled_readonly.json")
+
+    assert len(tasks) == 5
+    assert {task.repository_path for task in tasks} == {"C:\\src\\github.com\\GreenFuze\\MyGamesAnywhere"}
+    assert {task.tracked_repository_label for task in tasks} == {"mygamesanywhere"}
+    assert {task.study_kind for task in tasks} == {"live_project_controlled"}
+    assert {task.task_family for task in tasks} == {
+        CodexTaskFamily.ORIENTATION,
+        CodexTaskFamily.CHANGE_ANALYSIS,
+        CodexTaskFamily.MINIMUM_VERIFIED_CHANGE_SET,
+        CodexTaskFamily.PROOF_GAP,
+    }

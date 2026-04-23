@@ -69,6 +69,9 @@ def main() -> None:
     print("Codex Evaluation Report")
     print("=======================")
     print(f"Report id: {report.report_id}")
+    print(f"Tracked repositories: {', '.join(report.tracked_repository_labels) if report.tracked_repository_labels else '(none)'}")
+    print(f"Task kind mix: {report.task_kind_mix}")
+    print(f"Study kind mix: {report.study_kind_mix}")
     if report.agent_metadata is not None:
         print("Agent metadata:")
         _print_agent_metadata("  ", report_metadata=report.agent_metadata)
@@ -96,6 +99,7 @@ def main() -> None:
     for task in report.tasks:
         print(
             f"{task.task_id}: status={task.status.value}, failure_kind={task.failure_kind.value if task.failure_kind is not None else '-'}, "
+            f"task_kind={task.task_kind or '-'}, study_kind={task.study_kind or '-'}, "
             f"first_tool_index={task.first_suitcode_tool_index or '-'}, high_value={task.tool_selection.first_high_value_tool or '-'}@{task.first_high_value_tool_index or '-'}"
         )
         print(

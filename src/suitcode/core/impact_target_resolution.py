@@ -7,6 +7,7 @@ from suitcode.core.code.evidence_tier import CodeEvidenceTier
 from suitcode.core.code.models import CodeLocation
 from suitcode.core.code_reference_service import CodeReferenceService
 from suitcode.core.component_context_resolver import ComponentContextResolver
+from suitcode.core.file_semantic_facts import FileSemanticFactsBundle, FileSemanticFactsService
 from suitcode.core.intelligence_models import FileContext, SymbolContext
 from suitcode.core.models import Component
 from suitcode.core.ownership_index import OwnershipIndex
@@ -26,6 +27,7 @@ class ResolvedImpactTarget:
     owner_primary_component_id: str | None
     file_primary_component_id: str | None
     file_context: FileContext | None
+    file_semantic_facts: FileSemanticFactsBundle | None
     symbol_context: SymbolContext | None
     reference_locations: tuple[CodeLocation, ...]
     related_tests: tuple[ResolvedRelatedTest, ...]
@@ -39,12 +41,14 @@ class ImpactTargetResolver:
         context_service: ContextService,
         component_context_resolver: ComponentContextResolver,
         code_reference_service: CodeReferenceService,
+        file_semantic_facts_service: FileSemanticFactsService,
     ) -> None:
         self._repository = repository
         self._ownership_index = ownership_index
         self._context_service = context_service
         self._component_context_resolver = component_context_resolver
         self._code_reference_service = code_reference_service
+        self._file_semantic_facts_service = file_semantic_facts_service
 
     def resolve(
         self,
@@ -111,6 +115,7 @@ class ImpactTargetResolver:
             owner_primary_component_id=self._component_context_resolver.primary_component_id_for_owner(owner.id),
             file_primary_component_id=self._component_context_resolver.primary_component_id_for_file(evidence_path, owner.id),
             file_context=None,
+            file_semantic_facts=None,
             symbol_context=symbol_context,
             reference_locations=symbol_context.references_preview[:reference_preview_limit],
             related_tests=self._repository.tests.get_related_tests(
@@ -128,37 +133,19 @@ class ImpactTargetResolver:
         include_file_context_implementation_locations: bool,
         evidence_tier: CodeEvidenceTier,
     ) -> ResolvedImpactTarget:
-        file_owner = self._ownership_index.owner_for_file(repository_rel_path)
-        owner = file_owner.owner
-        file_context = None
-        try:
-            file_context = self._context_service.describe_files(
-                (repository_rel_path,),
-                symbol_preview_limit=20,
-                test_preview_limit=test_preview_limit,
-                include_implementation_locations=include_file_context_implementation_locations,
-                evidence_tier=evidence_tier,
-            )[0]
-            owner = file_context.owner
-        except ValueError:
-            file_context = None
-        try:
-            reference_locations = (
-                self._code_reference_service.references_for_file(
-                    file_owner.file_info.repository_rel_path,
-                    max_locations=reference_preview_limit,
-                )[:reference_preview_limit]
-                if include_reference_locations
-                else tuple()
-            )
-        except ValueError:
-            reference_locations = tuple()
-        if file_context is not None:
-            related_tests = file_context.related_tests_preview[:test_preview_limit]
-        else:
-            related_tests = self._repository.tests.get_related_tests(
-                RelatedTestTarget(repository_rel_path=file_owner.file_info.repository_rel_path)
-            )[:test_preview_limit]
+        semantic_facts = self._file_semantic_facts_service.get_bundle(
+            repository_rel_path,
+            evidence_tier=evidence_tier,
+        )
+        file_owner = semantic_facts.file_owner
+        file_context = semantic_facts.build_file_context(
+            symbol_preview_limit=20,
+            test_preview_limit=test_preview_limit,
+            include_implementation_locations=include_file_context_implementation_locations,
+        )
+        owner = file_context.owner
+        reference_locations = semantic_facts.reference_sites[:reference_preview_limit] if include_reference_locations else tuple()
+        related_tests = semantic_facts.related_tests[:test_preview_limit]
         return ResolvedImpactTarget(
             target_kind="file",
             owner=owner,
@@ -169,6 +156,7 @@ class ImpactTargetResolver:
                 owner.id,
             ),
             file_context=file_context,
+            file_semantic_facts=semantic_facts,
             symbol_context=None,
             reference_locations=reference_locations,
             related_tests=related_tests,
@@ -197,6 +185,7 @@ class ImpactTargetResolver:
             owner_primary_component_id=self._component_context_resolver.primary_component_id_for_owner(owner_id),
             file_primary_component_id=None,
             file_context=None,
+            file_semantic_facts=None,
             symbol_context=None,
             reference_locations=references,
             related_tests=self._repository.tests.get_related_tests(RelatedTestTarget(owner_id=owner_id))[:test_preview_limit],

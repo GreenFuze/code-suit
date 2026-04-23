@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass
 from enum import StrEnum
@@ -59,6 +60,7 @@ class CodexCliRunner:
         full_auto: bool = True,
         sandbox: str = "workspace-write",
         bypass_approvals_and_sandbox: bool = False,
+        env_overrides: dict[str, str] | None = None,
     ) -> CodexRunArtifacts:
         output_directory.mkdir(parents=True, exist_ok=True)
         prompt_path = output_directory / "prompt.txt"
@@ -96,6 +98,10 @@ class CodexCliRunner:
 
         started = perf_counter()
         try:
+            env = None
+            if env_overrides:
+                env = os.environ.copy()
+                env.update(env_overrides)
             completed = self._command_runner(
                 command,
                 input=prompt_text,
@@ -105,6 +111,7 @@ class CodexCliRunner:
                 capture_output=True,
                 timeout=timeout_seconds,
                 check=False,
+                env=env,
             )
         except FileNotFoundError:
             duration_ms = int((perf_counter() - started) * 1000)

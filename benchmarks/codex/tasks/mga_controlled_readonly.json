@@ -1,0 +1,64 @@
+[
+  {
+    "task_id": "mga-orientation",
+    "repository_path": "C:\\src\\github.com\\GreenFuze\\MyGamesAnywhere",
+    "tracked_repository_label": "mygamesanywhere",
+    "task_family": "orientation",
+    "task_kind": "discovery",
+    "study_kind": "live_project_controlled",
+    "timeout_seconds": 300,
+    "suite_role": "mga_calibration"
+  },
+  {
+    "task_id": "mga-browserplay-change-analysis",
+    "repository_path": "C:\\src\\github.com\\GreenFuze\\MyGamesAnywhere",
+    "tracked_repository_label": "mygamesanywhere",
+    "task_family": "change_analysis",
+    "task_kind": "planning",
+    "study_kind": "live_project_controlled",
+    "target_selector": {
+      "repository_rel_path": "server/frontend/src/lib/browserPlay.ts"
+    },
+    "timeout_seconds": 300,
+    "suite_role": "mga_calibration"
+  },
+  {
+    "task_id": "mga-browserplay-minimum-verified",
+    "repository_path": "C:\\src\\github.com\\GreenFuze\\MyGamesAnywhere",
+    "tracked_repository_label": "mygamesanywhere",
+    "task_family": "minimum_verified_change_set",
+    "task_kind": "planning",
+    "study_kind": "live_project_controlled",
+    "target_selector": {
+      "repository_rel_path": "server/frontend/src/lib/browserPlay.ts"
+    },
+    "timeout_seconds": 300,
+    "suite_role": "mga_calibration"
+  },
+  {
+    "task_id": "mga-browserplay-proof-gap",
+    "repository_path": "C:\\src\\github.com\\GreenFuze\\MyGamesAnywhere",
+    "tracked_repository_label": "mygamesanywhere",
+    "task_family": "proof_gap",
+    "task_kind": "validation",
+    "study_kind": "live_project_controlled",
+    "target_selector": {
+      "repository_rel_path": "server/frontend/src/lib/browserPlay.ts"
+    },
+    "timeout_seconds": 300,
+    "suite_role": "mga_calibration"
+  },
+  {
+    "task_id": "mga-refresh-proof-gap",
+    "repository_path": "C:\\src\\github.com\\GreenFuze\\MyGamesAnywhere",
+    "tracked_repository_label": "mygamesanywhere",
+    "task_family": "proof_gap",
+    "task_kind": "validation",
+    "study_kind": "live_project_controlled",
+    "target_selector": {
+      "repository_rel_path": "server/internal/scan/refresh_service.go"
+    },
+    "timeout_seconds": 300,
+    "suite_role": "mga_calibration"
+  }
+]

@@ -16,7 +16,7 @@ from suitcode.core.tests.models import RelatedTestTarget
 from suitcode.core.validation import validate_preview_limit
 from suitcode.core.validation import validate_change_preview_limit
 from suitcode.mcp.errors import McpNotFoundError, McpRetryableError, McpUnsupportedRepositoryError, McpValidationError
-from suitcode.mcp.file_target_errors import explain_file_target_error
+from suitcode.mcp.file_target_errors import explain_file_target_error, explain_file_target_error_for_root
 from suitcode.mcp.models import (
     ActionAvailabilityView,
     AddRepositoryResult,
@@ -316,15 +316,20 @@ class SuitMcpService:
     ) -> FileUnderstandingCompactView | FileUnderstandingStandardView | FileUnderstandingView:
         validate_preview_limit(related_test_limit, "related_test_limit", max_value=25, error_cls=McpValidationError)
         validated_detail_level = self._validate_detail_level(detail_level)
+        normalized_paths = self._prevalidate_existing_repository_file_targets(
+            repository_path,
+            repository_rel_paths,
+            tool_name="understand_file",
+            field_name="repository_rel_paths",
+        )
+        target_count = len(normalized_paths)
+        self._validate_detail_scope(
+            tool_name="understand_file",
+            detail_level=validated_detail_level,
+            target_count=target_count,
+        )
 
         def _callback(repository: Repository) -> FileUnderstandingCompactView | FileUnderstandingStandardView | FileUnderstandingView:
-            normalized_paths = self._validate_repository_rel_paths(repository_rel_paths, field_name="repository_rel_paths")
-            target_count = len(normalized_paths)
-            self._validate_detail_scope(
-                tool_name="understand_file",
-                detail_level=validated_detail_level,
-                target_count=target_count,
-            )
             degrade_compact_single_target = self._should_degrade_compact_single_target(
                 repository,
                 normalized_paths,
@@ -466,14 +471,21 @@ class SuitMcpService:
         return self._with_read_only_repository(repository_path, _callback, tool_name="understand_file")
 
     def get_file_owner_by_path(self, repository_path: str, repository_rel_path: str) -> FileOwnerView:
+        normalized_repository_rel_path = self._prevalidate_existing_repository_file_target(
+            repository_path,
+            repository_rel_path,
+            tool_name="get_file_owner_by_path",
+            error_cls=McpNotFoundError,
+        )
+
         def _callback(repository: Repository) -> FileOwnerView:
             try:
-                return self._ownership_presenter.file_owner_view(repository.get_file_owner(repository_rel_path))
+                return self._ownership_presenter.file_owner_view(repository.get_file_owner(normalized_repository_rel_path))
             except ValueError as exc:
                 raise McpNotFoundError(
                     explain_file_target_error(
                         repository,
-                        repository_rel_path,
+                        normalized_repository_rel_path,
                         str(exc),
                         tool_name="get_file_owner_by_path",
                     )
@@ -489,21 +501,32 @@ class SuitMcpService:
         limit: int | None = None,
         offset: int = 0,
     ) -> ListResult[RelatedTestView]:
+        normalized_repository_rel_path = (
+            self._prevalidate_existing_repository_file_target(
+                repository_path,
+                repository_rel_path,
+                tool_name="get_related_tests_by_path",
+                error_cls=McpValidationError,
+            )
+            if repository_rel_path is not None
+            else None
+        )
+
         def _callback(repository: Repository) -> ListResult[RelatedTestView]:
             try:
                 items = tuple(
                     self._test_presenter.related_test_view(item)
                     for item in repository.tests.get_related_tests(
-                        RelatedTestTarget(repository_rel_path=repository_rel_path, owner_id=owner_id)
+                        RelatedTestTarget(repository_rel_path=normalized_repository_rel_path, owner_id=owner_id)
                     )
                 )
                 return self._pagination.paginate(items, limit, offset)
             except ValueError as exc:
                 message = str(exc)
-                if repository_rel_path is not None:
+                if normalized_repository_rel_path is not None:
                     message = explain_file_target_error(
                         repository,
-                        repository_rel_path,
+                        normalized_repository_rel_path,
                         message,
                         tool_name="get_related_tests_by_path",
                     )
@@ -526,15 +549,20 @@ class SuitMcpService:
         validate_change_preview_limit(test_preview_limit, "test_preview_limit", error_cls=McpValidationError)
         validate_change_preview_limit(runner_preview_limit, "runner_preview_limit", error_cls=McpValidationError)
         validated_detail_level = self._validate_detail_level(detail_level)
+        normalized_paths = self._prevalidate_existing_repository_file_targets(
+            repository_path,
+            repository_rel_paths,
+            tool_name="what_changes_if_i_edit_this",
+            field_name="repository_rel_paths",
+        )
+        target_count = len(normalized_paths)
+        self._validate_detail_scope(
+            tool_name="what_changes_if_i_edit_this",
+            detail_level=validated_detail_level,
+            target_count=target_count,
+        )
 
         def _callback(repository: Repository) -> BatchChangeImpactCompactView | BatchChangeImpactStandardView | BatchChangeImpactView:
-            normalized_paths = self._validate_repository_rel_paths(repository_rel_paths, field_name="repository_rel_paths")
-            target_count = len(normalized_paths)
-            self._validate_detail_scope(
-                tool_name="what_changes_if_i_edit_this",
-                detail_level=validated_detail_level,
-                target_count=target_count,
-            )
             degrade_compact_single_target = self._should_degrade_compact_single_target(
                 repository,
                 normalized_paths,
@@ -684,21 +712,32 @@ class SuitMcpService:
         repository_rel_path: str | None = None,
         owner_id: str | None = None,
     ) -> MinimumVerifiedChangeSetView:
+        normalized_repository_rel_path = (
+            self._prevalidate_existing_repository_file_target(
+                repository_path,
+                repository_rel_path,
+                tool_name="get_minimum_verified_change_set_by_path",
+                error_cls=McpValidationError,
+            )
+            if repository_rel_path is not None
+            else None
+        )
+
         def _callback(repository: Repository) -> MinimumVerifiedChangeSetView:
             try:
                 target = ChangeTarget(
                     symbol_id=symbol_id,
-                    repository_rel_path=repository_rel_path,
+                    repository_rel_path=normalized_repository_rel_path,
                     owner_id=owner_id,
                 )
                 change_set = repository.get_minimum_verified_change_set(target)
                 return self._change_impact_presenter.minimum_verified_change_set_view(change_set)
             except ValueError as exc:
                 message = str(exc)
-                if repository_rel_path is not None:
+                if normalized_repository_rel_path is not None:
                     message = explain_file_target_error(
                         repository,
-                        repository_rel_path,
+                        normalized_repository_rel_path,
                         message,
                         tool_name="get_minimum_verified_change_set_by_path",
                     )
@@ -711,8 +750,14 @@ class SuitMcpService:
         repository_path: str,
         repository_rel_paths: tuple[str, ...],
     ) -> BatchMinimumVerifiedChangeSetView:
+        normalized_paths = self._prevalidate_existing_repository_file_targets(
+            repository_path,
+            repository_rel_paths,
+            tool_name="what_should_i_run",
+            field_name="repository_rel_paths",
+        )
+
         def _callback(repository: Repository) -> BatchMinimumVerifiedChangeSetView:
-            normalized_paths = self._validate_repository_rel_paths(repository_rel_paths, field_name="repository_rel_paths")
             targets: list[BatchMinimumVerifiedChangeSetTargetView] = []
             with self._timing_stage("target_collection"):
                 for repository_rel_path in normalized_paths:
@@ -786,8 +831,14 @@ class SuitMcpService:
         repository_path: str,
         repository_rel_paths: tuple[str, ...],
     ) -> BatchProofGapView:
+        normalized_paths = self._prevalidate_existing_repository_file_targets(
+            repository_path,
+            repository_rel_paths,
+            tool_name="what_is_not_proven",
+            field_name="repository_rel_paths",
+        )
+
         def _callback(repository: Repository) -> BatchProofGapView:
-            normalized_paths = self._validate_repository_rel_paths(repository_rel_paths, field_name="repository_rel_paths")
             with self._timing_stage("target_collection"):
                 targets = tuple(
                     self._proof_gap_target_view(repository, repository_rel_path)
@@ -1035,14 +1086,20 @@ class SuitMcpService:
             raise McpValidationError(
                 "requested_action_kind must be one of: build, quality_hygiene, quality_validation, runner, test"
             )
+        normalized_repository_rel_path = self._prevalidate_existing_repository_file_target(
+            repository_path,
+            repository_rel_path,
+            tool_name="can_i_do_this",
+            error_cls=McpValidationError,
+        )
 
         def _callback(repository: Repository) -> ActionAvailabilityView:
             try:
-                target = ChangeTarget(repository_rel_path=repository_rel_path)
+                target = ChangeTarget(repository_rel_path=normalized_repository_rel_path)
                 truth_coverage = self._intelligence_presenter.truth_coverage_summary_view(
                     repository.get_change_truth_coverage(target)
                 )
-                owner = self._ownership_presenter.owner_view(repository.get_file_owner(repository_rel_path).owner)
+                owner = self._ownership_presenter.owner_view(repository.get_file_owner(normalized_repository_rel_path).owner)
                 primary_component = None
                 minimum_verified = None
                 available_action_kinds: tuple[str, ...] = tuple()
@@ -1066,7 +1123,7 @@ class SuitMcpService:
                     raise McpValidationError(
                         explain_file_target_error(
                             repository,
-                            repository_rel_path,
+                            normalized_repository_rel_path,
                             str(exc),
                             tool_name="can_i_do_this",
                         )
@@ -3254,6 +3311,89 @@ class SuitMcpService:
         if len(set(normalized)) != len(normalized):
             raise McpValidationError(f"{field_name} must not contain duplicates")
         return normalized
+
+    def _prevalidate_existing_repository_file_targets(
+        self,
+        repository_path: str,
+        repository_rel_paths: tuple[str, ...] | str,
+        *,
+        tool_name: str,
+        field_name: str,
+        error_cls=McpValidationError,
+    ) -> tuple[str, ...]:
+        normalized_paths = self._validate_repository_rel_paths(repository_rel_paths, field_name=field_name)
+        repository_root = self._resolve_repository_root_for_prevalidation(repository_path, error_cls=error_cls)
+        if repository_root is None:
+            return normalized_paths
+        for repository_rel_path in normalized_paths:
+            self._prevalidate_existing_repository_file_target_from_root(
+                repository_root,
+                repository_rel_path,
+                tool_name=tool_name,
+                error_cls=error_cls,
+            )
+        return normalized_paths
+
+    def _prevalidate_existing_repository_file_target(
+        self,
+        repository_path: str,
+        repository_rel_path: str,
+        *,
+        tool_name: str,
+        error_cls=McpValidationError,
+    ) -> str:
+        normalized_repository_rel_path = self._validate_repository_rel_paths(
+            repository_rel_path,
+            field_name="repository_rel_path",
+        )[0]
+        repository_root = self._resolve_repository_root_for_prevalidation(repository_path, error_cls=error_cls)
+        if repository_root is None:
+            return normalized_repository_rel_path
+        self._prevalidate_existing_repository_file_target_from_root(
+            repository_root,
+            normalized_repository_rel_path,
+            tool_name=tool_name,
+            error_cls=error_cls,
+        )
+        return normalized_repository_rel_path
+
+    @staticmethod
+    def _resolve_repository_root_for_prevalidation(
+        repository_path: str,
+        *,
+        error_cls,
+    ) -> Path | None:
+        try:
+            return Repository.root_candidate(Path(repository_path))
+        except ValueError as exc:
+            message = str(exc)
+            if "does not exist" in message or "is not a directory" in message:
+                raise error_cls(message) from exc
+            return None
+
+    @staticmethod
+    def _prevalidate_existing_repository_file_target_from_root(
+        repository_root: Path,
+        repository_rel_path: str,
+        *,
+        tool_name: str,
+        error_cls,
+    ) -> None:
+        normalized = repository_rel_path.strip().replace("\\", "/").removeprefix("./")
+        candidate = (repository_root / normalized).resolve()
+        try:
+            candidate.relative_to(repository_root)
+        except ValueError as exc:
+            raise error_cls(f"repository file target must stay within repository root: `{normalized}`") from exc
+        if candidate.exists() and candidate.is_file():
+            return
+        message = explain_file_target_error_for_root(
+            repository_root,
+            normalized,
+            "unknown repository file owner",
+            tool_name=tool_name,
+        )
+        raise error_cls(message)
 
     @staticmethod
     def _dedupe_views(items: tuple[T, ...], *, key: Callable[[T], object]) -> tuple[T, ...]:

@@ -16,6 +16,19 @@
       "is_primary": true
     },
     {
+      "label": "mygamesanywhere",
+      "repository_root": "C:\\src\\github.com\\GreenFuze\\MyGamesAnywhere",
+      "ecosystems": [
+        "go",
+        "npm"
+      ],
+      "notes": [
+        "Primary live-project paper target.",
+        "Use for hybrid live-study and controlled MGA evaluation runs."
+      ],
+      "is_primary": false
+    },
+    {
       "label": "mygames-server",
       "repository_root": "C:\\src\\github.com\\GreenFuze\\MyGamesAnywhere\\server",
       "ecosystems": [

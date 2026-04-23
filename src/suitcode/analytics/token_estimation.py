@@ -23,6 +23,14 @@ class TokenEstimator:
     )
 
     def estimate(self, event: AnalyticsEvent) -> TokenEstimate:
+        if event.status == AnalyticsStatus.STARTED:
+            return TokenEstimate(
+                tool_name=event.tool_name,
+                actual_tokens_estimate=0,
+                counterfactual_tokens_estimate=0,
+                estimated_tokens_saved=0,
+                confidence_level=SavingsConfidence.LOW,
+            )
         actual_tokens = self._actual_tokens(event)
         if event.status == AnalyticsStatus.ERROR:
             return TokenEstimate(

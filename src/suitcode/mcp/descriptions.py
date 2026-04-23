@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from suitcode.mcp.tool_catalog import TOOL_CATALOG
+from suitcode.mcp.tool_catalog import PUBLIC_TOOL_CATALOG
 
 SERVER_NAME = "SuitCode"
 SERVER_INSTRUCTIONS = (
@@ -13,7 +13,7 @@ CORE_SERVER_INSTRUCTIONS = (
     "Use it when you need grounded answers about repository structure, file ownership, change impact, what to run, or whether an action is supported."
 )
 
-TOOL_DESCRIPTIONS = {item.name: item.description for item in TOOL_CATALOG}
+TOOL_DESCRIPTIONS = {item.name: item.description for item in PUBLIC_TOOL_CATALOG}
 
 RESOURCE_DESCRIPTIONS = {
     "supported_providers": "Read-only snapshot of supported providers.",

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from suitcode.core.build_service import BuildService
+from suitcode.core.change_models import ChangeTarget
 from suitcode.core.code.evidence_tier import CodeEvidenceTier
 from suitcode.core.repository import Repository
 from suitcode.core.runner_service import RunnerService
@@ -373,3 +374,26 @@ def test_repository_structural_file_context_does_not_call_semantic_symbols(npm_r
 
     assert contexts[0].symbol_count >= 1
     assert contexts[0].symbols_preview[0].provenance[0].source_kind.value == "syntax"
+
+
+def test_repository_reuses_file_semantic_facts_across_describe_and_change_analysis(npm_repository) -> None:
+    repository = npm_repository
+    code_reference_service = repository._build_code_reference_service()
+    wrapped = code_reference_service.references_for_file
+    calls = 0
+
+    def _counted(repository_rel_path: str, max_locations: int | None = None):
+        nonlocal calls
+        calls += 1
+        return wrapped(repository_rel_path, max_locations=max_locations)
+
+    code_reference_service.references_for_file = _counted  # type: ignore[method-assign]
+
+    repository.describe_files(("packages/core/src/index.ts",), reference_site_limit=5)
+    repository.describe_files(("packages/core/src/index.ts",), reference_site_limit=3)
+    repository.analyze_change(
+        ChangeTarget(repository_rel_path="packages/core/src/index.ts"),
+        reference_preview_limit=4,
+    )
+
+    assert calls == 1

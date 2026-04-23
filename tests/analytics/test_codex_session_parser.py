@@ -71,3 +71,33 @@ def test_parser_fails_fast_on_invalid_tool_call_shape(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="invalid tool call name"):
         CodexSessionParser().parse(artifact)
+
+
+def test_parser_tolerates_multiple_session_meta_entries(tmp_path: Path) -> None:
+    repo_root = (tmp_path / "repo").resolve()
+    repo_root.mkdir()
+    parent_root = (tmp_path / "parent").resolve()
+    parent_root.mkdir()
+    artifact = tmp_path / "multi-session.jsonl"
+    artifact.write_text(
+        "\n".join(
+            (
+                '{"timestamp":"2026-03-08T10:00:00.000Z","type":"session_meta","payload":{"id":"codex-session-parent","timestamp":"2026-03-08T10:00:00.000Z","cwd":"'
+                + parent_root.as_posix()
+                + '"}}',
+                '{"timestamp":"2026-03-08T10:00:01.000Z","type":"session_meta","payload":{"id":"codex-session-child","timestamp":"2026-03-08T10:00:01.000Z","cwd":"'
+                + repo_root.as_posix()
+                + '"}}',
+                '{"timestamp":"2026-03-08T10:00:02.000Z","type":"response_item","payload":{"type":"function_call","name":"mcp__suitcode__understand_repository","call_id":"call-1","arguments":{"repository_path":"'
+                + repo_root.as_posix()
+                + '"}}}',
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    parsed = CodexSessionParser().parse(artifact)
+
+    assert parsed.session_id == "codex-session-child"
+    assert parsed.repository_root == str(repo_root)
+    assert any("multiple session_meta entries were detected" in note for note in parsed.notes)

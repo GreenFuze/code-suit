@@ -1474,6 +1474,9 @@ class ActionAvailabilityView(StrictModel):
 
 class AnalyticsSummaryView(StrictModel):
     total_calls: int
+    started_calls: int
+    finished_calls: int
+    unfinished_calls: int
     success_calls: int
     error_calls: int
     p50_duration_ms: int
@@ -1488,6 +1491,9 @@ class AnalyticsSummaryView(StrictModel):
 class ToolUsageAnalyticsView(StrictModel):
     tool_name: str
     total_calls: int
+    started_calls: int
+    finished_calls: int
+    unfinished_calls: int
     success_calls: int
     error_calls: int
     p50_duration_ms: int

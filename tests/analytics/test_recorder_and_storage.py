@@ -21,6 +21,7 @@ def test_recorder_writes_timestamp_and_redacts_sensitive_arguments(tmp_path: Pat
     recorder = ToolCallRecorder(store)
 
     recorder.record_success(
+        invocation_id=None,
         tool_name="open_workspace",
         arguments={"repository_path": "C:/repo", "api_token": "secret-value"},
         repository_root=None,
@@ -42,6 +43,7 @@ def test_recorder_applies_and_clears_benchmark_context(tmp_path: Path) -> None:
 
     with recorder.benchmark_context(run_id="benchmark-1", task_id="task-1"):
         recorder.record_success(
+            invocation_id=None,
             tool_name="repository_summary",
             arguments={"workspace_id": "workspace:test", "repository_id": "repo:test"},
             repository_root=None,
@@ -50,6 +52,7 @@ def test_recorder_applies_and_clears_benchmark_context(tmp_path: Path) -> None:
         )
 
     recorder.record_success(
+        invocation_id=None,
         tool_name="list_components",
         arguments={"workspace_id": "workspace:test", "repository_id": "repo:test"},
         repository_root=None,
@@ -81,6 +84,7 @@ def test_storage_rollover_is_size_based(tmp_path: Path) -> None:
 
     for index in range(12):
         recorder.record_success(
+            invocation_id=None,
             tool_name="list_supported_providers",
             arguments={"index": index, "payload": "x" * 700},
             repository_root=None,
@@ -92,3 +96,54 @@ def test_storage_rollover_is_size_based(tmp_path: Path) -> None:
     archived = tuple(events_dir.glob("events-*.jsonl"))
     assert archived
     assert (events_dir / "active.jsonl").exists()
+
+
+def test_recorder_writes_started_event_with_shared_invocation_id(tmp_path: Path) -> None:
+    store = JsonlAnalyticsStore(_settings(tmp_path))
+    recorder = ToolCallRecorder(store)
+
+    recorder.record_started(
+        invocation_id="call:123",
+        tool_name="understand_file",
+        arguments={"repository_path": "C:/repo"},
+        repository_root=None,
+    )
+    recorder.record_success(
+        invocation_id="call:123",
+        tool_name="understand_file",
+        arguments={"repository_path": "C:/repo"},
+        repository_root=None,
+        result={"ok": True},
+        duration_ms=9,
+    )
+
+    events = store.load_events(include_global=True)
+    assert len(events) == 2
+    assert events[0].status == AnalyticsStatus.STARTED
+    assert events[1].status == AnalyticsStatus.SUCCESS
+    assert events[0].invocation_id == "call:123"
+    assert events[1].invocation_id == "call:123"
+
+
+def test_recorder_flushes_interrupted_started_calls(tmp_path: Path) -> None:
+    repository_root = (tmp_path / "repo").resolve()
+    repository_root.mkdir()
+    store = JsonlAnalyticsStore(_settings(tmp_path))
+    recorder = ToolCallRecorder(store)
+
+    recorder.record_started(
+        invocation_id="call:interrupted",
+        tool_name="understand_file",
+        arguments={"repository_path": str(repository_root), "repository_rel_paths": ("src/index.ts",)},
+        repository_root=repository_root,
+        started_at_epoch_seconds=1_700_000_000.0,
+        started_perf_counter=10.0,
+    )
+    recorder.flush_interrupted_calls(reason="normal shutdown")
+
+    events = store.load_events(repository_root=repository_root, include_global=False)
+    assert len(events) == 2
+    assert events[0].status == AnalyticsStatus.STARTED
+    assert events[1].status == AnalyticsStatus.INTERRUPTED
+    assert events[1].invocation_id == "call:interrupted"
+    assert events[1].error_class == "InterruptedToolCall"

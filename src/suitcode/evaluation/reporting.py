@@ -53,6 +53,20 @@ class CodexEvaluationReporter:
             return None
         return CodexEvaluationReport.model_validate_json(candidates[0].read_text(encoding="utf-8"))
 
+    def load_latest_report_for_tracked_repository(self, tracked_repository_label: str) -> CodexEvaluationReport | None:
+        if not self._runs_root.exists():
+            return None
+        candidates = sorted(
+            self._runs_root.glob("*/report.json"),
+            key=lambda item: item.stat().st_mtime_ns,
+            reverse=True,
+        )
+        for candidate in candidates:
+            report = CodexEvaluationReport.model_validate_json(candidate.read_text(encoding="utf-8"))
+            if tracked_repository_label in report.tracked_repository_labels:
+                return report
+        return None
+
 
 class CodexComparisonReporter:
     def __init__(self, comparisons_root: Path) -> None:

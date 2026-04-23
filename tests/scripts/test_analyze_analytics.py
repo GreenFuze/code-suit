@@ -49,6 +49,9 @@ class _FakeAggregator:
     def summary(self, repository_root=None, include_global=False, session_id=None, event_filter=None):
         return AnalyticsSummary(
             total_calls=2,
+            started_calls=0,
+            finished_calls=2,
+            unfinished_calls=0,
             success_calls=1,
             error_calls=1,
             p50_duration_ms=25,
@@ -65,6 +68,9 @@ class _FakeAggregator:
             ToolUsageStats(
                 tool_name="get_minimum_verified_change_set_by_path",
                 total_calls=1,
+                started_calls=0,
+                finished_calls=1,
+                unfinished_calls=0,
                 success_calls=0,
                 error_calls=1,
                 p50_duration_ms=41,

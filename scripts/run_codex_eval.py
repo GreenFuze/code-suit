@@ -25,6 +25,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sandbox", default="workspace-write")
     parser.add_argument("--bypass-approvals-and-sandbox", action="store_true")
     parser.add_argument("--auto-orientation-hint", action="store_true")
+    parser.add_argument("--experiment-id", default=None)
+    parser.add_argument("--experiment-label", default=None)
+    parser.add_argument("--workspace-mode", default=None)
+    parser.add_argument("--study-kind", default=None)
+    parser.add_argument("--notes", default=None)
     return parser
 
 
@@ -51,6 +56,11 @@ def main() -> None:
         sandbox=args.sandbox,
         bypass_approvals_and_sandbox=args.bypass_approvals_and_sandbox,
         auto_orientation_hint=args.auto_orientation_hint,
+        experiment_id=args.experiment_id,
+        experiment_label=args.experiment_label,
+        workspace_mode=args.workspace_mode,
+        study_kind=args.study_kind,
+        notes=args.notes,
     )
     if args.as_json:
         print(report.model_dump_json(indent=2))

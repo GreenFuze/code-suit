@@ -32,7 +32,11 @@ class InefficiencyDetector:
         }
 
     def detect(self, events: tuple[AnalyticsEvent, ...]) -> tuple[InefficiencyFinding, ...]:
-        filtered = tuple(event for event in events if event.tool_name not in self._excluded_tools)
+        filtered = tuple(
+            event
+            for event in events
+            if event.tool_name not in self._excluded_tools and event.status != AnalyticsStatus.STARTED
+        )
         grouped_by_session: dict[str, list[AnalyticsEvent]] = defaultdict(list)
         for event in filtered:
             grouped_by_session[event.session_id].append(event)

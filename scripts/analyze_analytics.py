@@ -153,6 +153,9 @@ def main() -> None:
     print(f"Exclude benchmark events: {args.exclude_benchmark_events}")
     print()
     print(f"Total calls: {summary.total_calls}")
+    print(f"Started calls: {summary.started_calls}")
+    print(f"Finished calls: {summary.finished_calls}")
+    print(f"Unfinished calls: {summary.unfinished_calls}")
     print(f"Success calls: {summary.success_calls}")
     print(f"Error calls: {summary.error_calls}")
     print(f"P50 duration (ms): {summary.p50_duration_ms}")
@@ -166,7 +169,7 @@ def main() -> None:
     print("--------------")
     for item in tool_usage:
         print(
-            f"{item.tool_name}: calls={item.total_calls}, errors={item.error_calls}, "
+            f"{item.tool_name}: calls={item.total_calls}, unfinished={item.unfinished_calls}, errors={item.error_calls}, "
             f"p95={item.p95_duration_ms}ms, est_saved={item.estimated_tokens_saved}"
         )
     print()
@@ -189,6 +192,8 @@ def main() -> None:
                 f"{event.timestamp_utc} [{event.status.value}] tool={event.tool_name} "
                 f"session={event.session_id} duration={event.duration_ms}ms"
             )
+            if event.invocation_id:
+                print(f"  invocation_id={event.invocation_id}")
             if event.repository_root:
                 print(f"  repository_root={event.repository_root}")
             if event.workspace_id or event.repository_id:

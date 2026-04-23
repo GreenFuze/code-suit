@@ -75,6 +75,16 @@ class _TaskAttempt:
     failure_summary: str | None
 
 
+@dataclass(frozen=True)
+class _EvaluationAnalyticsContext:
+    experiment_id: str | None = None
+    experiment_label: str | None = None
+    model_name: str | None = None
+    workspace_mode: str | None = None
+    study_kind: str | None = None
+    notes: str | None = None
+
+
 class CodexEvaluationService:
     def __init__(
         self,
@@ -123,8 +133,21 @@ class CodexEvaluationService:
         sandbox: str = "workspace-write",
         bypass_approvals_and_sandbox: bool = False,
         auto_orientation_hint: bool = False,
+        experiment_id: str | None = None,
+        experiment_label: str | None = None,
+        workspace_mode: str | None = None,
+        study_kind: str | None = None,
+        notes: str | None = None,
     ) -> CodexEvaluationReport:
         report_id = f"codex-eval-{uuid4().hex}"
+        analytics_context = _EvaluationAnalyticsContext(
+            experiment_id=experiment_id,
+            experiment_label=experiment_label,
+            model_name=model,
+            workspace_mode=workspace_mode,
+            study_kind=study_kind,
+            notes=notes,
+        )
         task_metadata: dict[str, dict[str, object]] = {}
         results_list: list[CodexEvaluationTaskResult] = []
         for task in tasks:
@@ -140,6 +163,7 @@ class CodexEvaluationService:
                     sandbox=sandbox,
                     bypass_approvals_and_sandbox=bypass_approvals_and_sandbox,
                     auto_orientation_hint=auto_orientation_hint,
+                    analytics_context=analytics_context,
                     task_metadata=task_metadata,
                 )
             except Exception as exc:  # noqa: BLE001
@@ -186,6 +210,7 @@ class CodexEvaluationService:
         sandbox: str,
         bypass_approvals_and_sandbox: bool,
         auto_orientation_hint: bool,
+        analytics_context: _EvaluationAnalyticsContext,
         task_metadata: dict[str, dict[str, object]],
     ) -> CodexEvaluationTaskResult:
         repository_root = (self._working_directory / task.repository_path).expanduser().resolve()
@@ -205,13 +230,14 @@ class CodexEvaluationService:
                 baseline=baseline,
                 repository_root=repository_root,
                 prompt_text=prompt_text,
-                      model=model,
-                      profile=profile,
-                      prompt_arm=prompt_arm,
-                      config_overrides=config_overrides,
-                      full_auto=full_auto,
-                      sandbox=sandbox,
+                model=model,
+                profile=profile,
+                prompt_arm=prompt_arm,
+                config_overrides=config_overrides,
+                full_auto=full_auto,
+                sandbox=sandbox,
                 bypass_approvals_and_sandbox=bypass_approvals_and_sandbox,
+                env_overrides=self._task_env_overrides(task=task, analytics_context=analytics_context),
                 output_directory=task_dir / "attempt-1",
                 attempt_number=1,
             )
@@ -230,6 +256,7 @@ class CodexEvaluationService:
                     full_auto=full_auto,
                     sandbox=sandbox,
                     bypass_approvals_and_sandbox=bypass_approvals_and_sandbox,
+                    env_overrides=self._task_env_overrides(task=task, analytics_context=analytics_context),
                     output_directory=task_dir / "attempt-2",
                     attempt_number=2,
                 )
@@ -249,6 +276,9 @@ class CodexEvaluationService:
         all_required_tool_traces = tuple(trace for attempt in attempts for trace in attempt.required_tool_traces)
         task_metadata[task.task_id] = {
             "task": task.model_dump(mode="json"),
+            "tracked_repository_label": task.tracked_repository_label,
+            "task_kind": task.task_kind,
+            "study_kind": task.study_kind,
             "baseline": baseline.expected_answer,
             "failure_kind": (final_attempt.failure_kind.value if final_attempt.failure_kind is not None else None),
             "notes": combined_notes,
@@ -273,6 +303,9 @@ class CodexEvaluationService:
         return CodexEvaluationTaskResult(
             task_id=task.task_id,
             task_family=task.task_family.value,
+            tracked_repository_label=task.tracked_repository_label,
+            task_kind=task.task_kind,
+            study_kind=task.study_kind,
             status=final_attempt.status,
             failure_kind=final_attempt.failure_kind,
             failure_summary=final_attempt.failure_summary,
@@ -318,6 +351,7 @@ class CodexEvaluationService:
         full_auto: bool,
         sandbox: str,
         bypass_approvals_and_sandbox: bool,
+        env_overrides: dict[str, str],
         output_directory: Path,
         attempt_number: int,
     ) -> _TaskAttempt:
@@ -333,6 +367,7 @@ class CodexEvaluationService:
             full_auto=full_auto,
             sandbox=sandbox,
             bypass_approvals_and_sandbox=bypass_approvals_and_sandbox,
+            env_overrides=env_overrides,
         )
 
         notes: list[str] = []
@@ -485,6 +520,9 @@ class CodexEvaluationService:
     def load_latest_report(self) -> CodexEvaluationReport | None:
         return self._reporter.load_latest_report()
 
+    def load_latest_report_for_tracked_repository(self, tracked_repository_label: str) -> CodexEvaluationReport | None:
+        return self._reporter.load_latest_report_for_tracked_repository(tracked_repository_label)
+
     @staticmethod
     def _default_service_factory():
         from suitcode.mcp.service import SuitMcpService
@@ -494,10 +532,28 @@ class CodexEvaluationService:
 
     def _build_baseline(self, task: CodexEvaluationTask, *, repository_root: Path) -> _BaselineExpectation:
         service = self._service_factory()
+        contract = contract_for(task.task_family)
+        if task.task_family == CodexTaskFamily.PROOF_GAP:
+            repository_rel_path = task.target_selector["repository_rel_path"]
+            result = service.what_is_not_proven(str(repository_root), (repository_rel_path,))
+            if not result.targets:
+                raise ValueError("what_is_not_proven returned no targets for proof_gap baseline")
+            target = result.targets[0]
+            return _BaselineExpectation(
+                expected_answer={
+                    "owner_id": target.owner.id,
+                    "primary_component_id": (target.primary_component.id if target.primary_component is not None else None),
+                    "validation_is_build_only": target.validation_is_build_only,
+                    "has_focused_test_surface": target.has_focused_test_surface,
+                    "has_runner_surface": target.has_runner_surface,
+                    "gap_codes": sorted(item.gap_code for item in target.gap_items),
+                    "nearest_validation_artifact_ids": sorted(item.item_id for item in target.nearest_validation_artifacts),
+                },
+                expected_argument_subsets=contract.expected_argument_subsets(task, workspace_id="", repository_id=""),
+            )
         opened = service.open_workspace(str(repository_root))
         workspace_id = opened.workspace.workspace_id
         repository_id = opened.initial_repository.repository_id
-        contract = contract_for(task.task_family)
         try:
             if task.task_family == CodexTaskFamily.ORIENTATION:
                 summary = service.repository_summary(workspace_id, repository_id, preview_limit=8)
@@ -790,10 +846,16 @@ class CodexEvaluationService:
         no_high_value_sessions = sum(1 for item in results if item.used_high_value_tool_count == 0)
         retried_task_count = sum(1 for item in results if item.infrastructure_retry_applied)
         post_retry_pass_count = sum(1 for item in results if item.infrastructure_retry_applied and item.status == EvaluationStatus.PASSED)
+        task_kind_mix = Counter(item.task_kind for item in results if item.task_kind is not None)
+        study_kind_mix = Counter(item.study_kind for item in results if item.study_kind is not None)
+        tracked_repository_labels = tuple(sorted({item.tracked_repository_label for item in results if item.tracked_repository_label}))
         return CodexEvaluationReport(
             report_id=report_id,
             generated_at_utc=datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
             agent_metadata=agent_metadata,
+            tracked_repository_labels=tracked_repository_labels,
+            task_kind_mix=dict(task_kind_mix),
+            study_kind_mix=dict(study_kind_mix),
             task_total=task_total,
             task_passed=task_passed,
             task_failed=task_failed,
@@ -862,6 +924,31 @@ class CodexEvaluationService:
             git_branch=git_branch,
             git_repository_url=git_repository_url,
         )
+
+    @staticmethod
+    def _task_env_overrides(
+        *,
+        task: CodexEvaluationTask,
+        analytics_context: _EvaluationAnalyticsContext,
+    ) -> dict[str, str]:
+        overrides: dict[str, str] = {
+            "SUITCODE_TASK_ID": task.task_id,
+            "SUITCODE_TASK_KIND": task.task_kind or task.task_family.value,
+        }
+        study_kind = task.study_kind or analytics_context.study_kind
+        if study_kind:
+            overrides["SUITCODE_STUDY_KIND"] = study_kind
+        if analytics_context.experiment_id:
+            overrides["SUITCODE_ANALYTICS_EXPERIMENT_ID"] = analytics_context.experiment_id
+        if analytics_context.experiment_label:
+            overrides["SUITCODE_ANALYTICS_EXPERIMENT_LABEL"] = analytics_context.experiment_label
+        if analytics_context.model_name:
+            overrides["SUITCODE_MODEL_NAME"] = analytics_context.model_name
+        if analytics_context.workspace_mode:
+            overrides["SUITCODE_WORKSPACE_MODE"] = analytics_context.workspace_mode
+        if analytics_context.notes:
+            overrides["SUITCODE_ANALYTICS_NOTES"] = analytics_context.notes
+        return overrides
 
     @staticmethod
     def _extract_run_identity(results: tuple[CodexEvaluationTaskResult, ...]) -> tuple[str | None, str | None, str | None]:
@@ -938,6 +1025,9 @@ class CodexEvaluationService:
         return CodexEvaluationTaskResult(
             task_id=task.task_id,
             task_family=task.task_family.value,
+            tracked_repository_label=task.tracked_repository_label,
+            task_kind=task.task_kind,
+            study_kind=task.study_kind,
             status=EvaluationStatus.ERROR,
             failure_kind=failure_kind,
             failure_summary=summary,

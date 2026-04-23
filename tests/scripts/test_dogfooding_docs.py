@@ -10,7 +10,7 @@ def test_tracked_repositories_manifest_exists_and_includes_expected_entries() ->
 
     assert payload["schema_version"] == "1.0"
     labels = {item["label"] for item in payload["repositories"]}
-    assert {"suitcode", "mygames-server"} <= labels
+    assert {"suitcode", "mygamesanywhere", "mygames-server"} <= labels
 
 
 def test_phase3_runbook_links_manifest_and_summary_script() -> None:

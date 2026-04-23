@@ -23,6 +23,7 @@ from suitcode.core.change_impact_service import ChangeImpactService
 from suitcode.core.component_context_resolver import ComponentContextResolver
 from suitcode.core.ownership_index import OwnershipIndex
 from suitcode.core.context_service import ContextService
+from suitcode.core.file_semantic_facts import FileSemanticFactsService
 from suitcode.core.implementation_flow_service import ImplementationFlowService
 from suitcode.core.impact_service import ImpactService
 from suitcode.core.minimum_verified_change_set_models import MinimumVerifiedChangeSet
@@ -155,6 +156,7 @@ class Repository:
         self._ownership_index_service: OwnershipIndex | None = None
         self._component_context_resolver: ComponentContextResolver | None = None
         self._code_reference_service: CodeReferenceService | None = None
+        self._file_semantic_facts_service: FileSemanticFactsService | None = None
         self._context_service: ContextService | None = None
         self._impact_service: ImpactService | None = None
         self._change_impact_service: ChangeImpactService | None = None
@@ -617,6 +619,7 @@ class Repository:
                 self._build_ownership_index(),
                 self._build_component_context_resolver(),
                 self._build_code_reference_service(),
+                self._build_file_semantic_facts_service(),
             )
         return self._context_service
 
@@ -649,9 +652,19 @@ class Repository:
                 self._build_context_service(),
                 self._build_component_context_resolver(),
                 self._build_code_reference_service(),
+                self._build_file_semantic_facts_service(),
                 self._build_truth_coverage_service(),
             )
         return self._change_impact_service
+
+    def _build_file_semantic_facts_service(self) -> FileSemanticFactsService:
+        if self._file_semantic_facts_service is None:
+            self._file_semantic_facts_service = FileSemanticFactsService(
+                self,
+                self._build_ownership_index(),
+                self._build_code_reference_service(),
+            )
+        return self._file_semantic_facts_service
 
     def _build_runner_service(self) -> RunnerService:
         if self._runner_service is None:

@@ -45,7 +45,7 @@ class _FakeCommandRunner:
         self._sessions_root = sessions_root
         self._repository_root = repository_root
 
-    def __call__(self, command, *, input, text, capture_output, timeout, check):
+    def __call__(self, command, *, input, text, capture_output, timeout, check, **kwargs):
         output_last_message = Path(command[command.index("--output-last-message") + 1])
         output_last_message.parent.mkdir(parents=True, exist_ok=True)
         output_last_message.write_text(

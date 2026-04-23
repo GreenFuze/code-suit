@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from statistics import median
 from typing import Callable
@@ -16,6 +17,14 @@ from suitcode.analytics.models import (
 )
 from suitcode.analytics.storage import JsonlAnalyticsStore
 from suitcode.analytics.token_estimation import TokenEstimator
+
+
+@dataclass(frozen=True)
+class _InvocationRecord:
+    invocation_id: str
+    tool_name: str
+    has_started_event: bool
+    terminal_event: AnalyticsEvent | None
 
 
 class AnalyticsAggregator:
@@ -69,15 +78,20 @@ class AnalyticsAggregator:
             session_id=session_id,
             event_filter=event_filter,
         )
-        durations = [item.duration_ms for item in events]
+        invocations = _collapse_invocations(events)
+        terminal_events = [item.terminal_event for item in invocations if item.terminal_event is not None]
+        durations = [item.duration_ms for item in terminal_events]
         p50, p95 = _latency_percentiles(durations)
-        status_counts = Counter(item.status for item in events)
-        payload_bytes = sum(item.output_payload_bytes or 0 for item in events)
-        estimates = [self._estimator.estimate(item) for item in events]
+        status_counts = Counter(item.status for item in terminal_events)
+        payload_bytes = sum(item.output_payload_bytes or 0 for item in terminal_events)
+        estimates = [self._estimator.estimate(item) for item in terminal_events]
         confidence_mix = Counter(item.confidence_level.value for item in estimates)
-        tool_counts = Counter(item.tool_name for item in events)
+        tool_counts = Counter(item.tool_name for item in invocations)
         return AnalyticsSummary(
-            total_calls=len(events),
+            total_calls=len(invocations),
+            started_calls=sum(1 for item in invocations if item.has_started_event),
+            finished_calls=len(terminal_events),
+            unfinished_calls=sum(1 for item in invocations if item.has_started_event and item.terminal_event is None),
             success_calls=status_counts.get(AnalyticsStatus.SUCCESS, 0),
             error_calls=status_counts.get(AnalyticsStatus.ERROR, 0),
             p50_duration_ms=p50,
@@ -103,22 +117,26 @@ class AnalyticsAggregator:
             session_id=session_id,
             event_filter=event_filter,
         )
-        by_tool: dict[str, list[AnalyticsEvent]] = defaultdict(list)
-        for item in events:
+        by_tool: dict[str, list[_InvocationRecord]] = defaultdict(list)
+        for item in _collapse_invocations(events):
             by_tool[item.tool_name].append(item)
 
         results: list[ToolUsageStats] = []
         for tool_name, group in by_tool.items():
-            status_counts = Counter(item.status for item in group)
-            durations = [item.duration_ms for item in group]
+            terminal_events = [item.terminal_event for item in group if item.terminal_event is not None]
+            status_counts = Counter(item.status for item in terminal_events)
+            durations = [item.duration_ms for item in terminal_events]
             p50, p95 = _latency_percentiles(durations)
-            payload_bytes = sum(item.output_payload_bytes or 0 for item in group)
-            estimates = [self._estimator.estimate(item) for item in group]
+            payload_bytes = sum(item.output_payload_bytes or 0 for item in terminal_events)
+            estimates = [self._estimator.estimate(item) for item in terminal_events]
             confidence_mix = Counter(item.confidence_level.value for item in estimates)
             results.append(
                 ToolUsageStats(
                     tool_name=tool_name,
                     total_calls=len(group),
+                    started_calls=sum(1 for item in group if item.has_started_event),
+                    finished_calls=len(terminal_events),
+                    unfinished_calls=sum(1 for item in group if item.has_started_event and item.terminal_event is None),
                     success_calls=status_counts.get(AnalyticsStatus.SUCCESS, 0),
                     error_calls=status_counts.get(AnalyticsStatus.ERROR, 0),
                     p50_duration_ms=p50,
@@ -168,3 +186,26 @@ def _latency_percentiles(values: list[int]) -> tuple[int, int]:
     p95_index = int((len(ordered) - 1) * 0.95)
     p95 = ordered[p95_index]
     return p50, p95
+
+
+def _collapse_invocations(events: tuple[AnalyticsEvent, ...]) -> tuple[_InvocationRecord, ...]:
+    grouped: dict[str, list[AnalyticsEvent]] = defaultdict(list)
+    for event in events:
+        key = event.invocation_id or event.event_id
+        grouped[key].append(event)
+
+    invocations: list[_InvocationRecord] = []
+    for invocation_id, group in grouped.items():
+        ordered = sorted(group, key=lambda item: (item.timestamp_utc, item.event_id))
+        terminal_events = [item for item in ordered if item.status.is_terminal]
+        terminal_event = terminal_events[-1] if terminal_events else None
+        representative = terminal_event or ordered[-1]
+        invocations.append(
+            _InvocationRecord(
+                invocation_id=invocation_id,
+                tool_name=representative.tool_name,
+                has_started_event=any(item.status == AnalyticsStatus.STARTED for item in ordered),
+                terminal_event=terminal_event,
+            )
+        )
+    return tuple(sorted(invocations, key=lambda item: item.invocation_id))

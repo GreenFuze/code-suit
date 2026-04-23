@@ -12,20 +12,35 @@ def explain_file_target_error(
     *,
     tool_name: str,
 ) -> str:
+    return explain_file_target_error_for_root(
+        repository.root,
+        repository_rel_path,
+        message,
+        tool_name=tool_name,
+    )
+
+
+def explain_file_target_error_for_root(
+    repository_root: Path,
+    repository_rel_path: str,
+    message: str,
+    *,
+    tool_name: str,
+) -> str:
     normalized = repository_rel_path.strip().replace("\\", "/").removeprefix("./")
-    candidate = (repository.root / normalized).resolve()
+    candidate = (repository_root / normalized).resolve()
     try:
-        candidate.relative_to(repository.root)
+        candidate.relative_to(repository_root)
     except ValueError:
         return message
     if not candidate.exists():
-        sibling_summary = _same_directory_file_summary(repository.root, candidate.parent)
+        sibling_summary = _same_directory_file_summary(repository_root, candidate.parent)
         return (
             f"repository file not found: `{normalized}`. `{tool_name}` requires an existing repository file target."
             f"{sibling_summary}"
         )
     if candidate.is_dir():
-        sibling_summary = _same_directory_file_summary(repository.root, candidate)
+        sibling_summary = _same_directory_file_summary(repository_root, candidate)
         return (
             f"repository path `{normalized}` is a directory, not a file. `{tool_name}` requires a repository file target."
             f"{sibling_summary}"

@@ -13,8 +13,14 @@ class StrictModel(BaseModel):
 
 class AnalyticsStatus(StrEnum):
     __test__ = False
+    STARTED = "started"
     SUCCESS = "success"
     ERROR = "error"
+    INTERRUPTED = "interrupted"
+
+    @property
+    def is_terminal(self) -> bool:
+        return self in {self.SUCCESS, self.ERROR, self.INTERRUPTED}
 
 
 class SavingsConfidence(StrEnum):
@@ -25,9 +31,14 @@ class SavingsConfidence(StrEnum):
 
 
 class AnalyticsEvent(StrictModel):
-    schema_version: str = "1.0"
+    schema_version: str = "1.2"
     event_id: str
+    invocation_id: str | None = None
     session_id: str
+    analytics_run_id: str | None = None
+    task_id: str | None = None
+    task_kind: str | None = None
+    study_kind: str | None = None
     benchmark_run_id: str | None = None
     benchmark_task_id: str | None = None
     timestamp_utc: str
@@ -48,7 +59,12 @@ class AnalyticsEvent(StrictModel):
 
     @field_validator(
         "event_id",
+        "invocation_id",
         "session_id",
+        "analytics_run_id",
+        "task_id",
+        "task_kind",
+        "study_kind",
         "tool_name",
         "arguments_fingerprint_sha256",
         "benchmark_run_id",
@@ -77,12 +93,24 @@ class AnalyticsEvent(StrictModel):
             raise ValueError("duration_ms must be >= 0")
         if (self.benchmark_run_id is None) != (self.benchmark_task_id is None):
             raise ValueError("benchmark_run_id and benchmark_task_id must be provided together")
+        if self.status == AnalyticsStatus.STARTED:
+            if self.duration_ms != 0:
+                raise ValueError("started events must use duration_ms=0")
+            if self.error_class is not None or self.error_message is not None:
+                raise ValueError("started events must not include error fields")
+            if (
+                self.output_model_type is not None
+                or self.output_payload_bytes is not None
+                or self.output_payload_sha256 is not None
+                or self.output_item_count is not None
+            ):
+                raise ValueError("started events must not include output metadata")
         if self.status == AnalyticsStatus.SUCCESS:
             if self.error_class is not None or self.error_message is not None:
                 raise ValueError("success events must not include error fields")
-        if self.status == AnalyticsStatus.ERROR:
+        if self.status in {AnalyticsStatus.ERROR, AnalyticsStatus.INTERRUPTED}:
             if not self.error_class:
-                raise ValueError("error events must include error_class")
+                raise ValueError("non-success terminal events must include error_class")
         return self
 
 
@@ -97,6 +125,9 @@ class TokenEstimate(StrictModel):
 class ToolUsageStats(StrictModel):
     tool_name: str
     total_calls: int
+    started_calls: int
+    finished_calls: int
+    unfinished_calls: int
     success_calls: int
     error_calls: int
     p50_duration_ms: int
@@ -109,6 +140,9 @@ class ToolUsageStats(StrictModel):
 
 class AnalyticsSummary(StrictModel):
     total_calls: int
+    started_calls: int
+    finished_calls: int
+    unfinished_calls: int
     success_calls: int
     error_calls: int
     p50_duration_ms: int

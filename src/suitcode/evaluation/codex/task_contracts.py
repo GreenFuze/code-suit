@@ -34,6 +34,10 @@ class CodexTaskContract:
                 "1. Call open_workspace for this repository.",
                 "2. Call get_minimum_verified_change_set with the returned workspace_id and repository_id and the provided selector.",
             )
+        if self.task_family == CodexTaskFamily.PROOF_GAP:
+            return (
+                "1. Call what_is_not_proven for the provided repository-relative path only.",
+            )
         if self.task_family == CodexTaskFamily.TRUTH_COVERAGE:
             return (
                 "1. Call open_workspace for this repository.",
@@ -105,6 +109,11 @@ class CodexTaskContract:
             return (("analyze_change", {"workspace_id": workspace_id, "repository_id": repository_id, **selector}),)
         if self.task_family == CodexTaskFamily.MINIMUM_VERIFIED_CHANGE_SET:
             return (("get_minimum_verified_change_set", {"workspace_id": workspace_id, "repository_id": repository_id, **selector}),)
+        if self.task_family == CodexTaskFamily.PROOF_GAP:
+            repository_rel_path = selector.get("repository_rel_path")
+            if repository_rel_path is None:
+                return tuple()
+            return (("what_is_not_proven", {"repository_rel_paths": (repository_rel_path,)}),)
         if self.task_family == CodexTaskFamily.TRUTH_COVERAGE:
             return (("get_truth_coverage", {"workspace_id": workspace_id, "repository_id": repository_id}),)
         if self.task_family == CodexTaskFamily.BUG_FIX_NAVIGATION:

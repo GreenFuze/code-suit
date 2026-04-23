@@ -32,7 +32,7 @@ class CodexSessionParser:
         if not artifact_path.is_file():
             raise ValueError(f"Codex session artifact does not exist: `{artifact_path}`")
 
-        session_meta: dict[str, object] | None = None
+        session_metas: list[dict[str, object]] = []
         last_event_at: datetime | None = None
         event_count = 0
         message_event_count = 0
@@ -60,10 +60,7 @@ class CodexSessionParser:
                 meta = event.get("payload")
                 if not isinstance(meta, dict):
                     raise ValueError(f"invalid session_meta payload in `{artifact_path}` at line {line_number}")
-                if session_meta is None:
-                    session_meta = meta
-                else:
-                    self._validate_session_meta_consistency(session_meta, meta, artifact_path=artifact_path)
+                session_metas.append(meta)
                 continue
 
             if event_type != "response_item":
@@ -115,10 +112,11 @@ class CodexSessionParser:
                 first_high_value_suitcode_tool = suitcode_name
                 first_high_value_suitcode_tool_index = tool_order_index
 
-        if session_meta is None:
+        if not session_metas:
             raise ValueError(f"missing session_meta in `{artifact_path}`")
+        session_meta = self._select_effective_session_meta(session_metas)
         session_id = required_non_empty(session_meta.get("id"), "session id", artifact_path)
-        started_at = self._parse_meta_timestamp(session_meta, artifact_path=artifact_path)
+        started_at = min(self._parse_meta_timestamp(meta, artifact_path=artifact_path) for meta in session_metas)
         cwd = optional_resolved_path(session_meta.get("cwd"), artifact_path)
         repository_root = str(cwd) if cwd is not None else None
         cli_version = optional_non_empty(session_meta.get("cli_version"))
@@ -171,6 +169,7 @@ class CodexSessionParser:
                 approx_output_characters=approx_output_characters,
             ),
             correlation_quality=CorrelationQuality.NONE,
+            notes=self._session_meta_notes(session_metas, artifact_path=artifact_path),
         )
 
     @staticmethod
@@ -188,7 +187,23 @@ class CodexSessionParser:
         return parse_datetime(raw_timestamp, artifact_path=artifact_path)
 
     @staticmethod
-    def _validate_session_meta_consistency(original: dict[str, object], candidate: dict[str, object], *, artifact_path: Path) -> None:
-        for key in ("id", "cwd"):
-            if original.get(key) != candidate.get(key):
-                raise ValueError(f"inconsistent session_meta `{key}` in `{artifact_path}`")
+    def _select_effective_session_meta(items: list[dict[str, object]]) -> dict[str, object]:
+        for item in reversed(items):
+            if optional_non_empty(item.get("id")) is not None:
+                return item
+        return items[-1]
+
+    @staticmethod
+    def _session_meta_notes(items: list[dict[str, object]], *, artifact_path: Path) -> tuple[str, ...]:
+        distinct_ids = {required_non_empty(item.get("id"), "session id", artifact_path) for item in items}
+        distinct_cwds = {
+            str(optional_resolved_path(item.get("cwd"), artifact_path))
+            for item in items
+            if optional_resolved_path(item.get("cwd"), artifact_path) is not None
+        }
+        notes: list[str] = []
+        if len(items) > 1 and (len(distinct_ids) > 1 or len(distinct_cwds) > 1):
+            notes.append(
+                "multiple session_meta entries were detected; the latest metadata snapshot was used for session identity and cwd"
+            )
+        return tuple(notes)

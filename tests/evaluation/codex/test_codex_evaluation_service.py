@@ -55,6 +55,22 @@ class _FakeSuitService:
             quality_hygiene_operations=(SimpleNamespace(id="quality_op:ruff:format"),),
         )
 
+    def what_is_not_proven(self, repository_path: str, repository_rel_paths: tuple[str, ...]):
+        return SimpleNamespace(
+            targets=(
+                SimpleNamespace(
+                    repository_rel_path=repository_rel_paths[0],
+                    owner=SimpleNamespace(id="component:python:suitcode"),
+                    primary_component=SimpleNamespace(id="component:python:suitcode"),
+                    validation_is_build_only=True,
+                    has_focused_test_surface=False,
+                    has_runner_surface=False,
+                    gap_items=(SimpleNamespace(gap_code="build_only_frontend_surface"),),
+                    nearest_validation_artifacts=(SimpleNamespace(item_id="build:pkg"),),
+                ),
+            )
+        )
+
     def analyze_impact(self, workspace_id: str, repository_id: str, **selector):
         return SimpleNamespace(
             target_kind="file",
@@ -326,10 +342,17 @@ def test_build_baseline_supports_v7_task_families(tmp_path: Path) -> None:
         task_family=CodexTaskFamily.UNSUPPORTED_ACTION_REASONING,
         target_selector={"repository_rel_path": "src/app.py", "requested_action_kind": "runner"},
     )
+    proof_gap_task = CodexEvaluationTask(
+        task_id="proof-gap-1",
+        repository_path="repo",
+        task_family=CodexTaskFamily.PROOF_GAP,
+        target_selector={"repository_rel_path": "src/app.py"},
+    )
 
     bug_baseline = service._build_baseline(bug_task, repository_root=repo)  # noqa: SLF001
     ci_baseline = service._build_baseline(ci_task, repository_root=repo)  # noqa: SLF001
     unsupported_baseline = service._build_baseline(unsupported_task, repository_root=repo)  # noqa: SLF001
+    proof_gap_baseline = service._build_baseline(proof_gap_task, repository_root=repo)  # noqa: SLF001
 
     assert bug_baseline.expected_answer["owner_id"] == "component:python:suitcode"
     assert bug_baseline.expected_answer["owner_kind"] == "component"
@@ -338,6 +361,8 @@ def test_build_baseline_supports_v7_task_families(tmp_path: Path) -> None:
     assert ci_baseline.expected_answer["recommended_target_id"] == "test:basic"
     assert unsupported_baseline.expected_answer["requested_action_kind"] == "runner"
     assert unsupported_baseline.expected_answer["supported"] is False
+    assert proof_gap_baseline.expected_answer["gap_codes"] == ["build_only_frontend_surface"]
+    assert proof_gap_baseline.expected_answer["nearest_validation_artifact_ids"] == ["build:pkg"]
 
 
 def test_codex_evaluation_service_retries_infrastructure_only_failures(tmp_path: Path) -> None:

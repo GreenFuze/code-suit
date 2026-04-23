@@ -13,6 +13,7 @@ class CodexTaskFamily(StrEnum):
     ORIENTATION = "orientation"
     CHANGE_ANALYSIS = "change_analysis"
     MINIMUM_VERIFIED_CHANGE_SET = "minimum_verified_change_set"
+    PROOF_GAP = "proof_gap"
     TRUTH_COVERAGE = "truth_coverage"
     TEST_EXECUTION = "test_execution"
     BUILD_EXECUTION = "build_execution"
@@ -25,6 +26,7 @@ _DEFAULT_REQUIRED_TOOLS: dict[CodexTaskFamily, tuple[str, ...]] = {
     CodexTaskFamily.ORIENTATION: ("open_workspace", "repository_summary", "get_truth_coverage"),
     CodexTaskFamily.CHANGE_ANALYSIS: ("open_workspace", "analyze_change"),
     CodexTaskFamily.MINIMUM_VERIFIED_CHANGE_SET: ("open_workspace", "get_minimum_verified_change_set"),
+    CodexTaskFamily.PROOF_GAP: ("what_is_not_proven",),
     CodexTaskFamily.TRUTH_COVERAGE: ("open_workspace", "get_truth_coverage"),
     CodexTaskFamily.TEST_EXECUTION: ("open_workspace", "describe_test_target", "run_test_targets"),
     CodexTaskFamily.BUILD_EXECUTION: ("open_workspace", "describe_build_target", "build_target"),
@@ -47,7 +49,10 @@ def default_high_value_tools(task_family: CodexTaskFamily) -> tuple[str, ...]:
 class CodexEvaluationTask(StrictModel):
     task_id: str
     repository_path: str
+    tracked_repository_label: str | None = None
     task_family: CodexTaskFamily
+    task_kind: str | None = None
+    study_kind: str | None = None
     question: str | None = None
     difficulty: Literal["easy", "medium", "hard"] | None = None
     task_taxonomy: str | None = None
@@ -62,7 +67,17 @@ class CodexEvaluationTask(StrictModel):
     output_schema_id: str | None = None
     prompt_template_id: str | None = None
 
-    @field_validator("task_id", "repository_path", "question", "task_taxonomy", "ground_truth_kind", "suite_role")
+    @field_validator(
+        "task_id",
+        "repository_path",
+        "tracked_repository_label",
+        "task_kind",
+        "study_kind",
+        "question",
+        "task_taxonomy",
+        "ground_truth_kind",
+        "suite_role",
+    )
     @classmethod
     def _validate_non_empty(cls, value: str | None) -> str | None:
         if value is None:
@@ -76,7 +91,7 @@ class CodexEvaluationTask(StrictModel):
         if self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be > 0")
         selector_keys = {key for key, value in self.target_selector.items() if isinstance(value, str) and value.strip()}
-        if self.task_family in {CodexTaskFamily.CHANGE_ANALYSIS, CodexTaskFamily.MINIMUM_VERIFIED_CHANGE_SET}:
+        if self.task_family in {CodexTaskFamily.CHANGE_ANALYSIS, CodexTaskFamily.MINIMUM_VERIFIED_CHANGE_SET, CodexTaskFamily.PROOF_GAP}:
             target_keys = {"symbol_id", "repository_rel_path", "owner_id"}
             if len(selector_keys & target_keys) != 1:
                 raise ValueError(
@@ -90,6 +105,10 @@ class CodexEvaluationTask(StrictModel):
             self.task_taxonomy = _default_task_taxonomy(self.task_family)
         if self.ground_truth_kind is None:
             self.ground_truth_kind = _default_ground_truth_kind(self.task_family)
+        if self.task_kind is None:
+            self.task_kind = _default_task_kind(self.task_family)
+        if self.study_kind is None:
+            self.study_kind = "controlled_task"
         if not self.expected_success_criteria:
             self.expected_success_criteria = _default_success_criteria(self.task_family)
         if self.task_family == CodexTaskFamily.TEST_EXECUTION:
@@ -162,6 +181,8 @@ def _default_question(task_family: CodexTaskFamily, target_selector: dict[str, s
         return f"If {selector} changes, what is the owner, primary component, related tests, quality gates, and evidence-backed impact summary?"
     if task_family == CodexTaskFamily.MINIMUM_VERIFIED_CHANGE_SET:
         return f"After changing {selector}, what exact deterministic validation set must run?"
+    if task_family == CodexTaskFamily.PROOF_GAP:
+        return f"For {selector}, what deterministic validation proof is still missing or too broad?"
     if task_family == CodexTaskFamily.TRUTH_COVERAGE:
         return "What is the repository truth coverage profile across architecture, code, tests, quality, and actions?"
     if task_family == CodexTaskFamily.TEST_EXECUTION:
@@ -189,6 +210,7 @@ def _default_task_taxonomy(task_family: CodexTaskFamily) -> str:
         CodexTaskFamily.ORIENTATION: "orientation",
         CodexTaskFamily.CHANGE_ANALYSIS: "impact_analysis",
         CodexTaskFamily.MINIMUM_VERIFIED_CHANGE_SET: "minimum_verified_change_set",
+        CodexTaskFamily.PROOF_GAP: "proof_gap",
         CodexTaskFamily.TRUTH_COVERAGE: "truth_coverage",
         CodexTaskFamily.TEST_EXECUTION: "test_execution",
         CodexTaskFamily.BUILD_EXECUTION: "build_execution",
@@ -203,6 +225,7 @@ def _default_ground_truth_kind(task_family: CodexTaskFamily) -> str:
         CodexTaskFamily.ORIENTATION: "exact_field_match",
         CodexTaskFamily.CHANGE_ANALYSIS: "exact_field_match",
         CodexTaskFamily.MINIMUM_VERIFIED_CHANGE_SET: "exact_id_set_match",
+        CodexTaskFamily.PROOF_GAP: "exact_field_match",
         CodexTaskFamily.TRUTH_COVERAGE: "exact_field_match",
         CodexTaskFamily.TEST_EXECUTION: "exact_action_target_match",
         CodexTaskFamily.BUILD_EXECUTION: "exact_action_target_match",
@@ -239,6 +262,16 @@ def _default_success_criteria(task_family: CodexTaskFamily) -> tuple[str, ...]:
             "runner_action_ids match deterministic baseline exactly",
             "quality_validation_operation_ids match deterministic baseline exactly",
             "quality_hygiene_operation_ids match deterministic baseline exactly",
+        )
+    if task_family == CodexTaskFamily.PROOF_GAP:
+        return (
+            "owner_id matches deterministic baseline",
+            "primary_component_id matches deterministic baseline",
+            "validation_is_build_only matches deterministic baseline",
+            "has_focused_test_surface matches deterministic baseline",
+            "has_runner_surface matches deterministic baseline",
+            "gap_codes match deterministic baseline exactly",
+            "nearest_validation_artifact_ids match deterministic baseline exactly",
         )
     if task_family == CodexTaskFamily.TRUTH_COVERAGE:
         return (
@@ -287,3 +320,18 @@ def _default_success_criteria(task_family: CodexTaskFamily) -> tuple[str, ...]:
         "actions_availability matches deterministic baseline",
         "reason_code matches deterministic baseline",
     )
+
+
+def _default_task_kind(task_family: CodexTaskFamily) -> str:
+    return {
+        CodexTaskFamily.ORIENTATION: "discovery",
+        CodexTaskFamily.CHANGE_ANALYSIS: "planning",
+        CodexTaskFamily.MINIMUM_VERIFIED_CHANGE_SET: "planning",
+        CodexTaskFamily.PROOF_GAP: "validation",
+        CodexTaskFamily.TRUTH_COVERAGE: "discovery",
+        CodexTaskFamily.TEST_EXECUTION: "validation",
+        CodexTaskFamily.BUILD_EXECUTION: "validation",
+        CodexTaskFamily.BUG_FIX_NAVIGATION: "bugfix",
+        CodexTaskFamily.CI_DEBUGGING: "review",
+        CodexTaskFamily.UNSUPPORTED_ACTION_REASONING: "planning",
+    }[task_family]

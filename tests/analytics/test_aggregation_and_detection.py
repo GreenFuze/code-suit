@@ -20,9 +20,11 @@ def _event(
     event_id: str,
     tool_name: str,
     *,
+    invocation_id: str | None = None,
     offset: int | None = None,
     session_id: str = "session:x",
     repository_path: str | None = None,
+    status: AnalyticsStatus = AnalyticsStatus.SUCCESS,
 ) -> AnalyticsEvent:
     args: dict[str, object] = {"workspace_id": "workspace:x", "repository_id": "repo:x"}
     if offset is not None:
@@ -30,8 +32,16 @@ def _event(
         args["offset"] = offset
     if repository_path is not None:
         args["repository_path"] = repository_path
+    payload_kwargs: dict[str, object] = {}
+    if status != AnalyticsStatus.STARTED:
+        payload_kwargs = {
+            "output_model_type": "ListResult",
+            "output_payload_bytes": 120,
+            "output_payload_sha256": f"out-{event_id}",
+        }
     return AnalyticsEvent(
         event_id=event_id,
+        invocation_id=invocation_id,
         session_id=session_id,
         timestamp_utc=f"2026-03-06T12:00:{int(event_id[-1]):02d}Z",
         tool_name=tool_name,
@@ -40,11 +50,9 @@ def _event(
         repository_root="C:/repo",
         arguments_redacted=args,
         arguments_fingerprint_sha256=f"hash-{tool_name}-{offset}-{session_id}",
-        status=AnalyticsStatus.SUCCESS,
-        duration_ms=10,
-        output_model_type="ListResult",
-        output_payload_bytes=120,
-        output_payload_sha256=f"out-{event_id}",
+        status=status,
+        duration_ms=0 if status == AnalyticsStatus.STARTED else 10,
+        **payload_kwargs,
     )
 
 
@@ -67,6 +75,9 @@ def test_aggregator_reports_summary_and_tool_usage(tmp_path: Path) -> None:
     usage = aggregator.tool_usage()
 
     assert summary.total_calls == 3
+    assert summary.started_calls == 0
+    assert summary.finished_calls == 3
+    assert summary.unfinished_calls == 0
     assert summary.estimated_tokens > 0
     assert summary.estimated_tokens_saved >= 0
     assert len(usage) == 3
@@ -161,3 +172,54 @@ def test_aggregator_reads_latest_benchmark_report_from_run_directory(tmp_path: P
     loaded = aggregator.benchmark_report()
     assert loaded is not None
     assert loaded.report_id == "benchmark-test"
+
+
+def test_aggregator_surfaces_unfinished_calls_from_started_events(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    store = JsonlAnalyticsStore(settings)
+    store.append_event(
+        _event(
+            "event:1",
+            "understand_file",
+            invocation_id="call:1",
+            status=AnalyticsStatus.STARTED,
+        )
+    )
+    store.append_event(
+        _event(
+            "event:2",
+            "understand_file",
+            invocation_id="call:2",
+            status=AnalyticsStatus.STARTED,
+        )
+    )
+    store.append_event(
+        _event(
+            "event:3",
+            "understand_file",
+            invocation_id="call:2",
+            status=AnalyticsStatus.SUCCESS,
+        )
+    )
+
+    aggregator = AnalyticsAggregator(
+        store,
+        tool_catalog=("understand_file",),
+        excluded_tools=tuple(),
+    )
+
+    summary = aggregator.summary()
+    usage = aggregator.tool_usage()
+
+    assert summary.total_calls == 2
+    assert summary.started_calls == 2
+    assert summary.finished_calls == 1
+    assert summary.unfinished_calls == 1
+    assert summary.success_calls == 1
+    assert summary.error_calls == 0
+    assert len(usage) == 1
+    assert usage[0].tool_name == "understand_file"
+    assert usage[0].total_calls == 2
+    assert usage[0].started_calls == 2
+    assert usage[0].finished_calls == 1
+    assert usage[0].unfinished_calls == 1

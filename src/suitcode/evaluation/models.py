@@ -111,6 +111,9 @@ class RequiredToolTrace(StrictModel):
 class CodexEvaluationTaskResult(StrictModel):
     task_id: str
     task_family: str
+    tracked_repository_label: str | None = None
+    task_kind: str | None = None
+    study_kind: str | None = None
     status: EvaluationStatus
     failure_kind: EvaluationFailureKind | None = None
     failure_summary: str | None = None
@@ -139,9 +142,20 @@ class CodexEvaluationTaskResult(StrictModel):
     output_last_message_path: str
     notes: tuple[str, ...] = ()
 
-    @field_validator("task_id", "task_family", "repository_root", "stdout_jsonl_path", "output_last_message_path")
+    @field_validator(
+        "task_id",
+        "task_family",
+        "tracked_repository_label",
+        "task_kind",
+        "study_kind",
+        "repository_root",
+        "stdout_jsonl_path",
+        "output_last_message_path",
+    )
     @classmethod
-    def _validate_non_empty(cls, value: str) -> str:
+    def _validate_non_empty(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         if not value.strip():
             raise ValueError("value must not be empty")
         return value.strip()
@@ -184,6 +198,9 @@ class CodexEvaluationReport(StrictModel):
     report_id: str
     generated_at_utc: str
     agent_metadata: AgentRunMetadata | None = None
+    tracked_repository_labels: tuple[str, ...] = ()
+    task_kind_mix: dict[str, int] = Field(default_factory=dict)
+    study_kind_mix: dict[str, int] = Field(default_factory=dict)
     task_total: int
     task_passed: int
     task_failed: int

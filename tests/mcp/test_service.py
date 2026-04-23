@@ -99,6 +99,36 @@ def test_read_only_repository_seam_attaches_agent_visible_timing() -> None:
     assert tuple(stage.name for stage in second.timing.stages) == ("repository_acquire",)
 
 
+def test_missing_file_targets_fail_before_read_only_repository_acquisition(tmp_path: Path) -> None:
+    repo_root = tmp_path / "frontend-missing-fast-fail"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "src" / "pages").mkdir(parents=True)
+    (repo_root / "package.json").write_text('{"name":"frontend","private":true}', encoding="utf-8")
+    (repo_root / "src" / "pages" / "GamePlayerPage.tsx").write_text("export const GamePlayerPage = () => null;\n", encoding="utf-8")
+
+    class _FakeRegistry:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def open_repository(self, repository_path: str):
+            self.calls += 1
+            raise AssertionError("open_repository should not be called for missing file target validation")
+
+    fake_registry = _FakeRegistry()
+    service = SuitMcpService(read_only_registry=fake_registry)
+
+    with pytest.raises(McpValidationError, match="repository file not found: `src/pages/BrowserPlayPage.tsx`"):
+        service.understand_file(str(repo_root), ("src/pages/BrowserPlayPage.tsx",))
+
+    with pytest.raises(McpValidationError, match="repository file not found: `src/pages/BrowserPlayPage.tsx`"):
+        service.what_changes_if_i_edit_this(str(repo_root), ("src/pages/BrowserPlayPage.tsx",))
+
+    with pytest.raises(McpValidationError, match="repository file not found: `src/pages/BrowserPlayPage.tsx`"):
+        service.what_should_i_run(str(repo_root), ("src/pages/BrowserPlayPage.tsx",))
+
+    assert fake_registry.calls == 0
+
+
 def test_service_open_workspace_and_list_repositories(service: SuitMcpService, npm_repo_root: Path) -> None:
     opened = service.open_workspace(str(npm_repo_root))
     repositories = service.list_workspace_repositories(opened.workspace.workspace_id)
@@ -3054,6 +3084,7 @@ def test_service_analytics_views_return_structured_data(service: SuitMcpService,
     repository_root = service._registry.get_repository(workspace_id, repository_id).root
 
     service.analytics_recorder.record_success(
+        invocation_id=None,
         tool_name="list_supported_providers",
         arguments={},
         repository_root=None,
@@ -3061,6 +3092,7 @@ def test_service_analytics_views_return_structured_data(service: SuitMcpService,
         duration_ms=7,
     )
     service.analytics_recorder.record_success(
+        invocation_id=None,
         tool_name="list_components",
         arguments={"workspace_id": workspace_id, "repository_id": repository_id, "limit": 10, "offset": 0},
         repository_root=repository_root,

@@ -19,6 +19,7 @@ Current paper-oriented reports are protocol-first. They define:
 
 Canonical protocol documents:
 - `docs/evaluation/benchmark_protocol_v1.md`
+- `docs/evaluation/mga_hybrid_protocol_v1.md`
 - `docs/evaluation/task_schema.v1.json`
 - `docs/evaluation/failure_taxonomy.v1.json`
 - `docs/evaluation/baseline_capabilities.v1.json`
@@ -58,6 +59,11 @@ Dogfooding workflow:
 - `docs/dogfooding/phase3_runbook.md`
 - `python scripts/analyze_dogfooding.py --tracked-label suitcode`
 - `python scripts/analyze_dogfooding.py --tracked-label mygames-server`
+
+Live-study workflow:
+- `python scripts/run_live_study.py --tracked-label mygamesanywhere --task-kind discovery`
+- `python scripts/report_live_study.py --tracked-label mygamesanywhere --codex-transcript <path> --write-artifacts`
+- `python scripts/report_hybrid_study.py --tracked-label mygamesanywhere --latest-controlled --codex-transcript <path>`
 
 ## Output Locations
 
@@ -140,6 +146,12 @@ python scripts/analyze_codex_eval.py --latest
 Live-project stress suite:
 ```powershell
 python scripts/run_codex_eval.py --tasks-file benchmarks/codex/tasks/suitcode_project_readonly.json
+python scripts/analyze_codex_eval.py --latest
+```
+
+Controlled MGA suite:
+```powershell
+python scripts/run_codex_eval.py --tasks-file benchmarks/codex/tasks/mga_controlled_readonly.json --experiment-id mga-hybrid --experiment-label "MyGamesAnywhere hybrid study" --workspace-mode read_only
 python scripts/analyze_codex_eval.py --latest
 ```
 

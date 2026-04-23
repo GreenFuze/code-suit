@@ -9,6 +9,7 @@ from suitcode.core.code.models import CodeLocation
 from suitcode.core.code_reference_service import CodeReferenceService
 from suitcode.core.component_context_resolver import ComponentContextResolver
 from suitcode.core.context_service import ContextService
+from suitcode.core.file_semantic_facts import FileSemanticFactsBundle, FileSemanticFactsService
 from suitcode.core.intelligence_models import (
     ComponentDependencyEdge,
     FileRelationshipKind,
@@ -40,6 +41,7 @@ class ChangeImpactService:
         context_service: ContextService,
         component_context_resolver: ComponentContextResolver,
         code_reference_service: CodeReferenceService,
+        file_semantic_facts_service: FileSemanticFactsService,
         truth_coverage_service: TruthCoverageService,
     ) -> None:
         self._repository = repository
@@ -51,6 +53,7 @@ class ChangeImpactService:
             context_service,
             component_context_resolver,
             code_reference_service,
+            file_semantic_facts_service,
         )
         self._evidence_assembler = ChangeEvidenceAssembler()
         self._truth_coverage_service = truth_coverage_service
@@ -127,17 +130,27 @@ class ChangeImpactService:
             test_preview_limit=test_preview_limit,
         )
         dependent_components = self._dependent_components(primary_component, dependent_preview_limit)
-        dependency_files, dependent_files = self._file_relationships(resolved.evidence_path, evidence_tier=evidence_tier)
-        render_children, render_parents = self._render_edges(resolved.evidence_path)
+        semantic_facts = resolved.file_semantic_facts
+        dependency_files, dependent_files = self._file_relationships(
+            resolved.evidence_path,
+            evidence_tier=evidence_tier,
+            semantic_facts=semantic_facts,
+        )
+        render_children, render_parents = self._render_edges(resolved.evidence_path, semantic_facts=semantic_facts)
         invariant_findings = (
-            tuple() if evidence_tier == CodeEvidenceTier.STRUCTURAL else self._invariant_findings(resolved.evidence_path)
+            tuple()
+            if evidence_tier == CodeEvidenceTier.STRUCTURAL
+            else self._invariant_findings(resolved.evidence_path, semantic_facts=semantic_facts)
         )
         local_flow_edges = (
-            tuple() if evidence_tier == CodeEvidenceTier.STRUCTURAL else self._local_flow_edges(resolved.evidence_path)
+            tuple()
+            if evidence_tier == CodeEvidenceTier.STRUCTURAL
+            else self._local_flow_edges(resolved.evidence_path, semantic_facts=semantic_facts)
         )
-        implementation_locations = (
-            self._implementation_locations(resolved.evidence_path) if include_implementation_locations else tuple()
-        )
+        implementation_locations = self._implementation_locations(
+            resolved.evidence_path,
+            semantic_facts=semantic_facts,
+        ) if include_implementation_locations else tuple()
         implementation_components = self._implementation_components(implementation_locations)
         related_tests = self._test_impacts(resolved.related_tests)
         if resolved.target_kind == "owner":
@@ -147,7 +160,10 @@ class ChangeImpactService:
             related_runners = self._related_runners_for_component(primary_component, runner_preview_limit)
             if resolved.evidence_path is None:
                 raise ValueError("file and symbol targets must include evidence_path")
-            quality_gates = self._quality_gates_for_path(resolved.evidence_path)
+            quality_gates = self._quality_gates_for_path(
+                resolved.evidence_path,
+                quality_provider_ids=(semantic_facts.quality_provider_ids if semantic_facts is not None else None),
+            )
         dependent_edges = self._dependent_component_edges(primary_component, dependent_components)
         return ChangeImpact(
             target_kind=resolved.target_kind,
@@ -269,9 +285,12 @@ class ChangeImpactService:
         evidence_path: str | None,
         *,
         evidence_tier: CodeEvidenceTier,
+        semantic_facts: FileSemanticFactsBundle | None = None,
     ) -> tuple[tuple[FileRelationshipRef, ...], tuple[FileRelationshipRef, ...]]:
         if evidence_path is None:
             return tuple(), tuple()
+        if semantic_facts is not None:
+            return semantic_facts.dependency_files, semantic_facts.dependent_files
         return (
             self._repository.code.get_file_relationships(
                 evidence_path,
@@ -285,17 +304,39 @@ class ChangeImpactService:
             ),
         )
 
-    def _implementation_locations(self, evidence_path: str | None) -> tuple[CodeLocation, ...]:
+    def _implementation_locations(
+        self,
+        evidence_path: str | None,
+        *,
+        semantic_facts: FileSemanticFactsBundle | None = None,
+    ) -> tuple[CodeLocation, ...]:
         if evidence_path is None:
             return tuple()
+        return self._implementation_locations_from_facts_or_repository(
+            evidence_path,
+            semantic_facts=semantic_facts,
+        )
+
+    def _implementation_locations_from_facts_or_repository(
+        self,
+        evidence_path: str,
+        *,
+        semantic_facts: FileSemanticFactsBundle | None = None,
+    ) -> tuple[CodeLocation, ...]:
+        if semantic_facts is not None:
+            return semantic_facts.implementation_locations
         return self._repository.code.get_file_implementation_locations(evidence_path)
 
     def _render_edges(
         self,
         evidence_path: str | None,
+        *,
+        semantic_facts: FileSemanticFactsBundle | None = None,
     ) -> tuple[tuple[RenderEdgeRef, ...], tuple[RenderEdgeRef, ...]]:
         if evidence_path is None:
             return tuple(), tuple()
+        if semantic_facts is not None:
+            return semantic_facts.render_children, semantic_facts.render_parents
         return (
             self._repository.code.get_file_render_edges(
                 evidence_path,
@@ -307,14 +348,28 @@ class ChangeImpactService:
             ),
         )
 
-    def _invariant_findings(self, evidence_path: str | None) -> tuple[InvariantFindingRef, ...]:
+    def _invariant_findings(
+        self,
+        evidence_path: str | None,
+        *,
+        semantic_facts: FileSemanticFactsBundle | None = None,
+    ) -> tuple[InvariantFindingRef, ...]:
         if evidence_path is None:
             return tuple()
+        if semantic_facts is not None:
+            return semantic_facts.invariant_findings
         return self._repository.code.get_file_invariant_findings(evidence_path)
 
-    def _local_flow_edges(self, evidence_path: str | None) -> tuple[StaticFlowEdgeRef, ...]:
+    def _local_flow_edges(
+        self,
+        evidence_path: str | None,
+        *,
+        semantic_facts: FileSemanticFactsBundle | None = None,
+    ) -> tuple[StaticFlowEdgeRef, ...]:
         if evidence_path is None:
             return tuple()
+        if semantic_facts is not None:
+            return semantic_facts.local_flow_edges
         return self._repository.code.get_file_local_flow_edges(evidence_path)
 
     def _implementation_components(
@@ -441,8 +496,17 @@ class ChangeImpactService:
             return tuple()
         return self._related_runners_for_component(primary_component, runner_preview_limit)
 
-    def _quality_gates_for_path(self, repository_rel_path: str) -> tuple[QualityGateInfo, ...]:
-        provider_ids = self._repository.quality.provider_ids_for_files((repository_rel_path,))
+    def _quality_gates_for_path(
+        self,
+        repository_rel_path: str,
+        *,
+        quality_provider_ids: tuple[str, ...] | None = None,
+    ) -> tuple[QualityGateInfo, ...]:
+        provider_ids = (
+            quality_provider_ids
+            if quality_provider_ids is not None
+            else self._repository.quality.provider_ids_for_files((repository_rel_path,))
+        )
         return tuple(
             QualityGateInfo(
                 provider_id=provider_id,
